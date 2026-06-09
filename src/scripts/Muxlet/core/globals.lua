@@ -10,7 +10,7 @@
 --   Mudlet/src/mudlet-lua/lua/geyser/GeyserAdjustableContainer.lua — drag/resize pattern reference
 
 Mux = Mux or {}
-Mux._version = "0.1.0"
+Mux._version = "1.0.0"
 
 -- Internal registries (never access directly; use Mux API)
 Mux._panes    = Mux._panes    or {}   -- id → MuxPane instance

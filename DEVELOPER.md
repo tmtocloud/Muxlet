@@ -143,39 +143,15 @@ The version string is `<last-tag>-<short-sha>` (e.g. `0.2.0-a3f91cd`).
 
 Pre-release packages are available for download on the GitHub Releases page.
 
-### Push a `v*` tag
-
-Creates a full (non-prerelease) GitHub release. This IS a production release and
-DOES trigger an automatic PR submission to the Mudlet Package Repository.
-
 ### Workflow dispatch (promote to production)
 
 Go to **GitHub → Actions → "Build Package" → Run workflow**, enter a version number.
 
 This:
 1. Builds the package with that version injected
-2. Creates an annotated git tag `v<version>`
-3. Publishes a production GitHub release with the mpackage attached
-4. Automatically opens a PR to the Mudlet Package Repository
+2. Publishes a production GitHub release with the mpackage attached (tag `v<version>`)
 
----
-
-## Mudlet Package Repository (MPR)
-
-MPR is the community package index at `github.com/Mudlet/mudlet-package-repository`.
-
-### How submission works
-
-When a production release is created:
-1. GitHub Actions clones the MPR fork, syncs it with upstream
-2. Creates a branch `Muxlet-v<version>`
-3. Copies `Muxlet.mpackage` into `packages/`
-4. Commits, pushes, and opens a PR against `Mudlet/mudlet-package-repository`
-
-### Required secret
-
-`MUDLET_REPO_PAT` in the Muxlet repo settings must be a GitHub Personal Access Token
-with push access to the MPR fork and permission to open PRs against the upstream.
+MPR submission is not yet automated — submit manually once production releases are verified.
 
 ---
 

@@ -72,38 +72,5 @@ jobs:
           prerelease: false
           files: build/Muxlet.mpackage
 
-      - name: Submit to Mudlet Package Repository
-        if: steps.meta.outputs.prerelease == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.MUDLET_REPO_PAT }}
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.meta.outputs.version }}"
-          BRANCH="Muxlet-v${VERSION}"
-
-          git clone \
-            "https://x-access-token:${GH_TOKEN}@github.com/tmtocloud/mudlet-package-repository.git" \
-            mpr
-          cd mpr
-
-          git remote add upstream https://github.com/Mudlet/mudlet-package-repository.git
-          git fetch upstream
-          git reset --hard upstream/main
-          git push origin main --force
-
-          git checkout -b "${BRANCH}"
-          cp "../build/Muxlet.mpackage" "packages/Muxlet.mpackage"
-
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "packages/Muxlet.mpackage"
-          git commit -m "Update Muxlet to v${VERSION}"
-          git push origin "${BRANCH}" --force
-
-          gh pr create \
-            --repo  Mudlet/mudlet-package-repository \
-            --head  "tmtocloud:${BRANCH}" \
-            --base  main \
-            --title "Add/Update Muxlet v${VERSION}" \
-            --body  "Automated submission of Muxlet v${VERSION}." \
-          || echo "PR already open for this branch, skipping creation"
+      # MPR submission is configured separately once release builds are verified.
+      # See DEVELOPER.md for the manual submission process in the meantime.
