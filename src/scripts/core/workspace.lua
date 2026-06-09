@@ -19,8 +19,13 @@
 --   Mux.applyLayout    = Mux.applyWorkspace
 --
 -- Static workspace node format:
---   Leaf  : { type="pane",  id="chat",  name="Chat",  showTitlebar=true }
+--   Leaf  : { type="pane",  id="chat",  name="Chat",  showTitlebar=true,
+--             activeContent="my_content" }   -- optional: content applied on load
 --   Split : { type="split", direction="v", ratio=0.6, a=<node>, b=<node> }
+--
+-- Only one paneSet per workspace is supported.  Multiple paneSets create
+-- overlapping containers that have no awareness of each other's boundaries,
+-- which breaks split operations and console border management.
 
 Mux._workspaces = Mux._workspaces or {}
 -- Alias so any code referencing _layouts still resolves correctly.
@@ -40,6 +45,13 @@ end
 function Mux.registerWorkspace(name, def)
     assert(type(name) == "string", "workspace name must be a string")
     assert(type(def)  == "table",  "workspace definition must be a table")
+    local paneSets = def.paneSets or def.pane_sets or {}
+    if #paneSets > 1 then
+        error(string.format(
+            "workspace '%s': only one paneSet is supported (got %d). "
+            .. "Use splits within a single paneSet to arrange multiple panels.",
+            name, #paneSets), 2)
+    end
     Mux._workspaces[name] = def
     Mux._log("Registered workspace: %s", name)
 end
@@ -94,6 +106,18 @@ function Mux.applyWorkspace(name)
     end
 
     tempTimer(0, function()
+        -- Apply activeContent declared in workspace pane nodes.
+        for _, p in pairs(Mux._panes) do
+            if p._pendingContent then
+                if not Mux._content or not Mux._content[p._pendingContent] then
+                    Mux._warn("applyWorkspace: content '%s' not registered for pane '%s'",
+                        p._pendingContent, p.id)
+                elseif Mux._applyContent then
+                    Mux._applyContent(p, p._pendingContent)
+                end
+                p._pendingContent = nil
+            end
+        end
         for _, p in pairs(Mux._panes) do
             if p.mainConsoleHost then p:updateConsoleBorders() end
         end
@@ -155,6 +179,8 @@ local function serializeNode(obj)
     if obj.noTabs           then node.noTabs           = true end
     if obj.locked           then node.locked           = true end
     if obj._connectionAware then node.connectionAware  = true end
+    -- Persist applied content so it is re-applied when the workspace is loaded.
+    if obj._activeContent   then node.activeContent   = obj._activeContent end
     -- Float position (floating panes only; populated by saveWorkspace caller)
     if obj.floating then
         node.floating = true
@@ -330,6 +356,12 @@ buildNode = function(node, parentContainer, paneMap, paneSet)
         if node.locked then p:lock() end
         if node.connectionAware and p.setConnectionAware then
             p:setConnectionAware(true)
+        end
+
+        -- Queue content application; resolved in applyWorkspace's deferred timer
+        -- so all pane geometry is settled before the content apply() function runs.
+        if node.activeContent then
+            p._pendingContent = node.activeContent
         end
 
         if node.tabs and #node.tabs > 0 then
