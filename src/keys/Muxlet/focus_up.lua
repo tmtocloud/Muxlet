@@ -1,0 +1,1 @@
+Mux.focusAdjacent("up")

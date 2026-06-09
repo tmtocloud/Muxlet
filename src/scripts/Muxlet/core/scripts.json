@@ -1,0 +1,20 @@
+[
+  {"name": "globals"},
+  {"name": "settings"},
+  {"name": "update_checker"},
+  {"name": "update_dialog"},
+  {"name": "deps"},
+  {"name": "theme"},
+  {"name": "pane"},
+  {"name": "tabs"},
+  {"name": "connection"},
+  {"name": "split"},
+  {"name": "pane_set"},
+  {"name": "manager"},
+  {"name": "workspace"},
+  {"name": "preset"},
+  {"name": "mdk"},
+  {"name": "keybinds"},
+  {"name": "settings_ui"},
+  {"name": "devmode"}
+]

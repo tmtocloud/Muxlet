@@ -1,0 +1,109 @@
+name: Build Package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.2.3)'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"               >> "$GITHUB_OUTPUT"
+          else
+            LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            echo "version=${LAST_TAG#v}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"                     >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Inject version into mfile
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          tmp=$(mktemp)
+          jq --arg v "$VERSION" '.version = $v' mfile > "$tmp" && mv "$tmp" mfile
+          echo "Version set to $VERSION"
+
+      - name: Build with muddler
+        run: docker run --rm -v "$PWD:/work" -w /work demonnic/muddler
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Muxlet-${{ steps.meta.outputs.version }}
+          path: build/Muxlet.mpackage
+
+      # ── Pre-release (every push to main) ───────────────────────────────────
+
+      - name: Publish pre-release
+        if: steps.meta.outputs.prerelease == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Pre-release ${{ steps.meta.outputs.version }}
+          tag_name: prerelease
+          prerelease: true
+          files: build/Muxlet.mpackage
+
+      # ── Production release (workflow_dispatch only) ─────────────────────────
+
+      - name: Publish production release
+        if: steps.meta.outputs.prerelease == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Muxlet v${{ steps.meta.outputs.version }}
+          tag_name: v${{ steps.meta.outputs.version }}
+          prerelease: false
+          files: build/Muxlet.mpackage
+
+      - name: Submit to Mudlet Package Repository
+        if: steps.meta.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.MUDLET_REPO_PAT }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          BRANCH="Muxlet-v${VERSION}"
+
+          git clone \
+            "https://x-access-token:${GH_TOKEN}@github.com/tmtocloud/mudlet-package-repository.git" \
+            mpr
+          cd mpr
+
+          git remote add upstream https://github.com/Mudlet/mudlet-package-repository.git
+          git fetch upstream
+          git reset --hard upstream/main
+          git push origin main --force
+
+          git checkout -b "${BRANCH}"
+          cp "../build/Muxlet.mpackage" "packages/Muxlet.mpackage"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "packages/Muxlet.mpackage"
+          git commit -m "Update Muxlet to v${VERSION}"
+          git push origin "${BRANCH}" --force
+
+          gh pr create \
+            --repo  Mudlet/mudlet-package-repository \
+            --head  "tmtocloud:${BRANCH}" \
+            --base  main \
+            --title "Add/Update Muxlet v${VERSION}" \
+            --body  "Automated submission of Muxlet v${VERSION}." \
+          || echo "PR already open for this branch, skipping creation"
