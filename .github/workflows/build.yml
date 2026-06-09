@@ -3,40 +3,64 @@ name: Build Package
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. 1.2.3)'
-        required: true
+        description: "Production release version (e.g. 1.3.0). Leave blank for a dev pre-release build."
+        required: false
         type: string
+      release_notes:
+        description: "Release notes (markdown). Leave blank to auto-generate from git log."
+        required: false
+        type: string
+
+permissions:
+  contents: write  # Required to create releases
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Full history for commit counting and tags
+          fetch-tags: true
 
-      - name: Determine version
-        id: meta
+      - name: Set version
+        id: version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=false"               >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # Tagged release: use tag name (strip 'v' prefix)
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "release_name=v$VERSION" >> $GITHUB_OUTPUT
+            echo "is_dispatch_release=false" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.version }}" ]]; then
+            # Manual promote: treat as a production release without needing a local tag push
+            VERSION="${{ inputs.version }}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "release_name=v$VERSION" >> $GITHUB_OUTPUT
+            echo "is_dispatch_release=true" >> $GITHUB_OUTPUT
           else
-            LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            # Branch push or unversioned dispatch: dev pre-release
+            LATEST_TAG=$(git describe --tags --match "v*" --abbrev=0 2>/dev/null || echo "v0.0.0")
+            BASE_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
             SHORT_SHA=$(git rev-parse --short HEAD)
-            echo "version=${LAST_TAG#v}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=true"                     >> "$GITHUB_OUTPUT"
+            VERSION="${BASE_VERSION}-${SHORT_SHA}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "release_name=prerelease" >> $GITHUB_OUTPUT
+            echo "is_dispatch_release=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Inject version into mfile
         run: |
-          VERSION="${{ steps.meta.outputs.version }}"
+          VERSION="${{ steps.version.outputs.version }}"
           tmp=$(mktemp)
           jq --arg v "$VERSION" '.version = $v' mfile > "$tmp" && mv "$tmp" mfile
           echo "Version set to $VERSION"
@@ -44,33 +68,144 @@ jobs:
       - name: Build with muddler
         run: docker run --rm -v "$PWD:/work" -w /work demonnic/muddler
 
-      - name: Upload build artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Muxlet-${{ steps.meta.outputs.version }}
+          name: Muxlet-${{ steps.version.outputs.version }}
           path: build/Muxlet.mpackage
 
-      # ── Pre-release (every push to main) ───────────────────────────────────
-
-      - name: Publish pre-release
-        if: steps.meta.outputs.prerelease == 'true'
+      - name: Update prerelease
+        if: steps.version.outputs.is_release == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          name: Pre-release ${{ steps.meta.outputs.version }}
           tag_name: prerelease
+          name: Pre-release Build
+          body: |
+            Latest development build from main branch.
+
+            **Build:** ${{ steps.version.outputs.version }}
+            **Commit:** ${{ github.sha }}
+
+            This is an automated pre-release and may be unstable.
           prerelease: true
           files: build/Muxlet.mpackage
+          fail_on_unmatched_files: true
 
-      # ── Production release (workflow_dispatch only) ─────────────────────────
+      - name: Create tag for dispatch releases
+        if: steps.version.outputs.is_dispatch_release == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
 
-      - name: Publish production release
-        if: steps.meta.outputs.prerelease == 'false'
+      - name: Generate release notes
+        if: steps.version.outputs.is_release == 'true'
+        id: release_notes
+        env:
+          INPUT_RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          if [[ "${{ steps.version.outputs.is_dispatch_release }}" == "true" && -n "$INPUT_RELEASE_NOTES" ]]; then
+            echo "summary<<EOF" >> $GITHUB_OUTPUT
+            printf '%s\n' "$INPUT_RELEASE_NOTES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          elif [[ "${{ steps.version.outputs.is_dispatch_release }}" == "true" ]]; then
+            # Auto-generate from git log since the last production tag
+            PREV_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+            if [[ -n "$PREV_TAG" ]]; then
+              SUMMARY=$(git log "${PREV_TAG}..HEAD" --pretty=format:'- %s' | head -30)
+            else
+              SUMMARY=$(git log --pretty=format:'- %s' -30)
+            fi
+            echo "summary<<EOF" >> $GITHUB_OUTPUT
+            echo "$SUMMARY" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            # Tag push: read the annotated tag message
+            TAG="${GITHUB_REF_NAME}"
+            echo "Processing tag: $TAG"
+            git fetch --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
+            if git cat-file -t "$TAG" 2>/dev/null | grep -q '^tag$'; then
+              echo "✓ Annotated tag detected"
+              SUMMARY=$(git tag -l --format='%(contents)' "$TAG")
+            else
+              echo "⚠ Not seeing annotated tag object, falling back"
+              SUMMARY=$(git log -1 --pretty=%B "$TAG^{commit}")
+            fi
+            echo "summary<<EOF" >> $GITHUB_OUTPUT
+            echo "$SUMMARY" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create tagged release
+        if: steps.version.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          name: Muxlet v${{ steps.meta.outputs.version }}
-          tag_name: v${{ steps.meta.outputs.version }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.release_name }}
+          body: |
+            ${{ steps.release_notes.outputs.summary }}
+          draft: false
           prerelease: false
           files: build/Muxlet.mpackage
+          fail_on_unmatched_files: true
 
-      # MPR submission is configured separately once release builds are verified.
-      # See DEVELOPER.md for the manual submission process in the meantime.
+      - name: Submit to Mudlet package repository
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.MUDLET_REPO_PAT }}
+          RELEASE_SUMMARY: ${{ steps.release_notes.outputs.summary }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          OWNER="$GITHUB_REPOSITORY_OWNER"
+          BRANCH="Muxlet-v${VERSION}"
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Clone the pre-forked repo (fork must exist at $OWNER/mudlet-package-repository)
+          git clone --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${OWNER}/mudlet-package-repository.git" \
+            mudlet-repo
+
+          cd mudlet-repo
+
+          # Sync fork main with upstream before branching
+          git remote add upstream https://github.com/Mudlet/mudlet-package-repository.git
+          git fetch upstream main
+          git checkout main
+          git reset --hard upstream/main
+          git push origin main --force
+
+          # Create a versioned branch so each release gets its own PR
+          git checkout -b "$BRANCH"
+
+          # Copy package using the canonical name (no version suffix in filename)
+          cp "$GITHUB_WORKSPACE/build/Muxlet.mpackage" "packages/Muxlet.mpackage"
+
+          git add "packages/Muxlet.mpackage"
+          git commit -m "Update Muxlet to v${VERSION}"
+          git push origin "$BRANCH"
+
+          # Open a PR against the upstream Mudlet repo (skip if one already exists)
+          EXISTING=$(gh pr list \
+            --repo Mudlet/mudlet-package-repository \
+            --head "${OWNER}:${BRANCH}" \
+            --json number --jq 'length')
+
+          if [ "$EXISTING" -eq 0 ]; then
+            {
+              printf '## Muxlet v%s\n\n' "$VERSION"
+              printf 'Release Notes:\n%s\n\n' "$RELEASE_SUMMARY"
+              printf 'Automated submission from [%s](https://github.com/%s) release [v%s](https://github.com/%s/releases/tag/v%s).\n\n' \
+                "$GITHUB_REPOSITORY" "$GITHUB_REPOSITORY" "$VERSION" "$GITHUB_REPOSITORY" "$VERSION"
+              printf '**Description:** Game-agnostic tiling window manager for Mudlet, inspired by tmux.'
+            } > /tmp/pr_body.md
+
+            gh pr create \
+              --repo Mudlet/mudlet-package-repository \
+              --head "${OWNER}:${BRANCH}" \
+              --base main \
+              --title "Update Muxlet to v${VERSION}" \
+              --body-file /tmp/pr_body.md
+          fi

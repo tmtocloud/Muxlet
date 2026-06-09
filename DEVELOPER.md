@@ -138,20 +138,37 @@ auto-reload timer (`devmode.lua`) watches for changes.
 ### Push to `main` (no tag)
 
 A pre-release is automatically created or updated at the `prerelease` tag.
-The version string is `<last-tag>-<short-sha>` (e.g. `0.2.0-a3f91cd`).
+The version string is `<last-tag>-<short-sha>` (e.g. `1.0.0-a3f91cd`).
 **This does NOT submit to MPR.**
 
 Pre-release packages are available for download on the GitHub Releases page.
 
+### Push a `v*` tag
+
+Creates a full production release and opens a PR to the Mudlet Package Repository.
+The annotated tag message becomes the release notes.
+
+```bash
+git tag -a v1.1.0 -m "- new feature\n- bug fix"
+git push origin v1.1.0
+```
+
 ### Workflow dispatch (promote to production)
 
-Go to **GitHub → Actions → "Build Package" → Run workflow**, enter a version number.
+Go to **GitHub → Actions → "Build Package" → Run workflow**, enter a version number
+and optional release notes (markdown). Leave the version blank for a dev build.
 
 This:
 1. Builds the package with that version injected
-2. Publishes a production GitHub release with the mpackage attached (tag `v<version>`)
+2. Creates an annotated git tag `v<version>`
+3. Publishes a production GitHub release with the mpackage attached
+4. Opens a PR to the Mudlet Package Repository
 
-MPR submission is not yet automated — submit manually once production releases are verified.
+### Required secret
+
+`MUDLET_REPO_PAT` must be set in the repo settings — a GitHub Personal Access Token
+with push access to `tmtocloud/mudlet-package-repository` and permission to open PRs
+against `Mudlet/mudlet-package-repository`.
 
 ---
 
