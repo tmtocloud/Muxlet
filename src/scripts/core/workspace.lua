@@ -31,6 +31,10 @@ Mux._workspaces = Mux._workspaces or {}
 -- Alias so any code referencing _layouts still resolves correctly.
 Mux._layouts    = Mux._workspaces
 
+-- Auto-save timer handle; reset on package reload (old ID is stale).
+if Mux._autoSaveTimer then killTimer(Mux._autoSaveTimer) end
+Mux._autoSaveTimer = nil
+
 -- Forward declaration; assigned near the bottom after helpers are defined.
 local buildNode
 
@@ -136,6 +140,8 @@ function Mux.applyWorkspace(name)
         local sw = Mux._settings_ui
         if sw and sw.window and sw.visible then sw.window:raise() end
         Mux.raiseFloatingPanes()
+        -- Persist the newly applied layout so it is restored next session.
+        Mux._scheduleAutoSave()
     end)
 
     Mux._log("Applied workspace: %s (%d panes)", name, tableCount(paneMap))
@@ -247,6 +253,53 @@ function Mux.saveWorkspace(name)
         name, name, name))
 end
 
+-- ── Auto-save ─────────────────────────────────────────────────────────────────
+-- Every structural change (float, embed, close, split resize, content applied)
+-- calls Mux._scheduleAutoSave().  A 1-second debounce prevents write storms
+-- during rapid operations (e.g. drag-resizing).  The saved workspace is named
+-- "current" — fullStart() restores it automatically on the next session, so
+-- users never lose layout changes without any explicit save step.
+
+function Mux._scheduleAutoSave()
+    if Mux._autoSaveTimer then killTimer(Mux._autoSaveTimer) end
+    Mux._autoSaveTimer = tempTimer(1.0, function()
+        Mux._autoSaveTimer = nil
+        Mux._doAutoSave()
+    end)
+end
+
+function Mux._doAutoSave()
+    local def = {
+        name          = "current",
+        theme         = Mux._activeThemeName,
+        paneSets      = {},
+        floatingPanes = {},
+    }
+
+    local psCount = 0
+    for _, ps in pairs(Mux._paneSets) do
+        psCount = psCount + 1
+        local psDef = { id = ps.id, zone = ps.zone, size = ps.size }
+        if ps.root then psDef.root = serializeNode(ps.root) end
+        table.insert(def.paneSets, psDef)
+    end
+
+    for _, pane in pairs(Mux._panes) do
+        if pane.floating and not pane.permanentFloat then
+            local node = serializeNode(pane)
+            if node then table.insert(def.floatingPanes, node) end
+        end
+    end
+
+    if psCount == 0 and #def.floatingPanes == 0 then return end
+
+    Mux._workspaces["current"] = def
+    Mux.settings._data["mux"] = Mux.settings._data["mux"] or {}
+    Mux.settings._data["mux"]["saved_workspace_current"] = yajl.to_string(def)
+    Mux.settings.save()
+    Mux._log("auto-saved workspace to 'current'")
+end
+
 -- ── List / delete ─────────────────────────────────────────────────────────────
 
 function Mux.listWorkspaces()
@@ -256,13 +309,20 @@ function Mux.listWorkspaces()
         Mux._echo("\n<cyan>[Muxlet]<reset> No registered workspaces.\n")
         return
     end
-    table.sort(names)
+    -- current first, default second, then alphabetical
+    table.sort(names, function(a, b)
+        if a == "current" then return true  end
+        if b == "current" then return false end
+        if a == "default" then return true  end
+        if b == "default" then return false end
+        return a < b
+    end)
     Mux._echo("\n<cyan>[Muxlet]<reset> Workspaces:\n")
-    local data = Mux.settings._data["mux"] or {}
     for _, n in ipairs(names) do
-        local saved = data["saved_workspace_" .. n] ~= nil
-        local tag   = saved and " <dim_grey>(saved)<reset>" or ""
-        Mux._echo(string.format("  <white>%s<reset>%s\n", n, tag))
+        local note = ""
+        if n == "current" then note = "  <dim_grey>— active session (auto-saved)<reset>" end
+        if n == "default"  then note = "  <dim_grey>— clean Muxlet baseline<reset>"      end
+        Mux._echo(string.format("  <white>%s<reset>%s\n", n, note))
     end
 end
 

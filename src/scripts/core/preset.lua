@@ -58,6 +58,7 @@ function Mux._applyContent(target, contentName)
     if not ok then
         Mux._err("content '%s' apply error: %s", contentName, tostring(err))
     end
+    Mux._scheduleAutoSave()
 end
 
 -- Backward-compat alias.

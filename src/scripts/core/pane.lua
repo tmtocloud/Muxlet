@@ -702,6 +702,7 @@ function MuxPane:_detachToFloat()
     end
     if not self.permanentFloat then Mux._lastFocusedPane = self end
     if self.onFloat then self.onFloat(self) end
+    if not self.permanentFloat then Mux._scheduleAutoSave() end
     Mux._log("MuxPane floated: %s (%.0f,%.0f %.0fx%.0f)",
         self.id, self.floatX, self.floatY, self.floatW, self.floatH)
 end
@@ -733,6 +734,7 @@ function MuxPane:embed(slot)
     -- Hide min button when embedded (only meaningful when floating).
     self.minBtn:hide()
     if self.onEmbed then self.onEmbed(self) end
+    Mux._scheduleAutoSave()
     Mux._log("MuxPane embedded: %s", self.id)
     Mux.raiseFloatingPanes()
 end
@@ -854,6 +856,7 @@ function MuxPane:close()
 
     Mux._panes[self.id] = nil
     Mux._freeId(self.id)
+    Mux._scheduleAutoSave()
     Mux._log("MuxPane closed: %s", self.id)
 end
 

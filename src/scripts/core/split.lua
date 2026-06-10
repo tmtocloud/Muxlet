@@ -165,6 +165,7 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
         if event.button ~= "LeftButton" then return end
         drag.active = false
         self.handle:setStyleSheet(theme.handleCss or "")
+        Mux._scheduleAutoSave()
     end)
 end
 
@@ -591,6 +592,7 @@ function MuxSplit:swapSlots()
     for _, p in pairs(Mux._panes) do
         if p.mainConsoleHost then p:updateConsoleBorders() end
     end
+    Mux._scheduleAutoSave()
     Mux._log("MuxSplit.swapSlots: %s swapped a↔b", self.id)
 end
 
@@ -631,6 +633,7 @@ function MuxSplit:zoom(side)
     self.box:organize()
     self.box:reposition()
     self.handle:hide()
+    Mux._scheduleAutoSave()
     Mux._log("MuxSplit zoomed: %s slot_%s", self.id, side)
 end
 
@@ -647,6 +650,7 @@ function MuxSplit:unzoom()
     -- Restore saved ratio
     self:_setRatio(self._savedRatio or 0.5)
     self._zoomed = nil
+    Mux._scheduleAutoSave()
     Mux._log("MuxSplit unzoomed: %s", self.id)
 end
 

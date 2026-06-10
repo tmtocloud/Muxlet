@@ -137,6 +137,7 @@ function Mux.splitFocused(direction, ratio)
             tempTimer(0, function()
                 if newSplit.childB then Mux.setFocus(newSplit.childB) end
                 Mux.raiseFloatingPanes()
+                Mux._scheduleAutoSave()
             end)
         end
         return newSplit
@@ -168,6 +169,7 @@ function Mux.splitFocused(direction, ratio)
         tempTimer(0, function()
             Mux.setFocus(newPane)
             Mux.raiseFloatingPanes()
+            Mux._scheduleAutoSave()
         end)
         return newSplit
     end
@@ -431,6 +433,11 @@ end
 -- killing persistent event handlers or the command console pane.
 
 function Mux._clearLayout()
+    -- Cancel any pending auto-save so it doesn't write an empty/transitional state.
+    if Mux._autoSaveTimer then
+        killTimer(Mux._autoSaveTimer)
+        Mux._autoSaveTimer = nil
+    end
     if Mux._outputCapture then
         killTrigger(Mux._outputCapture)
         Mux._outputCapture = nil
@@ -584,26 +591,34 @@ function Mux.fullStart()
     end
     Mux.debug = Mux.settings.get("mux", "debug") or false
 
-    -- Resolve workspace name: startup_workspace takes priority; fall back to
-    -- startup_layout for profiles that used the old setting name.
-    local wsName = Mux.settings.get("mux", "startup_workspace")
-    if not wsName or wsName == "" then
-        wsName = Mux.settings.get("mux", "startup_layout")
+    -- Startup priority: current (restored session) → startup_workspace → default.
+    -- "current" is written by _doAutoSave() on every structural change, so it
+    -- always represents the user's last session state once Muxlet has been used.
+    local wsName
+    if Mux._workspaces["current"] then
+        wsName = "current"
+    else
+        wsName = Mux.settings.get("mux", "startup_workspace") or ""
+        if wsName == "" then
+            wsName = Mux.settings.get("mux", "startup_layout") or ""
+        end
+        if wsName == "" or not Mux._workspaces[wsName] then
+            wsName = "default"
+        end
     end
-    if not wsName or wsName == "" then wsName = "default" end
 
     if not Mux._workspaces[wsName] then
-        Mux._echo(string.format(
-            "\n<red>[Muxlet]<reset> Unknown workspace '%s'. Use: mux workspaces\n", wsName))
+        Mux._echo("\n<red>[Muxlet]<reset> No workspace found. Use 'mux workspaces' to list available.\n")
         return
     end
 
     Mux.applyWorkspace(wsName)
     Mux._running = true
+    local displayName = (wsName == "current") and "current (restored)" or wsName
     Mux._echo(string.format(
         "\n<green>[Muxlet]<reset> Started with workspace '<cyan>%s<reset>'.\n"
         .. "  Alt+\\ / Alt+- to split  •  Alt+Z to zoom  •  Alt+B for help\n",
-        wsName))
+        displayName))
 end
 
 -- ── Teardown ──────────────────────────────────────────────────────────────────
