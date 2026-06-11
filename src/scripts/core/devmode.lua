@@ -77,8 +77,18 @@ function Mux.devmodeReload(fresh)
     muxDevmodeDoReload(pkgPath)
 end
 
--- 30-second initial delay mirrors the check interval; nothing could have
--- changed in the first moments after load.
-tempTimer(30, muxDevmodeCheck)
+-- Only start the polling timer if a stamp file already exists in the profile
+-- directory.  Production installs never have this file, so the timer never
+-- runs for end-users.  Developers who have run build.ps1 at least once will
+-- have the file and get the auto-reload behaviour as normal.
+local function muxDevmodeStart()
+    local stampPath = getMudletHomeDir() .. "/Muxlet-rebuild.stamp"
+    local probe = io.open(stampPath, "r")
+    if not probe then return end
+    probe:close()
+    tempTimer(30, muxDevmodeCheck)
+end
+
+muxDevmodeStart()
 
 Mux._log("mux_devmode loaded")

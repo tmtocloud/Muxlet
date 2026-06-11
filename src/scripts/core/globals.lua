@@ -1,5 +1,4 @@
--- Muxlet v0.1.0
--- Game-agnostic tiling window manager for Mudlet, inspired by tmux.
+-- Muxlet — Game-agnostic tiling window manager for Mudlet, inspired by tmux.
 --
 -- Ground-truth references used in this implementation:
 --   Mudlet/src/mudlet-lua/lua/geyser/GeyserGeyser.lua    — changeContainer, base_add, Geyser.Fixed/Dynamic
