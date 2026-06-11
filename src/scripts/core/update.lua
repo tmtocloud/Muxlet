@@ -1,14 +1,31 @@
--- Muxlet — Update Notification Dialog
+-- Muxlet — Update checker and notification dialog
 --
--- Called by update_checker when a newer version is found.
--- Rebuilt on each show so height fits the changelog content exactly.
+-- Checks the Mudlet Package Repository (MPR) for a newer version of Muxlet.
+-- Fires once per Mudlet session on package load (15-second deferred start).
+-- Both update_check_enabled and auto_start default to false so Muxlet
+-- is as compatible as possible with downstream packages.
 --
--- Public entry point:
---   Mux.showUpdateDialog(currentVersion, latestVersion)
---
--- Test without waiting for a real version gap:
---   Mux._changelog = {{version="9.9.9", body="- New feature\n- Bug fix"}}
---   Mux.showUpdateDialog("0.0.0", "9.9.9")
+-- Manual check:    mux version
+-- Enable:          mux settings set mux.update_check_enabled true
+-- Disable:         mux settings set mux.update_check_enabled false
+-- Test dialog:     Mux._changelog = {{version="9.9.9", body="- New feature"}}
+--                  Mux.showUpdateDialog("0.0.0", "9.9.9")
+
+-- ── Settings ──────────────────────────────────────────────────────────────────
+
+Mux.settings.register("mux", "update_check_enabled", {
+    description = "Check for Muxlet updates automatically when Mudlet opens",
+    default     = false,
+})
+
+Mux.settings.register("mux", "update_check_remind_skip", {
+    description = "Sessions remaining before update reminder re-appears (set by 'Remind Later')",
+    default     = 0,
+    min         = 0,
+    max         = 99,
+})
+
+-- ── Dialog CSS ────────────────────────────────────────────────────────────────
 
 local _FRAME_CSS = [[
     background-color: rgba(10, 12, 22, 254);
@@ -94,8 +111,13 @@ local _CSS_XBTN = [[
     }
 ]]
 
--- Counter so each show() call uses fresh widget names and never collides with
--- hidden widgets left over from a previous invocation.
+-- ── Dialog ────────────────────────────────────────────────────────────────────
+
+Mux._changelog          = Mux._changelog          or {}
+Mux._updateDlHandler    = Mux._updateDlHandler    or nil
+Mux._updateDlErrHandler = Mux._updateDlErrHandler or nil
+
+-- Counter so each show() call uses fresh widget names.
 local _n = 0
 
 local function closeUpdateDialog()
@@ -106,7 +128,6 @@ local function closeUpdateDialog()
 end
 
 -- Estimate console height needed to show the full changelog without scrolling.
--- Uses conservative chars-per-line so the real render stays within the estimate.
 local _LINE_H     = 14
 local _CHARS_LINE = 65
 
@@ -135,22 +156,6 @@ function Mux.showUpdateDialog(currentVersion, latestVersion)
     local sw, sh = getMainWindowSize()
     local dw = 500
 
-    -- Vertical budget within the dialog's inside (outer minus 2px border each side):
-    --   0–44   : header
-    --   44–45  : divider
-    --   54–80  : body text
-    --   80–102 : version label
-    --   112–132: "What's New:" label
-    --   136+   : MiniConsole (height = consoleH)
-    --   +10    : gap
-    --   +1     : footer divider
-    --   +14    : gap
-    --   +34    : update note label
-    --   +8     : gap
-    --   +32    : buttons
-    --   +12    : bottom padding
-    -- Total inner = 247 + consoleH, total outer = 251 + consoleH
-
     local consoleH = math.min(
         estimateConsoleH(),
         math.max(60, math.floor(sh * 0.8) - 251)
@@ -176,57 +181,50 @@ function Mux.showUpdateDialog(currentVersion, latestVersion)
 
     local _in = Mux._updateDialog.Inside
 
-    -- Header
     local hdr = Geyser.Label:new({
-        name   = "mux_upd_hdr_" .. n,
+        name = "mux_upd_hdr_" .. n,
         x = 0, y = 0, width = "100%", height = 44,
     }, _in)
     hdr:setStyleSheet(_CSS_HDR)
     hdr:echo("  Update Available")
 
     local xbtn = Geyser.Label:new({
-        name   = "mux_upd_xbtn_" .. n,
+        name = "mux_upd_xbtn_" .. n,
         x = "92%", y = 8, width = 30, height = 28,
     }, _in)
     xbtn:setStyleSheet(_CSS_XBTN)
     xbtn:echo("<center>×</center>")
     xbtn:setClickCallback(closeUpdateDialog)
 
-    -- Top divider
     local div1 = Geyser.Label:new({
-        name   = "mux_upd_div1_" .. n,
+        name = "mux_upd_div1_" .. n,
         x = 0, y = 44, width = "100%", height = 1,
     }, _in)
     div1:setStyleSheet("background-color: rgba(255,255,255,0.1); border:none;")
 
-    -- Body text
     local body = Geyser.Label:new({
-        name   = "mux_upd_body_" .. n,
+        name = "mux_upd_body_" .. n,
         x = 0, y = 54, width = "100%", height = 26,
     }, _in)
     body:setStyleSheet(_CSS_BODY)
     body:echo("A new version of <b>Muxlet</b> is available.")
 
-    -- Version line
     local verLbl = Geyser.Label:new({
-        name   = "mux_upd_ver_" .. n,
+        name = "mux_upd_ver_" .. n,
         x = 0, y = 80, width = "100%", height = 22,
     }, _in)
     verLbl:setStyleSheet(_CSS_SUB)
     verLbl:echo(string.format(
         "You have <b>v%s</b>.  Latest is <b>v%s</b>.",
-        currentVersion or "???", latestVersion
-    ))
+        currentVersion or "???", latestVersion))
 
-    -- "What's New:" label
     local wnLbl = Geyser.Label:new({
-        name   = "mux_upd_wnlbl_" .. n,
+        name = "mux_upd_wnlbl_" .. n,
         x = "3%", y = 112, width = "94%", height = 20,
     }, _in)
     wnLbl:setStyleSheet(_CSS_SUB)
     wnLbl:echo("<b>What's New:</b>")
 
-    -- Changelog MiniConsole
     local con = Geyser.MiniConsole:new({
         name      = "mux_upd_con_" .. n,
         x         = "3%", y = 136,
@@ -236,7 +234,6 @@ function Mux.showUpdateDialog(currentVersion, latestVersion)
         scrollBar = true,
         color     = "black",
     }, _in)
-
     clearWindow(con.name)
 
     if Mux._changelog and #Mux._changelog > 0 then
@@ -247,27 +244,23 @@ function Mux.showUpdateDialog(currentVersion, latestVersion)
     else
         con:hecho("#697db4No specific release notes found.\n")
     end
-
     scrollTo(con.name, 1)
 
-    -- Footer divider
     local div2 = Geyser.Label:new({
-        name   = "mux_upd_div2_" .. n,
+        name = "mux_upd_div2_" .. n,
         x = 0, y = divY, width = "100%", height = 1,
     }, _in)
     div2:setStyleSheet("background-color: rgba(255,255,255,0.1); border:none;")
 
-    -- Update note
     local noteLbl = Geyser.Label:new({
-        name   = "mux_upd_note_" .. n,
+        name = "mux_upd_note_" .. n,
         x = "3%", y = noteY, width = "94%", height = 34,
     }, _in)
     noteLbl:setStyleSheet(_CSS_SUB)
     noteLbl:echo("<b>Note:</b> After updating, close and reopen your Mudlet profile to ensure<br>all UI elements redraw correctly.")
 
-    -- Buttons: Never | Remind Later | Update Now
     local btnNever = Geyser.Label:new({
-        name   = "mux_upd_never_" .. n,
+        name = "mux_upd_never_" .. n,
         x = "2%", y = btnY, width = "28%", height = 32,
     }, _in)
     btnNever:setStyleSheet(_CSS_DANGER)
@@ -279,7 +272,7 @@ function Mux.showUpdateDialog(currentVersion, latestVersion)
     end)
 
     local btnLater = Geyser.Label:new({
-        name   = "mux_upd_later_" .. n,
+        name = "mux_upd_later_" .. n,
         x = "36%", y = btnY, width = "28%", height = 32,
     }, _in)
     btnLater:setStyleSheet(_CSS_BTN)
@@ -291,7 +284,7 @@ function Mux.showUpdateDialog(currentVersion, latestVersion)
     end)
 
     local btnUpdate = Geyser.Label:new({
-        name   = "mux_upd_now_" .. n,
+        name = "mux_upd_now_" .. n,
         x = "70%", y = btnY, width = "28%", height = 32,
     }, _in)
     btnUpdate:setStyleSheet(_CSS_OK)
@@ -301,10 +294,140 @@ function Mux.showUpdateDialog(currentVersion, latestVersion)
         mpkg.upgrade("Muxlet")
     end)
 
-    -- Hide then immediately re-show so all children are Qt-parented before display.
     Mux._updateDialog:hide()
     Mux._updateDialog:show()
     Mux._updateDialog:raiseAll()
 end
 
-Mux._log("mux_update_dialog loaded")
+-- ── Version check logic ───────────────────────────────────────────────────────
+
+-- Semver comparison: returns true if v1 is strictly newer than v2.
+-- Strips pre-release suffixes (e.g. "0.2.0-dev" → "0.2.0") before comparing.
+function Mux._versionIsNewer(v1, v2)
+    if not v1 or not v2 then return false end
+    local function parse(v)
+        local base = v:match("^(%d[%d%.]*)") or "0"
+        local major, minor, patch = base:match("^(%d+)%.?(%d*)%.?(%d*)")
+        return tonumber(major) or 0, tonumber(minor) or 0, tonumber(patch) or 0
+    end
+    local maj1, min1, pat1 = parse(v1)
+    local maj2, min2, pat2 = parse(v2)
+    if maj1 ~= maj2 then return maj1 > maj2 end
+    if min1 ~= min2 then return min1 > min2 end
+    return pat1 > pat2
+end
+
+-- Check MPR for a newer version.
+-- silent=true suppresses "Checking..." and "Up to date" messages.
+function Mux.checkForUpdates(silent)
+    if not silent then
+        Mux._echo("\n<cyan>[Muxlet]<reset> Checking for updates...\n")
+    end
+
+    if not mpkg or not mpkg.ready(true) then
+        if not silent then
+            Mux._echo("<red> Error: mpkg repository data not loaded.\n")
+        end
+        return
+    end
+
+    mpkg.updatePackageList(true)
+
+    tempTimer(5, function()
+        local current = mpkg.getInstalledVersion("Muxlet") or "0.0.0"
+
+        if not getPackageInfo("Muxlet") then
+            if not silent then
+                Mux._echo("<red> Error: Muxlet not found in mpkg repository.\n")
+            end
+            return
+        end
+
+        local latest = mpkg.getRepositoryVersion("Muxlet")
+        if Mux._versionIsNewer(latest, current) then
+            Mux._triggerUpdateDialog(current, latest)
+        elseif not silent then
+            Mux._echo("<cyan> You are up to date.\n")
+        end
+    end)
+end
+
+-- Download the GitHub releases JSON, extract changelog entries between
+-- currentVersion and latestVersion, then open the update dialog.
+function Mux._triggerUpdateDialog(currentVersion, latestVersion)
+    local tmp = getMudletHomeDir() .. "/mux_releases.json"
+
+    Mux._changelog = {}
+
+    local function cleanupDlHandlers()
+        if Mux._updateDlHandler then
+            killAnonymousEventHandler(Mux._updateDlHandler)
+            Mux._updateDlHandler = nil
+        end
+        if Mux._updateDlErrHandler then
+            killAnonymousEventHandler(Mux._updateDlErrHandler)
+            Mux._updateDlErrHandler = nil
+        end
+    end
+    cleanupDlHandlers()
+
+    Mux._updateDlHandler = registerAnonymousEventHandler("sysDownloadDone", function(_, filename)
+        if filename ~= tmp then return end
+
+        local file = io.open(tmp, "r")
+        if not file then return end
+        local content = file:read("*a")
+        file:close()
+
+        local releases = yajl.to_value(content)
+        if not releases then return end
+
+        for _, release in ipairs(releases) do
+            local tag = release.tag_name:gsub("^v", "")
+            if Mux._versionIsNewer(tag, currentVersion)
+            and not Mux._versionIsNewer(tag, latestVersion) then
+                table.insert(Mux._changelog, {
+                    version = tag,
+                    body    = release.body,
+                })
+            end
+        end
+
+        table.sort(Mux._changelog, function(a, b)
+            return Mux._versionIsNewer(a.version, b.version)
+        end)
+
+        if Mux.showUpdateDialog then
+            Mux.showUpdateDialog(currentVersion, latestVersion)
+        end
+
+        cleanupDlHandlers()
+    end)
+
+    Mux._updateDlErrHandler = registerAnonymousEventHandler("sysDownloadError", function(_, filename)
+        if filename ~= tmp then return end
+        cleanupDlHandlers()
+    end)
+
+    downloadFile(tmp, "https://api.github.com/repos/tmtocloud/Muxlet/releases")
+end
+
+-- Runs once per Mudlet session at package load.
+local function muxStartupUpdateCheck()
+    local enabled = Mux.settings.get("mux", "update_check_enabled")
+    if not enabled then return end
+
+    local skip = tonumber(Mux.settings.get("mux", "update_check_remind_skip")) or 0
+    if skip > 0 then
+        Mux.settings.set("mux", "update_check_remind_skip", skip - 1)
+        return
+    end
+
+    tempTimer(15, function()
+        Mux.checkForUpdates(true)
+    end)
+end
+
+muxStartupUpdateCheck()
+
+Mux._log("update loaded")

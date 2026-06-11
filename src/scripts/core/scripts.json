@@ -1,9 +1,7 @@
 [
   {"name": "globals"},
   {"name": "settings"},
-  {"name": "update_checker"},
-  {"name": "update_dialog"},
-  {"name": "deps"},
+  {"name": "update"},
   {"name": "theme"},
   {"name": "pane"},
   {"name": "tabs"},
@@ -13,9 +11,8 @@
   {"name": "manager"},
   {"name": "dialog"},
   {"name": "workspace"},
-  {"name": "preset"},
-  {"name": "mdk"},
+  {"name": "content"},
+  {"name": "content_builtins"},
   {"name": "keybinds"},
-  {"name": "settings_ui"},
   {"name": "devmode"}
 ]

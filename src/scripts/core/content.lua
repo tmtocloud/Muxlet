@@ -16,26 +16,63 @@
 --   target.content   — Geyser.Container; parent for your widgets
 --   target.contentBg — Geyser.Label; clear this after attaching real content:
 --                        target.contentBg:echo("")
---                        target.contentBg:setStyleSheet(
---                            "background-color:rgba(0,0,0,0);border:none;")
+--                        target.contentBg:hide()
 --
 -- The context menu reads Mux._content at open-time so entries registered
 -- after startup appear automatically without restarting Mudlet.
+--
+-- Persistence:
+--   Each registration is saved to Muxlet_persistent/content.json as a catalog
+--   of {name, description} pairs.  The apply/remove Lua functions are not
+--   serialisable; they are always re-registered at load time by package code.
 
-Mux._content = Mux._content or {}
+Mux._content     = Mux._content     or {}
+Mux._contentFile = Mux._persistentDir .. "/content.json"
+
+-- ── Catalog persistence ───────────────────────────────────────────────────────
+
+local function saveContentCatalog()
+    local catalog = {}
+    for id, def in pairs(Mux._content) do
+        catalog[id] = {
+            name        = def.name        or id,
+            description = def.description or "",
+        }
+    end
+    local ok, err = pcall(function()
+        local f = io.open(Mux._contentFile, "w")
+        f:write(yajl.to_string(catalog))
+        f:close()
+    end)
+    if not ok then Mux._err("content catalog save failed: %s", tostring(err)) end
+    Mux._log("content catalog saved to %s", Mux._contentFile)
+end
+
+-- Debounced: coalesce rapid registrations at startup into one write.
+local _saveTimer = nil
+local function scheduleSave()
+    if _saveTimer then killTimer(_saveTimer) end
+    _saveTimer = tempTimer(1, function()
+        _saveTimer = nil
+        saveContentCatalog()
+    end)
+end
+
+-- ── Public API ────────────────────────────────────────────────────────────────
 
 --- Register a named content type.
 -- @param name  string identifier (used in API calls and menus)
 -- @param def   table with at minimum an `apply(target)` function
 function Mux.registerContent(name, def)
-    assert(type(name)       == "string",   "content name must be a string")
-    assert(type(def)        == "table",    "content definition must be a table")
-    assert(type(def.apply)  == "function", "content.apply must be a function")
+    assert(type(name)      == "string",   "content name must be a string")
+    assert(type(def)       == "table",    "content definition must be a table")
+    assert(type(def.apply) == "function", "content.apply must be a function")
     Mux._content[name] = def
     Mux._log("Registered content: %s", name)
+    scheduleSave()
 end
 
--- Backward-compat alias.
+-- Backward-compat alias for external packages that used the old name.
 Mux.registerPreset = Mux.registerContent
 
 --- Apply the named content to a pane or tab target.
@@ -61,9 +98,6 @@ function Mux._applyContent(target, contentName)
     Mux._scheduleAutoSave()
 end
 
--- Backward-compat alias.
-Mux._applyPreset = Mux._applyContent
-
 --- Return an alphabetically sorted list of registered content names.
 function Mux._listContent()
     local names = {}
@@ -72,7 +106,4 @@ function Mux._listContent()
     return names
 end
 
--- Backward-compat alias.
-Mux._listPresets = Mux._listContent
-
-Mux._log("mux_content loaded")
+Mux._log("content loaded")

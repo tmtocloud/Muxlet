@@ -8,8 +8,8 @@ This guide covers local testing workflow, release promotion, and MPR submission.
 
 | Task | Command |
 |---|---|
-| Build package | `muddle` |
-| Deploy to Mudlet profile | `./devmode.ps1` |
+| Build + deploy | `./build.ps1 -Profile mux-dev` |
+| Build only | `./build.ps1` |
 | Immediate reload in Mudlet | type `mux reload` in-game |
 | Test fresh-install path | type `mux reload fresh` in-game |
 | Test update dialog UI | call `Mux.showUpdateDialog("0.0.0","9.9.9")` in Lua console |
@@ -19,28 +19,33 @@ This guide covers local testing workflow, release promotion, and MPR submission.
 
 ## Local Dev Setup (one-time per machine)
 
-### 1. Run the deploy script
+### 1. Run the build + deploy script
 
 ```powershell
-muddle
-./devmode.ps1
+./build.ps1 -Profile mux-dev
 ```
 
-This builds the package via muddle, then:
+This derives the version from git tags, builds the package via muddle, then:
 - Creates a `mux-dev` Mudlet profile directory if it doesn't exist
 - Copies `build/Muxlet.mpackage` into the profile directory
 - Writes a rebuild stamp file that the in-package auto-reload timer watches
 
-Pass `-Profile` to use a different profile name:
+Pass a different profile name:
 
 ```powershell
-./devmode.ps1 -Profile my-test
+./build.ps1 -Profile my-test
 ```
 
 Pass `-MudletConfigPath` if auto-detection fails (run Mudlet at least once first):
 
 ```powershell
-./devmode.ps1 -MudletConfigPath "C:\Users\you\AppData\Roaming\Mudlet"
+./build.ps1 -Profile mux-dev -MudletConfigPath "C:\Users\you\AppData\Roaming\Mudlet"
+```
+
+Override the version (CI does this automatically from git tags):
+
+```powershell
+./build.ps1 -Version "1.2.0"
 ```
 
 ### 2. First-time package install (once only)
@@ -57,7 +62,7 @@ After this initial install, you never use the GUI install flow again.
 
 ```powershell
 # Edit code, then:
-muddle && ./devmode.ps1
+./build.ps1 -Profile mux-dev
 ```
 
 Within **~30 seconds**, a timer inside the running package detects the new stamp file
@@ -120,16 +125,14 @@ Displays the installed version and silently queries MPR for a newer release.
 
 ## Build Output
 
-`muddle` reads the `mfile` in the project root and generates:
+`build.ps1` derives the version from git, patches `mfile`, runs muddle, then restores `mfile`. It generates:
 
 ```
 build/Muxlet.mpackage    — the installable package
 build/Muxlet.xml         — intermediate XML (for inspection)
 ```
 
-`devmode.ps1` copies `build/Muxlet.mpackage` into the Mudlet profile directory and
-writes `Muxlet-rebuild.stamp` alongside it. The stamp file is what the in-package
-auto-reload timer (`devmode.lua`) watches for changes.
+`build.ps1 -Profile <name>` (or `build.sh --profile <name>` on Linux/macOS/WSL) handles both steps: building and deploying.
 
 ---
 

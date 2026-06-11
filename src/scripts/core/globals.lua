@@ -10,18 +10,20 @@
 --   Mudlet/src/mudlet-lua/lua/geyser/GeyserAdjustableContainer.lua — drag/resize pattern reference
 
 Mux = Mux or {}
-Mux._version = "1.0.0"
+local _pkgInfo = getPackageInfo("Muxlet")
+Mux._version = (_pkgInfo and _pkgInfo.version) or "unknown"
 
 -- Internal registries (never access directly; use Mux API)
 Mux._panes    = Mux._panes    or {}   -- id → MuxPane instance
 Mux._splits   = Mux._splits   or {}   -- id → MuxSplit instance
 Mux._paneSets = Mux._paneSets or {}   -- id → MuxPaneSet instance
-Mux._running  = Mux._running  or false
+Mux._running             = Mux._running             or false
+Mux._activeWorkspaceName = Mux._activeWorkspaceName or nil
 
 -- panes: a global proxy that always delegates reads/writes to Mux._panes.
--- Users reference panes["pane_0001"].content from scripts and layouts.
+-- Users reference panes["pane_0001"].content from scripts and workspace files.
 -- A metatable proxy is used instead of a direct alias so the global remains
--- valid after _clearLayout() replaces Mux._panes with a fresh empty table.
+-- valid after _clearWorkspace() replaces Mux._panes with a fresh empty table.
 panes = setmetatable({}, {
     __index    = function(_, k)    return Mux._panes[k]     end,
     __newindex = function(_, k, v) Mux._panes[k] = v         end,
@@ -666,7 +668,7 @@ function Mux._showRenameDialog(opts)
     _renameDialog.backdrop:setClickCallback(function() closeDialog() end)
 end
 
--- Pane preset API lives in mux_preset.lua.  Individual presets in mux_preset_<name>.lua.
+-- Content registration API lives in content.lua.  Built-in examples in content_builtins.lua.
 
 function Mux._closeContextMenu()
     local menu = Mux._contextMenu

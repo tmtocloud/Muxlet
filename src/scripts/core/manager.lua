@@ -29,7 +29,7 @@ Mux._focusedPane = nil
 
 function Mux.setFocus(pane)
     -- Permanent floats (settings, etc.) don't participate in the focus system.
-    -- They never get the blue border, never displace the layout focus, and never
+    -- They never get the blue border, never displace the workspace focus, and never
     -- appear in split/zoom/close keybind operations.  Just raise them visually.
     if pane and pane.permanentFloat then
         if pane.floating then pane:raise() end
@@ -397,14 +397,19 @@ function Mux.status()
     for _ in pairs(Mux._paneSets) do ps = ps + 1 end
 
     Mux._echo("\n<cyan>[Muxlet]<reset> v" .. Mux._version .. "\n")
-    Mux._echo(string.format("  Theme   : %s\n", Mux._activeThemeName))
-    Mux._echo(string.format("  PaneSets: %d  Splits: %d  Panes: %d\n", ps, sc, pc))
-    Mux._echo(string.format("  Borders : t=%d r=%d b=%d l=%d\n",
-        Mux._borders.top, Mux._borders.right,
-        Mux._borders.bottom, Mux._borders.left))
+
+    if Mux._running then
+        local wsDisplay = Mux._activeWorkspaceName or "unknown"
+        if wsDisplay == "current" then wsDisplay = "current (auto-restored)" end
+        Mux._echo(string.format("  State     : <green>STARTED<reset>  workspace '<cyan>%s<reset>'\n", wsDisplay))
+    else
+        Mux._echo("  State     : <yellow>STOPPED<reset>  — type <cyan>mux start<reset> to begin\n")
+    end
+
+    Mux._echo(string.format("  PaneSets  : %d  Splits: %d  Panes: %d\n", ps, sc, pc))
     local fp = Mux._focusedPane
-    Mux._echo(string.format("  Focused : %s\n", fp and fp.name or "(none)"))
-    Mux._echo(string.format("  Debug   : %s\n", tostring(Mux.debug)))
+    Mux._echo(string.format("  Focused   : %s\n", fp and fp.name or "(none)"))
+    Mux._echo(string.format("  Debug     : %s\n", tostring(Mux.debug)))
 end
 
 -- ── Debug toggle ─────────────────────────────────────────────────────────────
@@ -428,11 +433,11 @@ function Mux._echo(text)
     cecho(text)
 end
 
--- ── Layout clear (called before every applyLayout) ───────────────────────────
+-- ── Workspace clear (called before every applyWorkspace) ─────────────────────
 -- Destroys all current panes/splits/panesets and resets borders without
 -- killing persistent event handlers or the command console pane.
 
-function Mux._clearLayout()
+function Mux._clearWorkspace()
     -- Cancel any pending auto-save so it doesn't write an empty/transitional state.
     if Mux._autoSaveTimer then
         killTimer(Mux._autoSaveTimer)
@@ -460,7 +465,7 @@ function Mux._clearLayout()
     Mux._connAware = {}
     if Mux._settings_ui then Mux._settings_ui.window = savedSet end
     Mux._focusedPane = nil
-    -- Reset user-facing ID pools so new layouts start numbering from 1 again.
+    -- Reset user-facing ID pools so new workspaces start numbering from 1 again.
     -- _internalSeq is intentionally NOT reset to keep Geyser names unique.
     for _, prefix in ipairs({"pane", "split", "ps"}) do
         Mux._idCounters[prefix] = 0
@@ -468,7 +473,7 @@ function Mux._clearLayout()
     end
     Mux._borders = { top = 0, right = 0, bottom = 0, left = 0 }
     Mux._applyBorders()
-    Mux._log("_clearLayout: cleared")
+    Mux._log("_clearWorkspace: cleared")
 end
 
 -- ── Output capture (fullscreen) ───────────────────────────────────────────────
@@ -520,9 +525,9 @@ end
 -- ── Full stop / full start ────────────────────────────────────────────────────
 -- Equivalent to closing and reopening the profile:
 --   fullStop  — destroys all visible widgets, kills the resize handler, reloads
---               settings from disk so startup_layout / theme are fresh.
---   fullStart — re-registers the resize handler, applies saved theme, applies
---               startup layout (same sequence as the initial profile load).
+--               settings from disk so theme, debug, etc. are fresh.
+--   fullStart — re-registers the resize handler, applies saved theme, restores
+--               the current session workspace (or 'default' on first run).
 
 function Mux.fullStop()
     -- Kill the resize handler; fullStart() will re-register it.
@@ -537,7 +542,7 @@ function Mux.fullStop()
 
     -- Hide and release the settings window.  buildWindow() creates a fresh one
     -- the next time Mux.settings.toggle() is called, so we just abandon the old one.
-    -- This must happen BEFORE _clearLayout so the savedSet guard inside _clearLayout
+    -- This must happen BEFORE _clearWorkspace so the savedSet guard inside _clearWorkspace
     -- sees nil and does not re-save the stale reference.
     if Mux._settings_ui and Mux._settings_ui.window then
         Mux._settings_ui.window:hide()
@@ -560,14 +565,14 @@ function Mux.fullStop()
     -- Close the context menu (hides backdrop, panel, all row labels).
     Mux._closeContextMenu()
 
-    -- Destroy all layout: panes, splits, paneSets, and reset borders.
-    Mux._clearLayout()
+    -- Destroy all panes, splits, paneSets, and reset borders.
+    Mux._clearWorkspace()
     setBorderSizes(0, 0, 0, 0)
 
-    -- Clear any stale last-focused reference surviving _clearLayout.
+    -- Clear any stale last-focused reference surviving _clearWorkspace.
     Mux._lastFocusedPane = nil
 
-    -- Reload settings from disk so startup_layout, theme, etc. reflect the
+    -- Reload settings from disk so theme, debug, etc. reflect the
     -- last saved state (including any edits made while Muxlet was running).
     Mux.settings.load()
 
@@ -591,21 +596,9 @@ function Mux.fullStart()
     end
     Mux.debug = Mux.settings.get("mux", "debug") or false
 
-    -- Startup priority: current (restored session) → startup_workspace → default.
-    -- "current" is written by _doAutoSave() on every structural change, so it
-    -- always represents the user's last session state once Muxlet has been used.
-    local wsName
-    if Mux._workspaces["current"] then
-        wsName = "current"
-    else
-        wsName = Mux.settings.get("mux", "startup_workspace") or ""
-        if wsName == "" then
-            wsName = Mux.settings.get("mux", "startup_layout") or ""
-        end
-        if wsName == "" or not Mux._workspaces[wsName] then
-            wsName = "default"
-        end
-    end
+    -- Startup priority: current (auto-restored session) → default.
+    -- "current" is written by _doAutoSave() on every structural change.
+    local wsName = Mux._workspaces["current"] and "current" or "default"
 
     if not Mux._workspaces[wsName] then
         Mux._echo("\n<red>[Muxlet]<reset> No workspace found. Use 'mux workspaces' to list available.\n")
@@ -633,7 +626,7 @@ function Mux.teardown()
         killAnonymousEventHandler(Mux._keybindHandler)
         Mux._keybindHandler = nil
     end
-    Mux._clearLayout()
+    Mux._clearWorkspace()
     setBorderSizes(0, 0, 0, 0)
     cecho("\n<yellow>[Muxlet]<reset> Torn down. Main console restored.\n")
 end
@@ -646,7 +639,7 @@ if not Mux._unloadHandler then
         "sysUninstallPackage",
         function(_, pkg)
             if pkg ~= "Muxlet" then return end
-            fullResetBorders()
+            setBorderSizes(0, 0, 0, 0)
         end
     )
 end

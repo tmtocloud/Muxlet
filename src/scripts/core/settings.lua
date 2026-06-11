@@ -32,7 +32,9 @@ Mux.settings._registry  = Mux.settings._registry  or {}
 Mux.settings._order     = Mux.settings._order     or {}
 Mux.settings._data      = Mux.settings._data      or {}
 Mux.settings._onChange  = Mux.settings._onChange  or {}
-Mux.settings._file      = getMudletHomeDir() .. "/Muxlet_settings.json"
+Mux._persistentDir      = getMudletHomeDir() .. "/Muxlet_persistent"
+lfs.mkdir(Mux._persistentDir)
+Mux.settings._file      = Mux._persistentDir .. "/settings.json"
 
 -- ── UI state (survive package reloads) ───────────────────────────────────────
 Mux._settings_ui = Mux._settings_ui or {
@@ -702,7 +704,7 @@ local function buildWindow()
         noResize         = true,
         noTitlebarToggle = true,
         noRename         = true,
-        noPresets        = true,
+        noContent        = true,
     })
     local theme = Mux.activeTheme()
     local sui   = theme.settingsUi or {}
@@ -924,12 +926,6 @@ Mux.settings.register("mux", "debug", {
     default     = false,
 })
 
-Mux.settings.register("mux", "startup_workspace", {
-    description = "Workspace to auto-apply on load (blank = none). "
-               .. "Must match a registered workspace: mux workspaces",
-    default     = "",
-})
-
 Mux.settings.register("mux", "default_titlebar", {
     description = "Show titlebars on newly created panes by default",
     default     = true,
@@ -949,14 +945,9 @@ Mux.settings.register("mux", "hint_timeout", {
     max         = 10,
 })
 
-Mux.settings.register("mux", "auto_install_mdk", {
-    description = "Automatically download and install MDK if not present",
-    default     = true,
-})
-
 Mux.settings.register("mux", "auto_start", {
-    description = "Automatically run mux start on profile load using the configured layout",
-    default     = true,
+    description = "Automatically run mux start on profile load using the configured workspace",
+    default     = false,
 })
 
 -- ── onChange handlers ─────────────────────────────────────────────────────────
@@ -1001,6 +992,10 @@ end)
 tempTimer(1, function()
     if Mux.settings.get("mux", "auto_start") then
         if Mux.fullStart then Mux.fullStart() end
+    else
+        Mux._echo(
+            "  <dim_grey>Type <cyan>mux start<reset><dim_grey> to begin"
+            .. "  •  <cyan>mux workspaces<reset> to browse  •  <cyan>mux help<reset> for all commands<reset>\n")
     end
 end)
 

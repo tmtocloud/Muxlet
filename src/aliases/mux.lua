@@ -21,9 +21,9 @@ if sub == "help" then
   mux help                     — this message
 
   <white>Session<reset>
-  mux start                    — enable mux (uses startup_workspace setting, or 'default')
+  mux start                    — enable mux (restores last session, or 'default')
   mux stop                     — disable mux, restore normal Mudlet console
-  mux reset                    — re-apply startup_workspace (discard manual changes)
+  mux reset                    — re-apply the default workspace (discard session state)
   mux status                   — show status overview
 
   <white>Pane Actions<reset>
@@ -298,19 +298,8 @@ elseif sub == "stop" then
 
 -- ── mux reset ────────────────────────────────────────────────────────────────
 elseif sub == "reset" then
-    local wsName = Mux.settings.get("mux", "startup_workspace")
-    if not wsName or wsName == "" then
-        wsName = Mux.settings.get("mux", "startup_layout")
-    end
-    if not wsName or wsName == "" then wsName = "default" end
-    if not Mux._workspaces[wsName] then
-        Mux._echo(string.format(
-            "\n<red>[Muxlet]<reset> Unknown workspace '%s'. Use: mux workspaces\n", wsName))
-    else
-        Mux.applyWorkspace(wsName)
-        Mux._echo(string.format(
-            "\n<yellow>[Muxlet]<reset> Reset to workspace '<cyan>%s<reset>'.\n", wsName))
-    end
+    Mux.applyWorkspace("default")
+    Mux._echo("\n<yellow>[Muxlet]<reset> Reset to default workspace.\n")
 
 -- ── unknown ──────────────────────────────────────────────────────────────────
 else

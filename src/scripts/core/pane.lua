@@ -56,7 +56,7 @@ function MuxPane:init(opts)
     self.locked           = false
     -- permanentFloat: pane is always floating and never interacts with any PaneSet.
     -- Drag-to-embed, double-click-to-embed, and Alt+A all become no-ops.
-    -- Used for system overlays (settings window, etc.) that must never replace layout content.
+    -- Used for system overlays (settings window, etc.) that must never replace workspace content.
     self.permanentFloat   = opts.permanentFloat or opts.permanent_float or false
     -- noResize: corner resize handles are never built; pane size is fixed after creation.
     self.noResize         = opts.noResize or opts.no_resize or false
@@ -895,6 +895,10 @@ function MuxPane:applyTheme()
     self:_applyTitlebarVisibility()
     -- Refresh connection screen colours if one exists (delegated to connection.lua).
     if self._refreshConnScreen then self:_refreshConnScreen() end
+    -- Force Qt to flush pending style repaints on all child widgets.  CSS updates
+    -- set via setStyleSheet are batched by Qt and may not paint until a geometry
+    -- pass runs.  reposition() triggers that pass without changing any sizes.
+    if self.outer then self.outer:reposition() end
 end
 
 -- ── Drop-to-embed ─────────────────────────────────────────────────────────────
@@ -1093,7 +1097,7 @@ function MuxPane:_baseFrameCss()
     end
     local theme = Mux.activeTheme()
     -- Permanent floats always carry the accent border so they're visually distinct
-    -- from layout panes and clearly identifiable as system-level overlays.
+    -- from workspace panes and clearly identifiable as system-level overlays.
     if self.permanentFloat then
         return (theme.paneOuterCss or "") .. "\n" .. (theme.floatingExtraCss or "")
     end

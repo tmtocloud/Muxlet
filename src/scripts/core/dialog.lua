@@ -2,7 +2,7 @@
 --
 -- Mux.createDialog(opts) is the recommended way to build floating popup windows
 -- in Muxlet.  A dialog is a permanentFloat MuxPane: it hovers above all embedded
--- layout panes, cannot be dragged into a split, and carries the theme's system-
+-- workspace panes, cannot be dragged into a split, and carries the theme's system-
 -- accent border so users immediately recognise it as a transient system overlay.
 --
 -- ── Why use this instead of Adjustable.Container or raw Geyser widgets? ────────
@@ -13,7 +13,7 @@
 --   • Consistent drag behaviour.  Users move the dialog by dragging its titlebar,
 --     exactly like any other Mux pane — same cursor feedback, same feel.
 --   • Z-order is automatic.  Mux.raiseFloatingPanes() keeps every dialog on top
---     of embedded layout panes; no manual raise() calls needed after widget updates.
+--     of workspace panes; no manual raise() calls needed after widget updates.
 --   • A working × close button is built in.  Wire cleanup logic via pane.onClose.
 --   • Widgets live in pane.content — the same Geyser.Container used everywhere
 --     else in Muxlet.  No special API to learn; the docs you already know apply.
@@ -21,7 +21,7 @@
 -- ── Quick start ──────────────────────────────────────────────────────────────────
 --
 --   local d = Mux.createDialog({
---       title  = "Apply Layout?",
+--       title  = "Apply Workspace?",
 --       width  = 480,
 --       height = 220,
 --   })

@@ -1,11 +1,10 @@
 # Muxlet
 
-A game-agnostic tiling window manager for [Mudlet](https://mudlet.org), inspired by tmux. Split the Mudlet window into panes, arrange them with keyboard shortcuts, switch themes, and save named workspaces.
+A game-agnostic tiling window manager for [Mudlet](https://mudlet.org), inspired by tmux. Split the Mudlet window into panes, arrange them with keyboard shortcuts, switch themes, save named workspaces, and attach custom content widgets to any pane.
 
 ## Requirements
 
 - [Mudlet](https://mudlet.org) 4.x or later
-- [MDK](https://github.com/demonnic/MDK) (available in the Mudlet Package Manager)
 
 ## Installation
 
@@ -16,10 +15,12 @@ Or download `Muxlet.mpackage` from the [Releases](https://github.com/tmtocloud/M
 ## Quick Start
 
 ```
-mux            — start Muxlet (or type: mux start)
+mux start      — enable Muxlet (auto_start is off by default)
 mux help       — show all commands
 mux hint       — show keybind overlay (also: Alt+B)
 ```
+
+> **Note:** `auto_start` is disabled by default so Muxlet does not interfere with downstream packages. Enable it permanently with `mux settings set mux.auto_start true`.
 
 ## Commands
 
@@ -27,9 +28,9 @@ mux hint       — show keybind overlay (also: Alt+B)
 
 | Command | Description |
 |---------|-------------|
-| `mux` / `mux start` | Enable Muxlet |
+| `mux` / `mux start` | Enable Muxlet (restores last session) |
 | `mux stop` | Disable Muxlet, restore normal console |
-| `mux reset` | Re-apply the startup workspace |
+| `mux reset` | Re-apply the default workspace |
 | `mux status` | Show session overview |
 
 ### Panes
@@ -60,12 +61,12 @@ mux hint       — show keybind overlay (also: Alt+B)
 
 ### Workspaces
 
-Save and restore complete UI state across sessions.
+Save and restore complete workspace arrangements across sessions. Workspaces are persisted automatically to `Muxlet_persistent/workspaces.json` in your Mudlet profile directory.
 
 | Command | Description |
 |---------|-------------|
-| `mux workspace save <name>` | Save the current layout |
-| `mux workspace load <name>` | Restore a saved layout |
+| `mux workspace save <name>` | Save the current workspace |
+| `mux workspace load <name>` | Restore a saved workspace |
 | `mux workspace list` | List all saved workspaces |
 | `mux workspace delete <name>` | Remove a workspace |
 
@@ -120,10 +121,13 @@ Type `mux keys` to list them in the console.
 
 ## Extending Muxlet
 
-Muxlet exposes a Lua API for registering custom themes and workspaces from other packages.
+Muxlet exposes a Lua API for registering custom themes, workspaces, and content types from other packages.
+
+### Workspaces
+
+Workspaces define a complete pane, split, and theme arrangement. Register them from any package and they appear in `mux workspace list`.
 
 ```lua
--- Register a custom workspace
 Mux.registerWorkspace("my-workspace", {
     name  = "My Workspace",
     theme = "dark",
@@ -131,21 +135,147 @@ Mux.registerWorkspace("my-workspace", {
         {
             id   = "screen",
             zone = "screen",
-            root = { type = "pane", id = "output", name = "Main", mainConsoleHost = true },
+            root = {
+                type = "split", direction = "v", ratio = 0.65,
+                a = { type = "pane", id = "output", name = "Main", mainConsoleHost = true },
+                b = { type = "pane", id = "sidebar", name = "Info" },
+            },
         },
     },
 })
 
--- Register a custom theme
+-- Apply immediately (it auto-saves and will be restored next session)
+Mux.applyWorkspace("my-workspace")
+```
+
+**Workspace node fields:**
+
+| Field | Description |
+|-------|-------------|
+| `type` | `"pane"` or `"split"` |
+| `id` | Unique string identifier for the pane |
+| `name` | Display name shown in the titlebar |
+| `mainConsoleHost` | `true` to host the main MUD output console |
+| `showTitlebar` | Show/hide the pane titlebar (default: from settings) |
+| `noContent` | Suppress the "Add Content" context menu item |
+| `activeContent` | Content type to apply automatically on load |
+| `direction` | `"v"` (left/right) or `"h"` (top/bottom) for splits |
+| `ratio` | Split point as a fraction 0.0–1.0 |
+
+Workspaces are auto-saved to `Muxlet_persistent/workspaces.json` after every structural change. The `"current"` workspace key always holds the live session state so your arrangement survives Mudlet restarts even without an explicit save.
+
+### Content system
+
+Content types are named widget factories that users can attach to any pane or tab from the right-click context menu. They're registered at runtime and catalogued in `Muxlet_persistent/content.json`.
+
+```lua
+Mux.registerContent("my_widget", {
+    name        = "My Widget",
+    description = "Shows something useful in a pane",
+
+    -- Called when the user selects this content type.
+    -- `target` is either a pane or a tab; both expose the same interface.
+    apply = function(target)
+        -- target.id        — unique string id
+        -- target.name      — display name
+        -- target.content   — Geyser.Container: parent for your widgets
+        -- target.contentBg — Geyser.Label: hide this once you attach real content
+        local lbl = Geyser.Label:new({
+            name = target.id .. "_my_lbl",
+            x = "0%", y = "0%", width = "100%", height = "100%",
+        }, target.content)
+        lbl:echo("Hello from My Widget")
+        target.contentBg:hide()
+    end,
+
+    -- Optional: called before a different content type is applied to this target.
+    remove = function(target)
+        hideWindow(target.id .. "_my_lbl")
+    end,
+})
+```
+
+### GMCP viewer
+
+`Mux.registerGmcpViewer(path)` creates a content type for any dot-path under `gmcp`. It pretty-prints whatever value is there — tables, arrays, strings, numbers, booleans — and refreshes automatically whenever the corresponding GMCP event fires.
+
+```lua
+-- Register viewers for any GMCP paths your game exposes
+Mux.registerGmcpViewer("char.vitals")   -- → content id "gmcp:char.vitals"
+Mux.registerGmcpViewer("char.status")   -- → content id "gmcp:char.status"
+Mux.registerGmcpViewer("room.info")     -- → content id "gmcp:room.info"
+```
+
+The following are pre-registered and available out of the box:
+
+| Content ID | Watches |
+|------------|---------|
+| `gmcp:char.vitals` | `gmcp.char.vitals` |
+| `gmcp:room.info` | `gmcp.room.info` |
+
+Use in a workspace pane definition:
+```lua
+{ type = "pane", id = "vitals", name = "Vitals", activeContent = "gmcp:char.vitals" }
+```
+
+Or apply at runtime:
+```lua
+Mux._applyContent(panes.vitals, "gmcp:char.vitals")
+```
+
+### Themes
+
+```lua
 Mux.registerTheme("my-theme", {
     titlebarHeight = 22,
     paneOuterCss   = "background-color: #1a1a2e; border: 2px solid #444;",
-    -- ... (see dark.lua / light.lua for full spec)
+    -- see dark.lua / light.lua in the Muxlet source for the full spec
+})
+```
+
+### Dialog API
+
+Create floating popup windows that integrate with the Muxlet theme system.
+
+```lua
+local d = Mux.createDialog({
+    title     = "Confirm",
+    width     = 420,
+    height    = 180,
+    resizable = false,
 })
 
--- Apply a workspace on startup
-Mux.settings.set("mux", "startup_workspace", "my-workspace")
+-- d.content is a Geyser.Container — add your widgets here
+local msg = Geyser.Label:new({
+    name = "my_dialog_msg", x = "4%", y = 14, width = "92%", height = 40,
+}, d.content)
+msg:setStyleSheet(Mux.dialogCss.body)
+msg:echo("Apply the recommended workspace?")
+
+local btnOk = Geyser.Label:new({
+    name = "my_dialog_ok", x = "30%", y = 120, width = "40%", height = 30,
+}, d.content)
+btnOk:setStyleSheet(Mux.dialogCss.buttonPrimary)
+btnOk:echo("<center>OK</center>")
+btnOk:setClickCallback(function()
+    d:close()
+    Mux.applyWorkspace("my-workspace")
+end)
+
+-- Optional cleanup hook
+d.onClose = function() end
 ```
+
+**Predefined CSS classes:**
+
+| Key | Style |
+|-----|-------|
+| `Mux.dialogCss.body` | Body text (light blue) |
+| `Mux.dialogCss.subtext` | Muted caption text |
+| `Mux.dialogCss.divider` | 1 px horizontal rule |
+| `Mux.dialogCss.button` | Neutral action button |
+| `Mux.dialogCss.buttonPrimary` | Affirmative / green button |
+| `Mux.dialogCss.buttonDanger` | Destructive / red button |
 
 ## Developer Guide
 

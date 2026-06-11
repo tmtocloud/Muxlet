@@ -11,12 +11,7 @@
 --   Mux.listWorkspaces()                 print workspace names
 --   Mux.deleteWorkspace("name")          remove a saved workspace
 --
--- Workspaces persist across sessions via Mux.settings.
--- Set mux.startup_workspace to auto-restore one on profile load.
---
--- Backward-compat aliases for existing workspace definition files:
---   Mux.registerLayout = Mux.registerWorkspace
---   Mux.applyLayout    = Mux.applyWorkspace
+-- Workspaces persist across sessions in Muxlet_persistent/workspaces.json.
 --
 -- Static workspace node format:
 --   Leaf  : { type="pane",  id="chat",  name="Chat",  showTitlebar=true,
@@ -27,9 +22,56 @@
 -- overlapping containers that have no awareness of each other's boundaries,
 -- which breaks split operations and console border management.
 
-Mux._workspaces = Mux._workspaces or {}
--- Alias so any code referencing _layouts still resolves correctly.
-Mux._layouts    = Mux._workspaces
+Mux._workspaces     = Mux._workspaces     or {}
+Mux._userWorkspaces = Mux._userWorkspaces or {}  -- names explicitly saved by the user
+Mux._wsFile         = Mux._persistentDir .. "/workspaces.json"
+
+-- ── Workspace file persistence ────────────────────────────────────────────────
+-- File format: { _userSaved = ["name", ...], name = {def}, ..., current = {def} }
+-- _userSaved is the authoritative list of workspaces the user explicitly named and
+-- saved.  "current" (auto-save) and built-in/package workspaces are never in it.
+
+local function saveWorkspacesFile()
+    local userSavedList = {}
+    for name in pairs(Mux._userWorkspaces) do
+        userSavedList[#userSavedList + 1] = name
+    end
+    local data = { _userSaved = userSavedList }
+    for name, def in pairs(Mux._workspaces) do
+        if name ~= "default" then data[name] = def end
+    end
+    local ok, err = pcall(function()
+        local f = io.open(Mux._wsFile, "w")
+        f:write(yajl.to_string(data))
+        f:close()
+    end)
+    if not ok then Mux._err("workspace file save failed: %s", tostring(err)) end
+end
+
+local function loadWorkspacesFile()
+    if not io.exists(Mux._wsFile) then return end
+    local ok, err = pcall(function()
+        local f    = io.open(Mux._wsFile, "r")
+        local raw  = f:read("*all")
+        f:close()
+        local data = yajl.to_value(raw)
+        if type(data) ~= "table" then return end
+        -- Restore the explicit user-saved set first.
+        local saved = data._userSaved
+        if type(saved) == "table" then
+            for _, name in ipairs(saved) do
+                Mux._userWorkspaces[name] = true
+            end
+        end
+        -- Register workspace definitions (skip the metadata key).
+        for name, def in pairs(data) do
+            if name ~= "_userSaved" and type(def) == "table" then
+                Mux._workspaces[name] = def
+            end
+        end
+    end)
+    if not ok then Mux._err("workspace file load failed: %s", tostring(err)) end
+end
 
 -- Auto-save timer handle; reset on package reload (old ID is stale).
 if Mux._autoSaveTimer then killTimer(Mux._autoSaveTimer) end
@@ -60,17 +102,16 @@ function Mux.registerWorkspace(name, def)
     Mux._log("Registered workspace: %s", name)
 end
 
--- Backward-compat aliases for workspace definition files that still call registerLayout.
-Mux.registerLayout = Mux.registerWorkspace
-
 function Mux.applyWorkspace(name)
     local def = Mux._workspaces[name]
     if not def then
         Mux._err("applyWorkspace: unknown workspace '%s'", name)
         return {}
     end
+    Mux._activeWorkspaceName = name
+    Mux._running = true
 
-    if Mux._clearLayout then Mux._clearLayout() end
+    if Mux._clearWorkspace then Mux._clearWorkspace() end
     if def.theme then Mux.applyTheme(def.theme) end
 
     local paneMap     = {}
@@ -140,16 +181,13 @@ function Mux.applyWorkspace(name)
         local sw = Mux._settings_ui
         if sw and sw.window and sw.visible then sw.window:raise() end
         Mux.raiseFloatingPanes()
-        -- Persist the newly applied layout so it is restored next session.
+        -- Persist the newly applied workspace so it is restored next session.
         Mux._scheduleAutoSave()
     end)
 
     Mux._log("Applied workspace: %s (%d panes)", name, tableCount(paneMap))
     return paneMap
 end
-
--- Backward-compat alias.
-Mux.applyLayout = Mux.applyWorkspace
 
 -- ── Serialization ─────────────────────────────────────────────────────────────
 -- Captures the full pane/split tree including all flags, float positions,
@@ -242,15 +280,13 @@ function Mux.saveWorkspace(name)
     end
 
     Mux._workspaces[name] = def
-    Mux.settings._data["mux"] = Mux.settings._data["mux"] or {}
-    Mux.settings._data["mux"]["saved_workspace_" .. name] = yajl.to_string(def)
-    Mux.settings.save()
+    Mux._userWorkspaces[name] = true
+    saveWorkspacesFile()
 
     Mux._echo(string.format(
         "\n<green>[Muxlet]<reset> Workspace '<cyan>%s<reset>' saved.\n"
-        .. "  Restore: <white>mux workspace load %s<reset>"
-        .. "  |  Auto-start: <white>mux settings set mux.startup_workspace %s<reset>\n",
-        name, name, name))
+        .. "  Restore: <white>mux workspace load %s<reset>\n",
+        name, name))
 end
 
 -- ── Auto-save ─────────────────────────────────────────────────────────────────
@@ -258,7 +294,7 @@ end
 -- calls Mux._scheduleAutoSave().  A 1-second debounce prevents write storms
 -- during rapid operations (e.g. drag-resizing).  The saved workspace is named
 -- "current" — fullStart() restores it automatically on the next session, so
--- users never lose layout changes without any explicit save step.
+-- users never lose workspace changes without any explicit save step.
 
 function Mux._scheduleAutoSave()
     if Mux._autoSaveTimer then killTimer(Mux._autoSaveTimer) end
@@ -294,9 +330,7 @@ function Mux._doAutoSave()
     if psCount == 0 and #def.floatingPanes == 0 then return end
 
     Mux._workspaces["current"] = def
-    Mux.settings._data["mux"] = Mux.settings._data["mux"] or {}
-    Mux.settings._data["mux"]["saved_workspace_current"] = yajl.to_string(def)
-    Mux.settings.save()
+    saveWorkspacesFile()
     Mux._log("auto-saved workspace to 'current'")
 end
 
@@ -317,12 +351,32 @@ function Mux.listWorkspaces()
         if b == "default" then return false end
         return a < b
     end)
-    Mux._echo("\n<cyan>[Muxlet]<reset> Workspaces:\n")
+
+    if Mux._running then
+        local active = Mux._activeWorkspaceName or "current"
+        Mux._echo(string.format(
+            "\n<cyan>[Muxlet]<reset> Workspaces  <dim_grey>(running — active: <cyan>%s<reset><dim_grey>)<reset>\n",
+            active))
+    else
+        Mux._echo("\n<cyan>[Muxlet]<reset> Workspaces  <dim_grey>(stopped — type <cyan>mux start<reset><dim_grey> to begin)<reset>\n")
+    end
+
     for _, n in ipairs(names) do
+        local def  = Mux._workspaces[n]
         local note = ""
-        if n == "current" then note = "  <dim_grey>— active session (auto-saved)<reset>" end
-        if n == "default"  then note = "  <dim_grey>— clean Muxlet baseline<reset>"      end
-        Mux._echo(string.format("  <white>%s<reset>%s\n", n, note))
+        if def and def.description and def.description ~= "" then
+            note = "  <dim_grey>— " .. def.description .. "<reset>"
+        end
+        if n == "current" then note = "  <dim_grey>— auto-saved session state<reset>" end
+        if n == "default"  then note = "  <dim_grey>— clean Muxlet baseline<reset>"   end
+
+        local active = Mux._running and (n == Mux._activeWorkspaceName)
+        local marker = active and "<green>▶ <reset>" or "  "
+        Mux._echo(string.format("  %s<white>%s<reset>%s\n", marker, n, note))
+    end
+
+    if not Mux._running then
+        Mux._echo("  <dim_grey>Use: <cyan>mux workspace load <name><reset><dim_grey> to apply<reset>\n")
     end
 end
 
@@ -331,14 +385,18 @@ function Mux.deleteWorkspace(name)
         Mux._echo("\n<red>[Muxlet]<reset> Usage: mux workspace delete <name>\n")
         return
     end
-    if not Mux._workspaces[name] then
-        Mux._echo(string.format("\n<red>[Muxlet]<reset> No workspace named '%s'.\n", name))
+    if name == "default" or name == "current" then
+        Mux._echo(string.format("\n<red>[Muxlet]<reset> '%s' cannot be deleted.\n", name))
+        return
+    end
+    if not Mux._userWorkspaces[name] then
+        Mux._echo(string.format(
+            "\n<red>[Muxlet]<reset> '%s' was not saved by you and cannot be deleted.\n", name))
         return
     end
     Mux._workspaces[name] = nil
-    Mux.settings._data["mux"] = Mux.settings._data["mux"] or {}
-    Mux.settings._data["mux"]["saved_workspace_" .. name] = nil
-    Mux.settings.save()
+    Mux._userWorkspaces[name] = nil
+    saveWorkspacesFile()
     Mux._echo(string.format("\n<green>[Muxlet]<reset> Workspace '<cyan>%s<reset>' deleted.\n", name))
 end
 
@@ -452,24 +510,27 @@ buildNode = function(node, parentContainer, paneMap, paneSet)
     end
 end
 
--- ── Startup persistence ───────────────────────────────────────────────────────
--- Re-register workspaces saved to settings on profile load.
--- Also migrates old "saved_layout_*" keys from the pre-rename era.
+-- ── Built-in workspaces ───────────────────────────────────────────────────────
 
-do
-    local data = Mux.settings._data["mux"] or {}
-    for k, v in pairs(data) do
-        if type(v) == "string" then
-            local wsName = k:match("^saved_workspace_(.+)$")
-                        or k:match("^saved_layout_(.+)$")
-            if wsName then
-                local ok, def = pcall(yajl.to_value, v)
-                if ok and type(def) == "table" then
-                    Mux._workspaces[wsName] = def
-                end
-            end
-        end
-    end
-end
+Mux.registerWorkspace("default", {
+    name     = "Default",
+    theme    = "dark",
+    paneSets = {
+        {
+            id   = "screen",
+            zone = "screen",
+            root = {
+                type            = "pane",
+                id              = "output",
+                name            = "Main",
+                mainConsoleHost = true,
+            },
+        },
+    },
+})
+
+-- ── Load persisted workspaces ─────────────────────────────────────────────────
+
+loadWorkspacesFile()
 
 Mux._log("mux_workspace loaded")

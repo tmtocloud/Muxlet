@@ -36,7 +36,7 @@ function MuxPaneSet:init(opts)
     self.id      = opts.id   or Mux._newId("ps")
     self.zone    = opts.zone or "float"   -- "left"|"right"|"top"|"bottom"|"float"
     self.size    = opts.size or "20%"     -- width (left/right) or height (top/bottom)
-    self.visible = false   -- starts hidden; call show() or applyLayout() to reveal
+    self.visible = false   -- starts hidden; call show() or applyWorkspace() to reveal
     self.root    = nil   -- MuxSplit or MuxPane placed here by the consumer
 
     -- ── Build outer container ─────────────────────────────────────────────────

@@ -458,12 +458,13 @@ function MuxPane:addTab(name, pos)
 
     local tab = {
         id = tabId, name = name, locked = false, pane = self,
-        label = label, content = content, contentBg = contentBg, preset = nil,
+        label = label, content = content, contentBg = contentBg,
     }
     table.insert(self._tabs, pos, tab)
     if pos < #self._tabs then self:_syncHBoxOrder() end
     self:_wireTabLabel(tab)
     if not self._activeTabId then self:_activateTabObj(tab) end
+    Mux._scheduleAutoSave()
     Mux._log("addTab: %s '%s' pane=%s pos=%d", tabId, name, self.id, pos)
     return tab
 end
@@ -498,6 +499,7 @@ function MuxPane:removeTab(tabId)
         self.contentBg:show()
         self:_updatePlaceholder()
     end
+    Mux._scheduleAutoSave()
 end
 
 -- ── Activate ─────────────────────────────────────────────────────────────────
@@ -521,6 +523,7 @@ function MuxPane:_activateTabObj(tab)
     tab.label:setStyleSheet(theme.tabActiveCss or "")
     self:_echoTabLabel(tab.label, tab.name, true, false, theme)
     tab.content:show()
+    Mux._scheduleAutoSave()
 end
 
 -- ── Rename ────────────────────────────────────────────────────────────────────
@@ -537,6 +540,7 @@ function MuxPane:renameTab(tabId, newName)
         MuxPane._echoTabPlaceholder(tab.contentBg, newName, self.id, tabId)
         tab.contentBg:show()
     end
+    Mux._scheduleAutoSave()
 end
 
 -- ── Wire tab label interactions ───────────────────────────────────────────────
@@ -750,6 +754,7 @@ function MuxPane:_reorderTab(fromIdx, toIdx)
     table.insert(self._tabs, toIdx, tab)
     self:_syncHBoxOrder()
     self._tabBarBox:organize()
+    Mux._scheduleAutoSave()
 end
 
 function MuxPane:_syncHBoxOrder()
@@ -833,6 +838,7 @@ function MuxPane:_receiveTab(tab, fromPane, insertPos)
         end
     end
 
+    Mux._scheduleAutoSave()
     Mux._log("_receiveTab: '%s' → '%s' pos=%d", tab.name, self.id, insertPos)
 end
 
