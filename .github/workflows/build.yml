@@ -47,16 +47,27 @@ jobs:
             echo "release_name=v$VERSION" >> $GITHUB_OUTPUT
             echo "is_dispatch_release=true" >> $GITHUB_OUTPUT
           else
-            # Branch push or unversioned dispatch: dev pre-release
-            LATEST_TAG=$(git describe --tags --match "v*" --abbrev=0 2>/dev/null || echo "v0.0.0")
-            BASE_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
-            SHORT_SHA=$(git rev-parse --short HEAD)
-            VERSION="${BASE_VERSION}-${SHORT_SHA}"
+            # Branch push or unversioned dispatch: pre-release using mfile version.
+            # Tag is bare version (e.g. "1.0.6", no "v" prefix) so it is visually
+            # distinct from production tags ("v1.0.6") and never matches tags: ['v*'],
+            # preventing the production job from firing on CI-created pre tags.
+            VERSION=$(jq -r '.version' mfile)
             echo "version=$VERSION" >> $GITHUB_OUTPUT
             echo "is_release=false" >> $GITHUB_OUTPUT
             echo "release_name=prerelease" >> $GITHUB_OUTPUT
             echo "is_dispatch_release=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: Validate mfile version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          MFILE_VERSION=$(jq -r '.version' mfile)
+          if [[ "$MFILE_VERSION" != "$TAG_VERSION" ]]; then
+            echo "::error::mfile version ($MFILE_VERSION) does not match tag ($TAG_VERSION). Update mfile before tagging."
+            exit 1
+          fi
+          echo "mfile version matches tag: $TAG_VERSION"
 
       - name: Inject version into mfile
         run: |
@@ -78,15 +89,16 @@ jobs:
         if: steps.version.outputs.is_release == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: prerelease
-          name: Pre-release Build
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Pre-release ${{ steps.version.outputs.version }}
           body: |
-            Latest development build from main branch.
+            Development build for v${{ steps.version.outputs.version }}.
 
-            **Build:** ${{ steps.version.outputs.version }}
             **Commit:** ${{ github.sha }}
 
-            This is an automated pre-release and may be unstable.
+            Install URL: `https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/Muxlet.mpackage`
+
+            This is a pre-release. The production release will be tagged `v${{ steps.version.outputs.version }}`.
           prerelease: true
           files: build/Muxlet.mpackage
           fail_on_unmatched_files: true

@@ -32,11 +32,6 @@ panes = setmetatable({}, {
     end,
 })
 
---- Look up a pane by id.  Returns nil if not found.
-function Mux.getPane(id)
-    return Mux._panes[id]
-end
-
 -- ── ID generator ─────────────────────────────────────────────────────────────
 -- User-facing IDs (pane, split, ps) use a per-prefix free pool so numbers are
 -- reused after a pane is closed: close pane_0002, open a new one → pane_0002.

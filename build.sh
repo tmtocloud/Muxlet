@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
-# build.sh — Build the Muxlet package with version derived from git tags.
+# build.sh — Build the Muxlet package.
 #
-# Derives version from git tags, patches mfile, runs muddle, then restores
-# mfile so the committed value stays clean.
+# Reads version from mfile (source of truth), patches mfile temporarily,
+# runs muddle, then restores mfile so the committed value stays clean.
 #
-#   Release build (exact tag at HEAD): version = "1.2.3"
-#   Dev build (no exact tag):          version = "1.2.3-a3f91cd"
+# The CI workflow controls the GitHub release type:
+#   Prerelease (push to main):        tag_name = "1.2.3"   (bare, no "v" prefix)
+#   Release (annotated v* tag):       tag_name = "v1.2.3"
+#
+# Locally:
+#   Dev build (no matching v* tag):   version = "1.2.3-a3f91cd"
+#   Release build (exact v* tag):     version = "1.2.3"
 #
 # Works in WSL, native Linux, and macOS.
 #
 # Usage:
-#   ./build.sh [--version VERSION] [--profile PROFILE] [--mudlet-config PATH]
+#   ./build.sh [--profile PROFILE] [--mudlet-config PATH]
 #
 # Examples:
 #   ./build.sh
 #   ./build.sh --profile mux-dev
-#   ./build.sh --version 1.2.0
 
 set -euo pipefail
 
@@ -23,7 +27,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MFILE="$SCRIPT_DIR/mfile"
 SRC_PACKAGE="$SCRIPT_DIR/build/Muxlet.mpackage"
 
-VERSION=""
 PROFILE=""
 MUDLET_CONFIG=""
 
@@ -31,8 +34,7 @@ MUDLET_CONFIG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --version)   VERSION="$2";      shift 2 ;;
-        --profile)   PROFILE="$2";      shift 2 ;;
+        --profile)       PROFILE="$2";       shift 2 ;;
         --mudlet-config) MUDLET_CONFIG="$2"; shift 2 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -41,19 +43,20 @@ done
 echo ""
 echo "=== Muxlet build ==="
 
-# ── Derive version from git ───────────────────────────────────────────────────
+# ── Read version from mfile ───────────────────────────────────────────────────
 
-if [ -z "$VERSION" ]; then
-    # Check if HEAD sits exactly on a version tag
-    EXACT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
-    if [[ "$EXACT_TAG" =~ ^v(.+)$ ]]; then
-        VERSION="${BASH_REMATCH[1]}"
-    else
-        LAST_TAG="$(git describe --tags --match "v*" --abbrev=0 2>/dev/null || echo "v0.0.0")"
-        BASE_VERSION="${LAST_TAG#v}"
-        SHORT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
-        VERSION="$BASE_VERSION-$SHORT_SHA"
-    fi
+BASE_VERSION="$(jq -r '.version' "$MFILE")"
+if [[ -z "$BASE_VERSION" || "$BASE_VERSION" == "null" ]]; then
+    echo "ERROR: mfile is missing 'version' field." >&2
+    exit 1
+fi
+
+EXACT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+if [[ "$EXACT_TAG" == "v$BASE_VERSION" ]]; then
+    VERSION="$BASE_VERSION"
+else
+    SHORT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo "local")"
+    VERSION="$BASE_VERSION-$SHORT_SHA"
 fi
 
 echo "Version       : $VERSION"

@@ -415,16 +415,9 @@ local function restoreTabsOnPane(p, node)
                 if tabDef.locked then tab.locked = true end
                 local savedContent = tabDef.activeContent or tabDef._activeContent or tabDef.preset
                 if savedContent and Mux._content and Mux._content[savedContent] then
-                    local proxy = {
-                        id        = p.id .. "_" .. tab.id,
-                        name      = tab.name,
-                        content   = tab.content,
-                        contentBg = tab.contentBg,
-                    }
                     if Mux._applyContent then
-                        pcall(Mux._applyContent, proxy, savedContent)
+                        pcall(Mux._applyContent, tab, savedContent)
                     end
-                    tab._activeContent = savedContent
                 end
                 if tabDef.connectionAware and p.setTabConnectionAware then
                     p:setTabConnectionAware(tab.id, true)
