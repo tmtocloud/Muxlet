@@ -821,6 +821,14 @@ function MuxPane:close()
     Mux._closeContextMenu()
     if self.onClose then self.onClose(self) end
 
+    -- Clear singleton content tracking if this pane held singleton content.
+    if self._activeContent and Mux._content then
+        local def = Mux._content[self._activeContent]
+        if def and def.singleton and def._activeTargetRef == self then
+            def._activeTargetRef = nil
+        end
+    end
+
     if self.floating then
         -- Find and clean up the ghost this pane left behind, then collapse the
         -- slot so the layout fills the dead space.  Ghost lookup by slot (not by

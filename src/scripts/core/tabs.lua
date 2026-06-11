@@ -492,6 +492,14 @@ function MuxPane:removeTab(tabId)
         local key = "tab_" .. self.id .. "_" .. tab.id
         Mux._connAware[key] = nil
     end
+    -- Clear singleton content tracking if this tab held singleton content.
+    if tab._activeContent and Mux._content then
+        local def = Mux._content[tab._activeContent]
+        if def and def.singleton and def._activeTargetRef == tab then
+            def._activeTargetRef = nil
+        end
+    end
+
     table.remove(self._tabs, idx)
     Mux._freeId(tabId)
     -- After removing the last tab, show the pane-level placeholder.
@@ -876,14 +884,7 @@ function MuxPane:_showTabContextMenu(tab, gx, gy)
             contentItems[#contentItems+1] = {
                 text = (def and def.name) or contentName,
                 fn   = function()
-                    local proxy = {
-                        id        = pane.id .. "_" .. captureTab.id,
-                        name      = captureTab.name,
-                        content   = captureTab.content,
-                        contentBg = captureTab.contentBg,
-                    }
-                    if Mux._applyContent then Mux._applyContent(proxy, capture) end
-                    captureTab._activeContent = capture
+                    if Mux._applyContent then Mux._applyContent(captureTab, capture) end
                 end,
             }
         end
