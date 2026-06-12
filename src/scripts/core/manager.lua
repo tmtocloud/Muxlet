@@ -608,6 +608,7 @@ function Mux.fullStart()
     Mux.applyWorkspace(wsName)
     Mux._running = true
     Mux._echo("\n<dim_grey>  Alt+\\ / Alt+- to split  •  Alt+Z to zoom  •  Alt+B for help<reset>\n")
+    raiseEvent("muxletStarted")
 end
 
 -- ── Teardown ──────────────────────────────────────────────────────────────────
