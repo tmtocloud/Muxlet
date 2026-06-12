@@ -607,11 +607,7 @@ function Mux.fullStart()
 
     Mux.applyWorkspace(wsName)
     Mux._running = true
-    local displayName = (wsName == "current") and "current (restored)" or wsName
-    Mux._echo(string.format(
-        "\n<green>[Muxlet]<reset> Started with workspace '<cyan>%s<reset>'.\n"
-        .. "  Alt+\\ / Alt+- to split  •  Alt+Z to zoom  •  Alt+B for help\n",
-        displayName))
+    Mux._echo("\n<dim_grey>  Alt+\\ / Alt+- to split  •  Alt+Z to zoom  •  Alt+B for help<reset>\n")
 end
 
 -- ── Teardown ──────────────────────────────────────────────────────────────────
@@ -679,4 +675,4 @@ function focusSlotFirstPane(split, side)
     end
 end
 
-cecho("\n<green>[Muxlet]<reset> v" .. Mux._version .. " loaded.\n")
+Mux._log("v%s loaded", Mux._version)

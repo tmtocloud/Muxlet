@@ -123,6 +123,24 @@ Type `mux keys` to list them in the console.
 
 Muxlet exposes a Lua API for registering custom themes, workspaces, and content types from other packages.
 
+### Lifecycle events
+
+#### `muxletReady`
+
+Raised once after all Muxlet scripts have loaded and persisted settings (theme, debug flag) have been applied. This is the correct hook point for any package that depends on Muxlet — use it instead of guessing at timer delays.
+
+```lua
+registerAnonymousEventHandler("muxletReady", function()
+    -- Safe to call any Mux.* API here.
+    Mux.fullStart()
+    Mux.applyWorkspace("my-workspace")
+end)
+```
+
+The handler is registered synchronously at package load time. Because `muxletReady` is fired from a `tempTimer(0)` callback inside Muxlet's own init, it always fires after the synchronous script-loading stack unwinds — so a handler registered at load time will never miss the event, regardless of which package Mudlet loads first.
+
+If your package also needs to handle a `mux stop` / `mux start` cycle at runtime, check `Mux._running` at the top of your handler; `muxletReady` only fires at session start (or after a fresh Muxlet install), not on every `fullStart()`.
+
 ### Workspaces
 
 Workspaces define a complete pane, split, and theme arrangement. Register them from any package and they appear in `mux workspace list`.

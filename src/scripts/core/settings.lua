@@ -979,7 +979,11 @@ Mux.settings.onChange("mux", "debug", function(value)
     Mux.debug = value
 end)
 
--- ── Apply persisted settings after all files load ─────────────────────────────
+-- ── Post-load init: apply persisted settings, then signal readiness ───────────
+-- tempTimer(0) defers past the synchronous script-loading stack so all Muxlet
+-- functions are defined before this runs. raiseEvent("muxletReady") fires last
+-- so downstream packages (e.g. fed2-tools) can register a handler and be
+-- guaranteed Muxlet's full API is available when they receive it.
 
 tempTimer(0, function()
     local savedTheme = Mux.settings.get("mux", "theme")
@@ -987,9 +991,11 @@ tempTimer(0, function()
         Mux.applyTheme(savedTheme)
     end
     Mux.debug = Mux.settings.get("mux", "debug")
+    raiseEvent("muxletReady")
 end)
 
-tempTimer(1, function()
+tempTimer(1.5, function()
+    if Mux._running then return end
     if Mux.settings.get("mux", "auto_start") then
         if Mux.fullStart then Mux.fullStart() end
     else
