@@ -1,12 +1,4 @@
--- Muxlet — Game-agnostic tiling window manager for Mudlet, inspired by tmux.
---
--- Ground-truth references used in this implementation:
---   Mudlet/src/mudlet-lua/lua/geyser/GeyserGeyser.lua    — changeContainer, base_add, Geyser.Fixed/Dynamic
---   Mudlet/src/mudlet-lua/lua/geyser/GeyserContainer.lua — calculate_dynamic_window_size, reposition
---   Mudlet/src/mudlet-lua/lua/geyser/GeyserVBox.lua       — organize(), stretch-factor math
---   Mudlet/src/mudlet-lua/lua/geyser/GeyserHBox.lua       — organize() (horizontal mirror of VBox)
---   Mudlet/src/mudlet-lua/lua/geyser/GeyserLabel.lua      — mouse callbacks, setCursor, setStyleSheet
---   Mudlet/src/mudlet-lua/lua/geyser/GeyserAdjustableContainer.lua — drag/resize pattern reference
+-- Muxlet globals — shared state, utilities, ID management, and singleton UI components.
 
 Mux = Mux or {}
 local _pkgInfo = getPackageInfo("Muxlet")
@@ -32,11 +24,9 @@ panes = setmetatable({}, {
     end,
 })
 
--- ── ID generator ─────────────────────────────────────────────────────────────
--- User-facing IDs (pane, split, ps) use a per-prefix free pool so numbers are
--- reused after a pane is closed: close pane_0002, open a new one → pane_0002.
--- Internal Geyser widget names use _newInternalId() which never recycles,
--- preventing Qt window name conflicts with hidden old-pane widgets.
+-- User-facing IDs (pane_N, split_N, ps_N) recycle freed numbers via _idFree.
+-- Internal widget names (mux_w_N) never recycle — Qt holds named widgets in
+-- memory even when hidden, so recycled names would alias old destroyed widgets.
 Mux._idCounters  = Mux._idCounters  or {}   -- prefix → highest assigned number
 Mux._idFree      = Mux._idFree      or {}   -- prefix → list of freed numbers
 Mux._internalSeq = Mux._internalSeq or 0   -- ever-increasing; never recycled
@@ -53,14 +43,11 @@ function Mux._newId(prefix)
     return string.format("%s_%d", prefix, n)
 end
 
--- Returns a unique internal ID for Geyser widget naming.  Never recycled so
--- reusing a pane number never creates a name clash with hidden old widgets.
 function Mux._newInternalId()
     Mux._internalSeq = Mux._internalSeq + 1
     return string.format("mux_w_%04d", Mux._internalSeq)
 end
 
--- Returns the numeric part of a generated ID to the free pool for reuse.
 function Mux._freeId(id)
     if not id then return end
     local prefix, numStr = id:match("^(.-)_(%d+)$")
@@ -71,13 +58,7 @@ function Mux._freeId(id)
     table.insert(Mux._idFree[prefix], n)
 end
 
--- ── Class factory ─────────────────────────────────────────────────────────────
--- Creates a class table with optional single-parent inheritance.
--- Usage:
---   MyClass = Mux._class()           -- standalone class
---   Child   = Mux._class(MyClass)    -- inherits from MyClass
---
--- Every class gets a :new(opts) constructor that calls :init(opts) on the instance.
+-- Single-parent inheritance class factory; :new(opts) calls :init(opts) on the instance.
 function Mux._class(parent)
     local cls = {}
     cls.__index = cls
@@ -92,7 +73,6 @@ function Mux._class(parent)
     return cls
 end
 
--- ── Shallow merge ─────────────────────────────────────────────────────────────
 -- Returns a new table with all fields from base, overridden by override.
 function Mux._merge(base, override)
     local t = {}
@@ -101,43 +81,35 @@ function Mux._merge(base, override)
     return t
 end
 
--- ── Numeric clamp ─────────────────────────────────────────────────────────────
 function Mux._clamp(v, lo, hi)
     return math.max(lo, math.min(hi, v))
 end
 
--- ── Constraint helpers ────────────────────────────────────────────────────────
--- Geyser negative-pixel constraint: "-Npx" means (parent_size - N) pixels.
--- We use these helpers so the intent stays readable in calling code.
+-- Geyser constraint helpers.
+-- _fromEdgePx(n) produces "-Npx". For SIZE constraints Geyser resolves this as
+-- (parent_size - n - child_offset), so a child at offset p with size _fromEdgePx(n)
+-- has its far edge at (parent_size - n). For POSITION constraints the formula
+-- is (parent_size - n) directly (no child_offset subtracted).
+function Mux._toPx(n)       return tostring(math.floor(n)) .. "px" end
+function Mux._fromEdgePx(n) return "-" .. tostring(math.floor(n)) .. "px" end
 
--- y or x from top/left edge (pixels)
-function Mux._px(n)     return tostring(math.floor(n)) .. "px" end
--- y or x measured from bottom/right edge (negative pixel constraint)
-function Mux._pxNeg(n)  return "-" .. tostring(math.floor(n)) .. "px" end
--- percentage string
-function Mux._pct(n)    return tostring(n) .. "%" end
-
--- ── Logging ───────────────────────────────────────────────────────────────────
 Mux.debug = false
 
 function Mux._log(fmt, ...)
     if not Mux.debug then return end
-    cecho(string.format("\n<dim_grey>[Muxlet]<reset> %s\n", string.format(fmt, ...)))
+    printError(string.format("[Muxlet] %s", string.format(fmt, ...)))
 end
 
 function Mux._err(fmt, ...)
-    cecho(string.format("\n<red>[Muxlet ERR]<reset> %s\n", string.format(fmt, ...)))
+    printError(string.format("[Muxlet ERR] %s", string.format(fmt, ...)))
 end
 
 function Mux._warn(fmt, ...)
-    cecho(string.format("\n<orange>[Muxlet]<reset> %s\n", string.format(fmt, ...)))
+    printError(string.format("[Muxlet] %s", string.format(fmt, ...)))
 end
 
--- ── Border tracker ────────────────────────────────────────────────────────────
--- Central state for the four Mudlet main-console borders.
--- MuxPaneSet updates these and calls _applyBorders() whenever a border zone
--- changes visibility or size.  Using setBorderSizes (single call) rather than
--- four individual setBorderLeft/Right/Top/Bottom calls to avoid ordering issues.
+-- MuxPaneSet instances write their pixel contributions here; _applyBorders()
+-- commits all four sides in a single setBorderSizes call to avoid ordering issues.
 Mux._borders = Mux._borders or { top = 0, right = 0, bottom = 0, left = 0 }
 
 function Mux._applyBorders()
@@ -152,11 +124,8 @@ function Mux._applyBorders()
         Mux._borders.bottom, Mux._borders.left)
 end
 
--- ── Context menu ─────────────────────────────────────────────────────────────
--- Per-item Label approach: each row is its own Label with its own click and
--- hover callbacks.  No y-offset math needed — each label knows exactly what
--- it is.  Labels are pooled and reused across opens.
-
+-- Singleton context menu. Each row is a reused Geyser.Label with its own callbacks;
+-- pooling avoids widget allocation on every open.
 Mux._contextMenu = Mux._contextMenu or {
     backdrop   = nil,   -- full-screen transparent click-blocker
     panel      = nil,   -- dark background panel behind the rows
@@ -293,9 +262,7 @@ local function showSubmenu(submenuItems, parentMenuX, parentRowY)
     submenu.visible = true
 end
 
--- ── _showItemMenu: render any item list as a context menu ────────────────────
--- Called by _showContextMenu (pane menus) and _showTabContextMenu (tab menus).
--- items: array of { text, fn, sep, danger, submenu } tables.
+-- Render items as a positioned context menu. items: array of {text, fn [, sep, danger, submenu]}.
 function Mux._showItemMenu(globalX, globalY, items)
     local menu   = Mux._contextMenu
     local theme  = Mux.activeTheme()
@@ -311,7 +278,6 @@ function Mux._showItemMenu(globalX, globalY, items)
     local menuX = math.max(4, math.min(globalX, screenWidth  - menuWidth - 4))
     local menuY = math.max(4, math.min(globalY, screenHeight - menuHeight - 4))
 
-    -- ── Backdrop ──────────────────────────────────────────────────────────────
     if not menu.backdrop then
         menu.backdrop = Geyser.Label:new({
             name = "mux_menu_backdrop",
@@ -324,7 +290,6 @@ function Mux._showItemMenu(globalX, globalY, items)
     menu.backdrop:show()
     menu.backdrop:raiseAll()
 
-    -- ── Panel ─────────────────────────────────────────────────────────────────
     if not menu.panel then
         menu.panel = Geyser.Label:new({
             name = "mux_menu_panel",
@@ -342,7 +307,6 @@ function Mux._showItemMenu(globalX, globalY, items)
     menu.panel:show()
     menu.panel:raiseAll()
 
-    -- ── Per-row labels ────────────────────────────────────────────────────────
     ensureMenuRows(#items)
 
     local itemCss      = theme.contextMenuItemCss        or "background-color:rgba(0,0,0,0);border:none;"
@@ -411,100 +375,218 @@ function Mux._showItemMenu(globalX, globalY, items)
     end
 end
 
+-- Overflow context menu: appears on titlebar right-click ONLY when the titlebar
+-- is too narrow to show all buttons (self._overflowMode == true).
+-- Items mirror what the buttons do, with the same show/hide conditions.
 function Mux._showContextMenu(pane, globalX, globalY)
     local menu  = Mux._contextMenu
     local theme = Mux.activeTheme()
     menu.itemHeight = theme.contextMenuItemHeight or 28
     menu.menuWidth  = theme.contextMenuWidth      or 188
 
-    -- ── Build item list ───────────────────────────────────────────────────────
     local items = {}
-    if not pane.locked then
-        if not pane.floating then
-            items[#items+1] = { text="Split Vertically", fn=function()
-                Mux.setFocus(pane); Mux.splitFocused("h") end }
-            items[#items+1] = { text="Split Horizontally", fn=function()
-                Mux.setFocus(pane); Mux.splitFocused("v") end }
-            if pane._split then
-                local siblingSide = (pane._slotSide == "a") and "b" or "a"
-                local sibling = (siblingSide == "a") and pane._split.childA or pane._split.childB
-                local siblingName = (sibling and sibling.name) or "Sibling"
-                items[#items+1] = { text=string.format('⇔  Swap with "%s"', siblingName), fn=function()
-                    pane._split:swapSlots() end }
-            end
-            items[#items+1] = { sep=true }
-            items[#items+1] = { text="Zoom Pane", fn=function()
-                Mux.setFocus(pane); Mux.zoomFocused() end }
-        elseif not pane.permanentFloat then
-            items[#items+1] = { text="Embed Pane", fn=function() pane:embed() end }
+
+    -- Close (mirrors closeBtn)
+    local showClose = not pane.noClose and not (pane.locked and not pane.closeable)
+    if showClose then
+        items[#items+1] = { text="✕  Close Pane", fn=function() pane:close() end, danger=true }
+    end
+
+    -- Minimize (mirrors minBtn — floating only)
+    if pane.floating and not pane.noFloat then
+        items[#items+1] = { text="–  Minimize", fn=function() pane:toggleMinimize() end }
+    end
+
+    -- Zoom/Unzoom (mirrors zoomBtn) — only meaningful when in a split or already zoomed
+    if pane.zoomable and (pane._split or pane._zoomed) then
+        local zText = pane._zoomed and "⧉  Unzoom" or "□  Zoom"
+        items[#items+1] = { text=zText, fn=function() pane:zoom() end }
+    end
+
+    -- Embed (floating panes only)
+    if pane.floating and not pane.permanentFloat then
+        if #items > 0 then items[#items+1] = { sep=true } end
+        items[#items+1] = { text="Embed Pane", fn=function() pane:embed() end }
+    end
+
+    -- Swap / Split (mirrors swapBtn, splitHBtn, splitVBtn)
+    if not pane.floating and not pane.locked then
+        if pane.swappable or pane.splittable then
+            if #items > 0 then items[#items+1] = { sep=true } end
         end
-        if not pane.mainConsoleHost then
-            if not pane.noTitlebarToggle then
-                local titlebarLabel = pane.titlebarVisible and "Hide Titlebar" or "Show Titlebar"
-                items[#items+1] = { text=titlebarLabel, fn=function()
-                    pane:setTitlebarVisible(not pane.titlebarVisible) end }
-            end
-            if not pane.noRename then
-                items[#items+1] = { text="✎  Rename Pane", fn=function()
-                    Mux._promptRename(pane) end }
-            end
+        if pane.swappable then
+            items[#items+1] = { text="⇔  Swap with sibling", fn=function()
+                if pane._split then pane._split:swapSlots() end
+            end }
         end
-        -- ── Tabs section ──────────────────────────────────────────────────────
-        if not pane.mainConsoleHost and not pane.noTabs and not pane.permanentFloat then
-            items[#items+1] = { sep=true }
-            if pane._tabsEnabled then
-                items[#items+1] = { text="⊞  Add Tab", fn=function() pane:addTab() end }
-                items[#items+1] = { text="⊟  Disable Tabs", fn=function() pane:disableTabs() end }
-            else
-                items[#items+1] = { text="⊞  Enable Tabs", fn=function() pane:enableTabs() end }
-            end
-        end
-        if not pane.mainConsoleHost and not pane.noContent then
-            local contentNames = Mux._listContent and Mux._listContent() or {}
-            if #contentNames > 0 then
-                local contentItems = {}
-                for _, contentName in ipairs(contentNames) do
-                    local def     = Mux._content[contentName]
-                    local capture = contentName
-                    contentItems[#contentItems+1] = {
-                        text = (def and def.name) or contentName,
-                        fn   = function() Mux._applyContent(pane, capture) end,
-                    }
-                end
-                items[#items+1] = { sep=true }
-                items[#items+1] = { text="◈  Add Content  ▶", submenu=contentItems }
-            end
-        end
-        if pane.mainConsoleHost then
-            items[#items+1] = { sep=true }
-            items[#items+1] = { text="⚙  Settings", fn=function() Mux.settings.toggle() end }
-        end
-        items[#items+1] = { sep=true }
-        items[#items+1] = { text="⊘  Lock Pane", fn=function() pane:lock() end }
-        if not pane.mainConsoleHost then
-            items[#items+1] = { sep=true }
-            items[#items+1] = { text="✕  Close Pane", fn=function() pane:close() end, danger=true }
-        end
-    else
-        items[#items+1] = { text="⊙  Unlock Pane", fn=function() pane:unlock() end }
-        if pane.mainConsoleHost then
-            items[#items+1] = { sep=true }
-            items[#items+1] = { text="⚙  Settings", fn=function() Mux.settings.toggle() end }
+        if pane.splittable then
+            items[#items+1] = { text="║  Split Vertically", fn=function()
+                Mux.setFocus(pane); Mux.splitFocused("h")
+            end }
+            items[#items+1] = { text="═  Split Horizontally", fn=function()
+                Mux.setFocus(pane); Mux.splitFocused("v")
+            end }
         end
     end
 
-    Mux._showItemMenu(globalX, globalY, items)
+    -- Settings / Properties (mirrors infoBtn: showSettingsInMenu → Settings, else → Properties)
+    if not pane.noContextMenu then
+        if pane.showSettingsInMenu then
+            if #items > 0 then items[#items+1] = { sep=true } end
+            items[#items+1] = { text="⚙  Settings", fn=function() Mux.settings.toggle() end }
+        elseif not pane.noClose then
+            if #items > 0 then items[#items+1] = { sep=true } end
+            items[#items+1] = { text="≡  Properties", fn=function() Mux.showPaneProperties(pane) end }
+        end
+    end
+
+    -- Add Content (opens library dialog)
+    if not pane.noContent then
+        if #items > 0 then items[#items+1] = { sep=true } end
+        items[#items+1] = { text="◈  Content Library…", fn=function()
+            Mux._showContentLibrary(pane)
+        end }
+    end
+
+    if #items > 0 then
+        Mux._showItemMenu(globalX, globalY, items)
+    end
 end
 
--- ── Rename dialog ─────────────────────────────────────────────────────────────
--- A centred floating panel with a Geyser.CommandLine text-entry field,
--- OK and Cancel buttons, and a dimming backdrop.
---
--- opts: { currentName, title, onConfirm }
---   currentName     — pre-filled into the text field
---   title           — dialog heading ("Rename Pane", "Rename Tab", …)
---   onConfirm(name) — called with the trimmed name when user confirms
+-- Content library dialog — scrollable list of all registered non-internal content.
+-- Called by contentBtn in the titlebar and by the context menu "Content Library…" item.
+function Mux._showContentLibrary(pane)
+    if pane.noContent then return end
+    local contentNames = Mux._listContent and Mux._listContent() or {}
+    if #contentNames == 0 then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No content types registered.\n")
+        return
+    end
 
+    local LIB_ROW_H = 52
+    local dlgW      = 460
+    local dlgH      = math.min(#contentNames * LIB_ROW_H + 26, 500)
+    local innerH    = dlgH - 26
+
+    local dlg = Mux.createDialog({
+        title = "Content Library",
+        width = dlgW, height = dlgH,
+        noContextMenu = true, noTabs = true,
+    })
+    if dlg.contentBg then dlg.contentBg:echo(""); dlg.contentBg:hide() end
+
+    local c   = dlg.content
+    local pfx = dlg._gid .. "_cl_"
+
+    -- Scroll area (explicit height so it doesn't overflow the dialog bottom border)
+    local scroll = Geyser.ScrollBox:new({
+        name=pfx.."sc", x=0, y=0, width="100%", height=innerH,
+    }, c)
+    local contentW = math.max(50, scroll:get_width() - 17)
+    local list     = Geyser.Label:new({
+        name=pfx.."lc", x=0, y=0, width=contentW, height=#contentNames * LIB_ROW_H + 4, fillBg=1,
+    }, scroll)
+    list:setStyleSheet("background:rgba(10,12,22,0.97);border:none;")
+
+    local rows = {}
+    for i, contentName in ipairs(contentNames) do
+        local def     = Mux._content[contentName]
+        local dispName = (def and def.name)        or contentName
+        local dispDesc = (def and def.description) or ""
+        local isEven   = (i % 2 == 0)
+        local yOff     = (i - 1) * LIB_ROW_H
+
+        local rowBg = Geyser.Label:new({
+            name=pfx.."r"..i.."bg", x=0, y=yOff, width="100%", height=LIB_ROW_H, fillBg=1,
+        }, list)
+        rowBg:setStyleSheet(isEven
+            and "background:rgba(22,25,40,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.05);"
+            or  "background:rgba(16,18,30,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.05);")
+        rows[i] = rowBg
+
+        -- ⓘ info icon — hover to see full description
+        local icon = Geyser.Label:new({
+            name=pfx.."r"..i.."ic", x=10, y=yOff+15, width=22, height=22, fillBg=1,
+        }, list)
+        icon:setStyleSheet([[
+            QLabel {
+                background: rgba(35,55,90,0.80);
+                border: 1px solid rgba(55,85,140,0.40);
+                border-radius: 4px;
+                color: #5888c8;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QLabel::hover {
+                background: rgba(48,72,118,0.90);
+                border-color: rgba(80,125,210,0.65);
+                color: #88b8ff;
+            }
+        ]])
+        icon:rawEcho("<center>i</center>")
+        if dispDesc ~= "" then icon:setToolTip(dispDesc, 6) end
+
+        -- Name label (vertically centered in row)
+        local nameLbl = Geyser.Label:new({
+            name=pfx.."r"..i.."nm", x=40, y=yOff+16, width=contentW-128, height=20,
+        }, list)
+        nameLbl:setStyleSheet(
+            "background:transparent;color:#c6d2ee;font-size:11px;font-weight:bold;")
+        nameLbl:rawEcho(dispName)
+
+        -- Add button
+        local addBtn = Geyser.Label:new({
+            name=pfx.."r"..i.."ab", x=contentW-82, y=yOff+13, width=72, height=26, fillBg=1,
+        }, list)
+        addBtn:setStyleSheet([[
+            QLabel{background:rgba(28,70,44,0.9);color:#73de94;font-size:9px;font-weight:bold;
+                   border:1px solid rgba(45,115,65,0.5);border-radius:4px;}
+            QLabel::hover{background:rgba(38,90,55,0.95);border-color:rgba(60,145,80,0.7);}
+        ]])
+        addBtn:rawEcho("<center>+ Add</center>")
+
+        local capName = contentName
+        local function applyAndClose()
+            Mux._applyContent(pane, capName)
+            dlg:close()
+        end
+        addBtn:setClickCallback(applyAndClose)
+        nameLbl:setClickCallback(applyAndClose)
+        rowBg:setClickCallback(applyAndClose)
+    end
+
+    dlg:show()
+    dlg:raise()
+    tempTimer(0, function()
+        if dlg.outer then dlg.outer:reposition() end
+    end)
+end
+
+-- Tab bar right-click menu: shown when user right-clicks the tab bar background.
+-- Provides tab management actions (add/enable/disable) without touching the pane titlebar.
+function Mux._showTabBarMenu(host, globalX, globalY)
+    local menu  = Mux._contextMenu
+    local theme = Mux.activeTheme()
+    menu.itemHeight = theme.contextMenuItemHeight or 28
+    menu.menuWidth  = theme.contextMenuWidth      or 188
+
+    local items = {}
+    if not host.locked then
+        if host._tabsEnabled then
+            items[#items+1] = { text="⊞  Add Tab", fn=function() host:addTab() end }
+            items[#items+1] = { sep=true }
+            items[#items+1] = { text="⊟  Disable Tabs", fn=function() host:disableTabs() end }
+        else
+            items[#items+1] = { text="⊞  Enable Tabs", fn=function() host:enableTabs() end }
+        end
+    end
+    if #items > 0 then
+        Mux._showItemMenu(globalX, globalY, items)
+    end
+end
+
+-- Centred rename dialog with a CommandLine text field, OK/Cancel, and a dimming backdrop.
+-- opts: { currentName, title, onConfirm(name) }
 local _renameDialog = {}  -- widget cache; created once, repositioned on each open
 
 function Mux._showRenameDialog(opts)
@@ -544,7 +626,6 @@ function Mux._showRenameDialog(opts)
         padding-right: 4px;
     ]]
 
-    -- ── Build widgets (once) ──────────────────────────────────────────────────
     if not _renameDialog.backdrop then
         _renameDialog.backdrop = Geyser.Label:new({
             name = "mux_rename_backdrop",
@@ -575,7 +656,6 @@ function Mux._showRenameDialog(opts)
         }, _renameDialog.panel)
     end
 
-    -- CommandLine: the actual editable text field.
     if not _renameDialog.input then
         _renameDialog.input = Geyser.CommandLine:new({
             name = "mux_rename_input",
@@ -584,7 +664,6 @@ function Mux._showRenameDialog(opts)
         _renameDialog.input:setStyleSheet(inputCss)
     end
 
-    -- Separator above buttons.
     if not _renameDialog.sep then
         _renameDialog.sep = Geyser.Label:new({
             name = "mux_rename_sep",
@@ -608,7 +687,6 @@ function Mux._showRenameDialog(opts)
         }, _renameDialog.panel)
     end
 
-    -- ── Restyle for current theme (safe to call every open) ──────────────────
     _renameDialog.panel:setStyleSheet(string.format([[
         background-color: %s;
         border: 1px solid rgba(100,160,255,0.50);
@@ -619,17 +697,15 @@ function Mux._showRenameDialog(opts)
     _renameDialog.hintLbl:setStyleSheet(string.format(
         "background:transparent; color:%s; font-size:10px;", hint))
     _renameDialog.okBtn:setStyleSheet(okCss)
-    _renameDialog.okBtn:echo("<center>OK</center>")
+    _renameDialog.okBtn:rawEcho("<center>OK</center>")
     _renameDialog.cancelBtn:setStyleSheet(btnCss)
-    _renameDialog.cancelBtn:echo("<center>Cancel</center>")
+    _renameDialog.cancelBtn:rawEcho("<center>Cancel</center>")
 
-    -- ── Per-open content ──────────────────────────────────────────────────────
-    _renameDialog.titleLbl:echo(title)
-    _renameDialog.hintLbl:echo(string.format(
+    _renameDialog.titleLbl:rawEcho(title)
+    _renameDialog.hintLbl:rawEcho(string.format(
         "Renaming: <b>%s</b>", currentName))
     _renameDialog.input:print(currentName)
 
-    -- ── Position and show ─────────────────────────────────────────────────────
     resizeWindow("mux_rename_backdrop", sw, sh)
     moveWindow("mux_rename_panel", dx, dy)
     resizeWindow("mux_rename_panel", dw, dh)
@@ -638,7 +714,6 @@ function Mux._showRenameDialog(opts)
     _renameDialog.panel:show()
     _renameDialog.panel:raiseAll()
 
-    -- ── Confirm / cancel logic ────────────────────────────────────────────────
     local function closeDialog()
         _renameDialog.backdrop:hide()
         _renameDialog.panel:hide()
@@ -656,7 +731,6 @@ function Mux._showRenameDialog(opts)
         if newName and newName ~= "" then onConfirm(newName) end
     end
 
-    -- Enter key in the CommandLine.
     _renameDialog.input:setAction(confirm)
     _renameDialog.okBtn:setClickCallback(function(e)
         if e.button == "LeftButton" then confirm() end
@@ -677,7 +751,6 @@ function Mux._closeContextMenu()
     for _, label in ipairs(menu.rowLabels) do label:hide() end
 end
 
--- ── Window-resize event handler ───────────────────────────────────────────────
 -- Wrapped in a named function so fullStart() can re-register after fullStop() kills it.
 Mux._inResize = Mux._inResize or false
 
@@ -691,26 +764,18 @@ function Mux._registerResizeHandler()
             if ps._onWindowResize then ps:_onWindowResize() end
         end
         for _, p in pairs(Mux._panes) do
-            if p.mainConsoleHost and p.updateConsoleBorders then
-                p:updateConsoleBorders()
-            end
+            if p.onReposition then p.onReposition(p) end
         end
         Mux._inResize = false
     end)
 end
 
--- Register immediately at load time.
 Mux._registerResizeHandler()
 
--- ── Ghost slot system ─────────────────────────────────────────────────────────
--- When a pane floats from a split and leaves a sibling still embedded, a ghost
--- slot visual fills the vacated slot: dashed border, "drop here" label, and a
--- hover-visible × button that collapses the split to clean up the empty space.
---
--- Registry: slotKey (internal gid string) → ghost record:
---   { label, dismissBtn, slot, split, side, paneSet }
--- Ghosts are NOT linked back to the pane that vacated them.  Simpler and more
--- robust: lookups go slot→ghost (via _findGhostBySlot), never pane→ghost.
+-- When a pane floats and leaves an embedded sibling, a ghost label fills the vacated slot:
+-- dashed border, "drop here" text, and an × dismiss button that collapses the split.
+-- Keyed by internal gid; looked up slot→ghost (never pane→ghost) so ghost promotion
+-- across split retirement works without back-referencing the original pane.
 Mux._ghostSlots = Mux._ghostSlots or {}
 
 function Mux._createGhostSlot(slot, split, side, paneSet)
@@ -780,7 +845,7 @@ function Mux._createGhostSlot(slot, split, side, paneSet)
     bg:setOnEnter(function() cancelHide() end)
     bg:setOnLeave(function()  startHide()  end)
 
-    -- When the cursor moves onto the X button, cancel the pending hide so the
+    -- When the cursor moves onto the × button, cancel the pending hide so the
     -- button stays visible and clickable.
     dismissBtn:setOnEnter(function() cancelHide() end)
 
@@ -818,7 +883,6 @@ function Mux._removeGhostSlot(slotKey)
     Mux._log("ghost slot removed: %s", slotKey)
 end
 
--- Find the ghost occupying a given slot container (returns ghost, key or nil).
 function Mux._findGhostBySlot(slotContainer)
     if not slotContainer then return nil, nil end
     for key, ghost in pairs(Mux._ghostSlots) do
@@ -827,7 +891,6 @@ function Mux._findGhostBySlot(slotContainer)
     return nil, nil
 end
 
--- Safety catch: remove any ghost whose slot matches the given container.
 function Mux._removeGhostSlotBySlot(slotContainer)
     for key, ghost in pairs(Mux._ghostSlots) do
         if ghost.slot == slotContainer then
@@ -853,9 +916,7 @@ function Mux._unhighlightGhostSlot(ghost)
     ]])
 end
 
--- ── Insertion ghost ───────────────────────────────────────────────────────────
--- A singleton translucent strip that previews where a dragged floating pane
--- will be inserted when dropped at a pane edge.
+-- Singleton translucent strip previewing where a dragged floating pane will land.
 Mux._insertionGhost = Mux._insertionGhost or nil
 
 function Mux._showInsertionGhost(tx, ty, tw, th, edge)
@@ -898,11 +959,8 @@ function Mux._hideInsertionGhost()
     end
 end
 
--- ── Insert floating pane at an embedded pane's edge ──────────────────────────
--- edge: "top" | "bottom" | "left" | "right"
--- Ratio along the split axis is derived from the floating pane's current size,
--- capped at 70 % of the target slot so neither half starves.
-
+-- Embed a floating pane by splitting the target pane at the given edge.
+-- Ratio is derived from the floater's current size, capped at 70% so neither half starves.
 function Mux._doInsertAtEdge(floatingPane, targetPane, edge)
     local dir         = (edge == "top" or edge == "bottom") and "v" or "h"
     local floatOnSide = (edge == "top" or edge == "left")   and "a" or "b"
@@ -910,7 +968,6 @@ function Mux._doInsertAtEdge(floatingPane, targetPane, edge)
     local slotDim  = (dir == "v") and targetPane:height() or targetPane:width()
     local floatDim = (dir == "v") and floatingPane.floatH  or floatingPane.floatW
     local frac     = Mux._clamp(floatDim / math.max(slotDim, 1), 0.10, 0.70)
-    -- ratio is slotA's share; adjust based on which side the floater lands on.
     local ratio = (floatOnSide == "a") and frac or Mux._clamp(1 - frac, 0.30, 0.90)
 
     if targetPane._split then
@@ -957,7 +1014,7 @@ function Mux._doInsertAtEdge(floatingPane, targetPane, edge)
         newSplit.box:organize()
         newSplit.box:reposition()
         for _, p in pairs(Mux._panes) do
-            if p.mainConsoleHost then p:updateConsoleBorders() end
+            if p.onReposition then p.onReposition(p) end
         end
     end
     Mux._log("doInsertAtEdge: %s → %s edge=%s", floatingPane.id, targetPane.id, edge)

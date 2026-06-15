@@ -1,6 +1,6 @@
 -- Muxlet — Dev Mode: local build auto-reload and manual reload helpers
 --
--- Auto-reload: build.ps1 -Profile <name> writes a stamp file to the profile
+-- Auto-reload: muddlet --profile <name> writes a stamp file to the profile
 -- directory after running muddler. A recursive 30-second timer watches for
 -- stamp changes and performs uninstallPackage + installPackage for a clean reload.
 --
@@ -62,7 +62,7 @@ function Mux.devmodeReload(fresh)
     local f = io.open(pkgPath, "r")
     if not f then
         Mux._echo("\n<red>[Muxlet]<reset> No deployed build found in profile directory.\n")
-        Mux._echo("\n<yellow>[Muxlet]<reset> Run: ./build.ps1 -Profile <your-profile-name>\n")
+        Mux._echo("\n<yellow>[Muxlet]<reset> Run: ./muddlet --profile <name>\n")
         return
     end
     f:close()

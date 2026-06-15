@@ -37,16 +37,16 @@
 Mux._content     = Mux._content     or {}
 Mux._contentFile = Mux._persistentDir .. "/content.json"
 
--- ── Catalog persistence ───────────────────────────────────────────────────────
-
 local function saveContentCatalog()
     local catalog = {}
     for id, def in pairs(Mux._content) do
-        catalog[id] = {
-            name        = def.name        or id,
-            description = def.description or "",
-            singleton   = def.singleton   or false,
-        }
+        if not def.internal then
+            catalog[id] = {
+                name        = def.name        or id,
+                description = def.description or "",
+                singleton   = def.singleton   or false,
+            }
+        end
     end
     local ok, err = pcall(function()
         local f = io.open(Mux._contentFile, "w")
@@ -66,8 +66,6 @@ local function scheduleSave()
         saveContentCatalog()
     end)
 end
-
--- ── Singleton notification ────────────────────────────────────────────────────
 
 local function showSingletonBlocked(contentName, def, existing)
     local targetName = (existing and existing.name) or "another pane"
@@ -94,8 +92,6 @@ local function showSingletonBlocked(contentName, def, existing)
     d:raise()
 end
 
--- ── Public API ────────────────────────────────────────────────────────────────
-
 --- Register a named content type.
 -- @param name  string identifier (used in API calls and menus)
 -- @param def   table with at minimum an `apply(target)` function
@@ -107,9 +103,6 @@ function Mux.registerContent(name, def)
     Mux._log("Registered content: %s", name)
     scheduleSave()
 end
-
--- Backward-compat alias for external packages that used the old name.
-Mux.registerPreset = Mux.registerContent
 
 --- Apply the named content to a pane or tab target.
 -- If the target already has different content applied, calls that content's
@@ -136,8 +129,8 @@ function Mux._applyContent(target, contentName)
         def._activeTargetRef = nil
     end
 
-    -- Remove whatever content is currently on this target (if different).
-    if target._activeContent and target._activeContent ~= contentName then
+    -- Remove whatever content is currently on this target before applying the new one.
+    if target._activeContent then
         local old = Mux._content[target._activeContent]
         if old then
             if old.singleton and old._activeTargetRef == target then
@@ -159,10 +152,14 @@ function Mux._applyContent(target, contentName)
     Mux._scheduleAutoSave()
 end
 
---- Return an alphabetically sorted list of registered content names.
+--- Return an alphabetically sorted list of user-visible registered content names.
+-- Content registered with internal=true is excluded; it is used by Muxlet
+-- system UI and should not appear in the "Add Content" context menu.
 function Mux._listContent()
     local names = {}
-    for name in pairs(Mux._content) do names[#names+1] = name end
+    for name, def in pairs(Mux._content) do
+        if not def.internal then names[#names+1] = name end
+    end
     table.sort(names)
     return names
 end

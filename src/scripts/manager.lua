@@ -1,9 +1,4 @@
--- Muxlet — Manager
---
--- Top-level API consumed by end-users and keybind handlers.
--- All pane/split/paneset creation, focus management, and action verbs live here.
-
--- ── Pane factory ──────────────────────────────────────────────────────────────
+-- Muxlet manager — public API for pane creation, focus, and workspace operations.
 
 function Mux.newPane(opts)      return MuxPane:new(opts)    end
 function Mux.newSplit(opts, a, b)
@@ -14,28 +9,21 @@ function Mux.newSplit(opts, a, b)
 end
 function Mux.newPaneSet(opts)  return MuxPaneSet:new(opts) end
 
--- ── Lookup ────────────────────────────────────────────────────────────────────
-
 function Mux.getPane(id)     return Mux._panes[id]     end
-function Mux.getSplit(id)    return Mux._splits[id]    end
 function Mux.getPaneSet(id)  return Mux._paneSets[id]  end
 function Mux.currentTheme()  return Mux._activeThemeName end
 
--- ── Focus management ─────────────────────────────────────────────────────────
--- Mux._focusedPane tracks the "current" pane for all keybind actions.
--- Calling setFocus() visually highlights the pane's border.
-
+-- Mux._focusedPane is the pane targeted by mux commands and UI actions.
+-- permanentFloat panes (settings window, etc.) are excluded from the focus system:
+-- they never receive the focus border, never displace workspace focus, and are
+-- unaffected by split/zoom/close operations. setFocus() just raises them visually.
 Mux._focusedPane = nil
 
 function Mux.setFocus(pane)
-    -- Permanent floats (settings, etc.) don't participate in the focus system.
-    -- They never get the blue border, never displace the workspace focus, and never
-    -- appear in split/zoom/close keybind operations.  Just raise them visually.
     if pane and pane.permanentFloat then
         if pane.floating then pane:raise() end
         return
     end
-    -- Clear highlight on the previously focused pane.
     if Mux._focusedPane and Mux._focusedPane ~= pane then
         local old = Mux._focusedPane
         if old._setFrameCss and old._baseFrameCss then
@@ -46,21 +34,29 @@ function Mux.setFocus(pane)
     if not pane then return end
     if pane.floating then pane:raise() end
     Mux._lastFocusedPane = pane
-    -- Apply focus highlight; locked panes keep their base (unfocused) appearance.
+    -- Locked panes keep their base (unfocused) appearance regardless of focus.
     if not pane.locked and pane._setFrameCss and pane._focusedFrameCss then
         pane:_setFrameCss(pane:_focusedFrameCss())
     end
     Mux._log("Focus → %s", pane.id)
 end
 
--- Raise every floating pane above all embedded panes.
 function Mux.raiseFloatingPanes()
     for _, pane in pairs(Mux._panes) do
         if pane.floating then pane:raise() end
     end
 end
 
--- Focus next/previous pane in creation order (cycles through all non-floating panes).
+-- Raise only "free" floating panes (not locked and not permanentFloat).
+-- Called after a zoom so that popup dialogs remain above the zoomed pane.
+function Mux._raiseFreeFloatingPanes()
+    for _, pane in pairs(Mux._panes) do
+        if pane.floating and not pane.locked and not pane.permanentFloat then
+            pane:raise()
+        end
+    end
+end
+
 function Mux.focusNext()
     local ordered = orderedPanes()
     if #ordered == 0 then return end
@@ -77,9 +73,8 @@ function Mux.focusPrev()
     Mux.setFocus(ordered[prevIdx])
 end
 
--- Directional focus: find the pane adjacent in the given direction within the
--- focused pane's parent split.  Falls back to focusNext/Prev when no split.
--- direction: "left" | "right" | "up" | "down"
+-- Navigate to the adjacent pane in the given direction within the parent split.
+-- When the split axis doesn't match the direction, falls back to focusNext/Prev.
 function Mux.focusAdjacent(direction)
     local pane = Mux._focusedPane
     if not pane then Mux.focusNext(); return end
@@ -90,7 +85,6 @@ function Mux.focusAdjacent(direction)
     local side = pane._slotSide
     local dir  = split.direction   -- "v" = top/bottom, "h" = left/right
 
-    -- Determine if this split axis matches the navigation direction
     local cross =
         (direction == "left"  and dir == "h" and side == "b") or
         (direction == "right" and dir == "h" and side == "a") or
@@ -101,7 +95,6 @@ function Mux.focusAdjacent(direction)
         local targetSide = (side == "a") and "b" or "a"
         focusSlotFirstPane(split, targetSide)
     else
-        -- No match in immediate parent; cycle through all panes instead
         if direction == "left" or direction == "up" then
             Mux.focusPrev()
         else
@@ -110,17 +103,20 @@ function Mux.focusAdjacent(direction)
     end
 end
 
--- ── Split the focused pane ────────────────────────────────────────────────────
--- direction: "v" (top/bottom) or "h" (left/right)
--- ratio: split point, default 0.5
--- Returns the new MuxSplit, or nil on failure.
-
 function Mux.splitFocused(direction, ratio)
     local pane = Mux._focusedPane
-    if not pane then Mux._warn("splitFocused: no focused pane"); return nil end
+    if not pane then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return nil
+    end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return nil
+    end
     if pane.floating then
-        Mux._warn("splitFocused: cannot split a floating pane — embed it first")
-        return nil
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is floating — use <cyan>mux pane embed<reset> first.\n",
+            pane.name)); return nil
     end
 
     direction = direction or "v"
@@ -130,10 +126,8 @@ function Mux.splitFocused(direction, ratio)
     end
 
     if pane._split then
-        -- Pane is inside a split — subdivide its slot.
         local newSplit = pane._split:_splitPaneInSlot(pane, direction, ratio)
         if newSplit then
-            -- Focus the new blank pane that opened.
             tempTimer(0, function()
                 if newSplit.childB then Mux.setFocus(newSplit.childB) end
                 Mux.raiseFloatingPanes()
@@ -142,13 +136,12 @@ function Mux.splitFocused(direction, ratio)
         end
         return newSplit
     else
-        -- Pane is the direct root of a PaneSet.
+        -- Pane is the direct root of a PaneSet — wrap it in a new split.
         local ps = pane._paneSet
         if not ps then
-            Mux._warn("splitFocused: pane '%s' has no PaneSet reference", pane.id)
+            Mux._err("splitFocused: pane '%s' has no PaneSet reference", pane.id)
             return nil
         end
-        -- Wrap in a new split that fills the PaneSet's outer container.
         local newSplit = MuxSplit:new({
             direction = direction,
             ratio     = ratio,
@@ -159,12 +152,10 @@ function Mux.splitFocused(direction, ratio)
         newSplit:place(newPane, "b")
         newPane._paneSet = ps
         ps.root = newSplit
-        -- Organize the new split so VBox/HBox lays out slot sizes immediately.
         newSplit.box:organize()
         newSplit.box:reposition()
-        -- Sync main console borders now that pane geometry has changed.
         for _, p in pairs(Mux._panes) do
-            if p.mainConsoleHost then p:updateConsoleBorders() end
+            if p.onReposition then p.onReposition(p) end
         end
         tempTimer(0, function()
             Mux.setFocus(newPane)
@@ -175,53 +166,81 @@ function Mux.splitFocused(direction, ratio)
     end
 end
 
--- ── Zoom the focused pane ─────────────────────────────────────────────────────
--- Expands the focused pane to fill its split (hides sibling + handle).
--- Calling again restores the split.
-
+-- Zoom the focused pane to full screen (requires pane.zoomable = true).
+-- Calling again while zoomed restores the pane to its previous state.
 function Mux.zoomFocused()
     local pane = Mux._focusedPane
-    if not pane then Mux._warn("zoomFocused: no focused pane"); return end
-
-    local split = pane._split
-    if not split then Mux._warn("zoomFocused: pane '%s' is not in a split", pane.id); return end
-
-    split:zoom(pane._slotSide)
+    if not pane then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return
+    end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
+    if not pane.zoomable then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is not zoomable.\n",
+            pane.name)); return
+    end
+    pane:zoom()
 end
-
--- ── Swap focused pane with its sibling ───────────────────────────────────────
 
 function Mux.swapFocused()
     local pane = Mux._focusedPane
-    if not pane then Mux._warn("swapFocused: no focused pane"); return end
+    if not pane then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return
+    end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
     local split = pane._split
-    if not split then Mux._warn("swapFocused: pane '%s' is not in a split", pane.id); return end
+    if not split then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is not in a split.\n",
+            pane.name)); return
+    end
     split:swapSlots()
 end
 
--- ── Close the focused pane ────────────────────────────────────────────────────
-
 function Mux.closeFocused()
     local pane = Mux._focusedPane
-    if not pane then Mux._warn("closeFocused: no focused pane"); return end
-    -- Shift focus before destroying
+    if not pane then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return
+    end
+    if pane.locked and not pane.closeable then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
     Mux._focusedPane = nil
     pane:close()
     Mux.focusNext()
 end
 
--- ── Float / embed the focused pane ───────────────────────────────────────────
-
 function Mux.floatFocused()
     local pane = Mux._focusedPane
-    if not pane then return end
-    if not pane.floating then pane:float() end
+    if not pane then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return
+    end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
+    if pane.floating then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is already floating.\n",
+            pane.name)); return
+    end
+    pane:float()
 end
 
 function Mux.embedFocused()
     local pane = Mux._focusedPane
     if not pane then
-        -- Try last floating pane
         pane = Mux._lastFocusedPane
         if not pane or not pane.floating then
             for _, p in pairs(Mux._panes) do
@@ -229,100 +248,140 @@ function Mux.embedFocused()
             end
         end
     end
-    if pane and pane.floating and not pane.permanentFloat then pane:embed() end
+    if not pane then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No floating pane to embed.\n"); return
+    end
+    if pane.permanentFloat then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' cannot be embedded.\n",
+            pane.name)); return
+    end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
+    pane:embed()
 end
-
--- ── Lock / unlock the focused pane ───────────────────────────────────────────
 
 function Mux.lockFocused()
     local pane = Mux._focusedPane
-    if not pane then Mux._warn("lockFocused: no focused pane"); return end
+    if not pane then Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return end
     pane:lock()
     Mux._echo(string.format("\n<green>[Muxlet]<reset> Pane '<yellow>%s<reset>' locked.\n", pane.name))
 end
 
 function Mux.unlockFocused()
     local pane = Mux._focusedPane
-    if not pane then Mux._warn("unlockFocused: no focused pane"); return end
+    if not pane then Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return end
     pane:unlock()
     Mux._echo(string.format("\n<green>[Muxlet]<reset> Pane '<yellow>%s<reset>' unlocked.\n", pane.name))
 end
 
--- ── Toggle titlebar on focused pane ──────────────────────────────────────────
-
 function Mux.toggleTitlebarFocused()
     local pane = Mux._focusedPane
-    if not pane then return end
+    if not pane then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return
+    end
+    if pane.noTitlebarToggle then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' titlebar cannot be toggled.\n",
+            pane.name)); return
+    end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
     pane:setTitlebarVisible(not pane.titlebarVisible)
 end
 
--- ── Rename focused pane ───────────────────────────────────────────────────────
-
 function Mux.renameFocused(newName)
     local pane = Mux._focusedPane
-    if not pane then Mux._warn("renameFocused: no focused pane"); return end
-    if pane.noRename then Mux._warn("renameFocused: pane '%s' cannot be renamed", pane.name); return end
+    if not pane then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return
+    end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
+    if pane.noRename then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' cannot be renamed.\n",
+            pane.name)); return
+    end
     if not newName or newName == "" then
         Mux._echo("\n<cyan>[Muxlet]<reset> Usage: mux rename <new name>\n")
         return
     end
     pane:setName(newName)
-    Mux._echo(string.format("\n<green>[Muxlet]<reset> Pane renamed to '%s'\n", newName))
+    Mux._echo(string.format("\n<green>[Muxlet]<reset> Pane renamed to '<yellow>%s<reset>'\n", newName))
 end
 
--- ── Rename a pane via command-line prompt ────────────────────────────────────
--- Installs a one-shot temp alias "!mux_r <name>", pre-fills the command input,
--- and cleans up the alias once the user submits or on next open.
 
-function Mux._promptRename(pane)
-    if pane.noRename then return end
-    Mux.setFocus(pane)
-    Mux._showRenameDialog({
-        currentName = pane.name,
-        title       = "Rename Pane",
-        onConfirm   = function(newName)
-            pane:setName(newName)
-            Mux._echo(string.format(
-                "\n<green>[Muxlet]<reset> Pane renamed to '<yellow>%s<reset>'\n", newName))
-        end,
-    })
-end
-
--- ── Tab operations on the active pane / active tab ───────────────────────────
--- All helpers resolve (pane, tab) then delegate to MuxPane methods.
+-- Tab operations — all resolve (pane, tab) then delegate to MuxPane methods.
 
 local function focusedPaneForTab(op)
     local pane = Mux._focusedPane
-    if not pane then Mux._warn("%s: no focused pane", op); return end
+    if not pane then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return
+    end
     if not pane._tabsEnabled then
-        Mux._warn("%s: focused pane '%s' has no tabs", op, pane.name); return
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' has no tabs — enable them first.\n",
+            pane.name)); return
     end
     return pane
 end
 
 local function activeTab(pane, op)
     if not pane._activeTabId then
-        Mux._warn("%s: pane '%s' has no active tab", op, pane.name); return
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' has no active tab.\n",
+            pane.name)); return
     end
     return pane:_findTab(pane._activeTabId)
 end
 
 function Mux.tabAdd(name)
     local pane = Mux._focusedPane
-    if not pane then Mux._warn("tabAdd: no focused pane"); return end
+    if not pane then
+        Mux._echo("\n<yellow>[Muxlet]<reset> No focused pane.\n"); return
+    end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
     if not pane._tabsEnabled then pane:enableTabs({ noDefaultTab = true }) end
     pane:addTab(name or string.format("Tab %d", #(pane._tabs or {}) + 1))
 end
 
 function Mux.tabClose()
     local pane = focusedPaneForTab("tabClose"); if not pane then return end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
     local tab  = activeTab(pane, "tabClose");  if not tab  then return end
     pane:removeTab(tab.id)
 end
 
 function Mux.tabRename(newName)
     local pane = focusedPaneForTab("tabRename"); if not pane then return end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
     local tab  = activeTab(pane, "tabRename");  if not tab  then return end
+    if tab.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Tab '<yellow>%s<reset>' is locked — use <cyan>mux tab unlock<reset> first.\n",
+            tab.name)); return
+    end
     if not newName or newName == "" then
         Mux._showRenameDialog({
             currentName = tab.name,
@@ -338,6 +397,11 @@ end
 
 function Mux.tabLock()
     local pane = focusedPaneForTab("tabLock"); if not pane then return end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
     local tab  = activeTab(pane, "tabLock");  if not tab  then return end
     tab.locked = true
     Mux._echo(string.format(
@@ -346,6 +410,11 @@ end
 
 function Mux.tabUnlock()
     local pane = focusedPaneForTab("tabUnlock"); if not pane then return end
+    if pane.locked then
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Pane '<yellow>%s<reset>' is locked — use <cyan>mux pane unlock<reset> first.\n",
+            pane.name)); return
+    end
     local tab  = activeTab(pane, "tabUnlock");  if not tab  then return end
     tab.locked = false
     Mux._echo(string.format(
@@ -370,9 +439,7 @@ function Mux.tabPrev()
     pane:activateTab(tabs[prevIdx].id)
 end
 
--- ── New blank pane (floating) ─────────────────────────────────────────────────
 -- Creates a free-floating blank pane near the centre of the screen.
-
 function Mux.newFloatingPane(opts)
     local w, h = getMainWindowSize()
     opts = Mux._merge({
@@ -387,8 +454,6 @@ function Mux.newFloatingPane(opts)
     Mux.setFocus(p)
     return p
 end
-
--- ── Status ────────────────────────────────────────────────────────────────────
 
 function Mux.status()
     local pc, sc, ps = 0, 0, 0
@@ -412,8 +477,6 @@ function Mux.status()
     Mux._echo(string.format("  Debug     : %s\n", tostring(Mux.debug)))
 end
 
--- ── Debug toggle ─────────────────────────────────────────────────────────────
-
 function Mux.setDebug(on)
     local value = on and true or false
     -- Route through settings so the choice persists across sessions.
@@ -426,17 +489,13 @@ function Mux.setDebug(on)
         Mux.debug and "ON" or "OFF"))
 end
 
--- ── Output routing ────────────────────────────────────────────────────────────
 -- All Muxlet output goes to the main Mudlet console.
-
 function Mux._echo(text)
     cecho(text)
 end
 
--- ── Workspace clear (called before every applyWorkspace) ─────────────────────
 -- Destroys all current panes/splits/panesets and resets borders without
 -- killing persistent event handlers or the command console pane.
-
 function Mux._clearWorkspace()
     -- Cancel any pending auto-save so it doesn't write an empty/transitional state.
     if Mux._autoSaveTimer then
@@ -453,7 +512,7 @@ function Mux._clearWorkspace()
         if ps.destroy then ps:destroy() end
     end
     -- Floating panes are reparented to the Geyser root and are not owned by any
-    -- PaneSet, so ps:destroy() misses them.  Hide them explicitly before the wipe.
+    -- PaneSet, so ps:destroy() misses them. Hide them explicitly before the wipe.
     for _, pane in pairs(Mux._panes) do
         if pane.floating and pane.outer then pane.outer:hide() end
     end
@@ -465,8 +524,8 @@ function Mux._clearWorkspace()
     Mux._connAware = {}
     if Mux._settings_ui then Mux._settings_ui.window = savedSet end
     Mux._focusedPane = nil
-    -- Reset user-facing ID pools so new workspaces start numbering from 1 again.
-    -- _internalSeq is intentionally NOT reset to keep Geyser names unique.
+    -- Reset user-facing ID pools so new workspaces start numbering from 1.
+    -- _internalSeq is intentionally NOT reset to keep Geyser widget names unique.
     for _, prefix in ipairs({"pane", "split", "ps"}) do
         Mux._idCounters[prefix] = 0
         Mux._idFree[prefix]     = {}
@@ -476,11 +535,8 @@ function Mux._clearWorkspace()
     Mux._log("_clearWorkspace: cleared")
 end
 
--- ── Output capture (fullscreen) ───────────────────────────────────────────────
 -- Creates a MiniConsole inside the named pane's content area and installs a
 -- catch-all trigger that appends every game output line to it.
--- Called automatically by `mux fullscreen`; call again to retarget a different pane.
-
 Mux._outputCapture = nil    -- tempTrigger ID
 Mux._outputConsole = nil    -- Geyser.MiniConsole name (string)
 
@@ -488,7 +544,7 @@ function Mux.setupOutputCapture(paneId)
     paneId = paneId or "output"
     local pane = Mux._panes[paneId]
     if not pane then
-        Mux._warn("setupOutputCapture: pane '%s' not found", paneId)
+        Mux._err("setupOutputCapture: pane '%s' not found", paneId)
         return
     end
 
@@ -509,7 +565,6 @@ function Mux.setupOutputCapture(paneId)
     end
     Mux._outputConsole = conName
 
-    -- Catch-all trigger: mirror every game line to the output MiniConsole.
     -- appendBuffer preserves ANSI colour; echo adds the required trailing newline.
     Mux._outputCapture = tempTrigger(".*", function()
         selectCurrentLine()
@@ -522,28 +577,19 @@ function Mux.setupOutputCapture(paneId)
         paneId, conName))
 end
 
--- ── Full stop / full start ────────────────────────────────────────────────────
--- Equivalent to closing and reopening the profile:
---   fullStop  — destroys all visible widgets, kills the resize handler, reloads
---               settings from disk so theme, debug, etc. are fresh.
---   fullStart — re-registers the resize handler, applies saved theme, restores
---               the current session workspace (or 'default' on first run).
+-- fullStop  — destroys all visible widgets, kills the resize handler, reloads
+--             settings from disk so theme and debug flag are fresh.
+-- fullStart — re-registers the resize handler, applies saved theme, restores
+--             the session workspace ("current") or "default" on first run.
 
 function Mux.fullStop()
-    -- Kill the resize handler; fullStart() will re-register it.
     if Mux._resizeHandler then
         killAnonymousEventHandler(Mux._resizeHandler)
         Mux._resizeHandler = nil
     end
-    if Mux._keybindHandler then
-        killAnonymousEventHandler(Mux._keybindHandler)
-        Mux._keybindHandler = nil
-    end
-
-    -- Hide and release the settings window.  buildWindow() creates a fresh one
-    -- the next time Mux.settings.toggle() is called, so we just abandon the old one.
-    -- This must happen BEFORE _clearWorkspace so the savedSet guard inside _clearWorkspace
-    -- sees nil and does not re-save the stale reference.
+    -- Hide and release the settings window. buildWindow() creates a fresh one
+    -- on the next toggle(), so we just abandon the old one.
+    -- Must happen BEFORE _clearWorkspace so the savedSet guard inside it sees nil.
     if Mux._settings_ui and Mux._settings_ui.window then
         Mux._settings_ui.window:hide()
         Mux._settings_ui.window     = nil
@@ -558,22 +604,12 @@ function Mux.fullStop()
         Mux._settings_ui.drawEpoch  = (Mux._settings_ui.drawEpoch or 0) + 1
     end
 
-    -- Hide the keybind hint overlay (widget stays in Qt pool, gets reused).
-    if Mux._hintLabel then Mux._hintLabel:hide() end
-    if Mux._hintTimerId then killTimer(Mux._hintTimerId); Mux._hintTimerId = nil end
-
-    -- Close the context menu (hides backdrop, panel, all row labels).
     Mux._closeContextMenu()
-
-    -- Destroy all panes, splits, paneSets, and reset borders.
     Mux._clearWorkspace()
     setBorderSizes(0, 0, 0, 0)
 
-    -- Clear any stale last-focused reference surviving _clearWorkspace.
     Mux._lastFocusedPane = nil
 
-    -- Reload settings from disk so theme, debug, etc. reflect the
-    -- last saved state (including any edits made while Muxlet was running).
     Mux.settings.load()
 
     Mux._running = false
@@ -586,18 +622,15 @@ function Mux.fullStart()
         return
     end
 
-    -- Re-register the resize handler (killed by fullStop, no-op if already live).
     Mux._registerResizeHandler()
 
-    -- Apply saved theme and debug flag, same as settings.lua's tempTimer(0) on load.
     local savedTheme = Mux.settings.get("mux", "theme")
     if savedTheme and savedTheme ~= "" and Mux.applyTheme then
         Mux.applyTheme(savedTheme)
     end
     Mux.debug = Mux.settings.get("mux", "debug") or false
 
-    -- Startup priority: current (auto-restored session) → default.
-    -- "current" is written by _doAutoSave() on every structural change.
+    -- Restore the most recent auto-saved session; fall back to the built-in default.
     local wsName = Mux._workspaces["current"] and "current" or "default"
 
     if not Mux._workspaces[wsName] then
@@ -607,30 +640,14 @@ function Mux.fullStart()
 
     Mux.applyWorkspace(wsName)
     Mux._running = true
-    Mux._echo("\n<dim_grey>  Alt+\\ / Alt+- to split  •  Alt+Z to zoom  •  Alt+B for help<reset>\n")
+    tempTimer(2, function()
+        Mux._echo("\n<dim_grey>[Muxlet]<reset> <dim_grey>Type <reset><cyan>mux help<reset><dim_grey> for commands  •  click <reset><cyan>◈<reset><dim_grey> in any titlebar to add content<reset>\n")
+    end)
     raiseEvent("muxletStarted")
 end
 
--- ── Teardown ──────────────────────────────────────────────────────────────────
 
-function Mux.teardown()
-    -- fullStop handles everything; skip the settings reload since we're uninstalling.
-    if Mux._resizeHandler then
-        killAnonymousEventHandler(Mux._resizeHandler)
-        Mux._resizeHandler = nil
-    end
-    if Mux._keybindHandler then
-        killAnonymousEventHandler(Mux._keybindHandler)
-        Mux._keybindHandler = nil
-    end
-    Mux._clearWorkspace()
-    setBorderSizes(0, 0, 0, 0)
-    cecho("\n<yellow>[Muxlet]<reset> Torn down. Main console restored.\n")
-end
-
--- ── Package unload handler ────────────────────────────────────────────────────
--- Fires when the package is uninstalled or Mudlet closes.
--- Resets borders so the main console is fully visible after removal.
+-- Resets borders when the package is uninstalled so the main console is fully visible.
 if not Mux._unloadHandler then
     Mux._unloadHandler = registerAnonymousEventHandler(
         "sysUninstallPackage",
@@ -641,9 +658,7 @@ if not Mux._unloadHandler then
     )
 end
 
--- ── Internal helpers ──────────────────────────────────────────────────────────
-
--- Return all non-floating panes sorted by creation order (ID alphabetically).
+-- All non-floating panes sorted by creation order (ID alphabetically).
 function orderedPanes()
     local list = {}
     for _, p in pairs(Mux._panes) do
@@ -653,7 +668,6 @@ function orderedPanes()
     return list
 end
 
--- Return the index of the focused pane within ordered list (or 0).
 function focusIndex(ordered)
     local fp = Mux._focusedPane
     if not fp then return 0 end
@@ -668,10 +682,8 @@ function focusSlotFirstPane(split, side)
     local child = (side == "a") and split.childA or split.childB
     if not child then return end
     if child.outer then
-        -- It's a MuxPane
         Mux.setFocus(child)
     elseif child.box then
-        -- It's a nested MuxSplit — recurse into slotA
         focusSlotFirstPane(child, "a")
     end
 end

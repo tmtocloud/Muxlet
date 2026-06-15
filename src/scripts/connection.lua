@@ -71,10 +71,10 @@ function MuxPane:_buildConnScreen()
     local contentY = bi + hdrH
     self._connScreen = Geyser.Label:new({
         name   = self._gid .. "_conn",
-        x      = Mux._px(bi),
-        y      = Mux._px(contentY),
-        width  = Mux._pxNeg(bi * 2),
-        height = Mux._pxNeg(contentY + bi),
+        x      = Mux._toPx(bi),
+        y      = Mux._toPx(contentY),
+        width  = Mux._fromEdgePx(bi),
+        height = Mux._fromEdgePx(bi),
         fillBg = 1,
     }, self.outer)
     self._connScreen:setStyleSheet(
@@ -91,8 +91,8 @@ function MuxPane:_syncConnScreenGeometry()
         and theme.titlebarHeight
         or  theme.revealStripHeight
     local contentY = bi + hdrH
-    self._connScreen:move(Mux._px(bi), Mux._px(contentY))
-    self._connScreen:resize(Mux._pxNeg(bi * 2), Mux._pxNeg(contentY + bi))
+    self._connScreen:move(Mux._toPx(bi), Mux._toPx(contentY))
+    self._connScreen:resize(Mux._fromEdgePx(bi), Mux._fromEdgePx(bi))
     self._connScreen:reposition()
 end
 

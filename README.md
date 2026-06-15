@@ -1,303 +1,640 @@
 # Muxlet
 
-A game-agnostic tiling window manager for [Mudlet](https://mudlet.org), inspired by tmux. Split the Mudlet window into panes, arrange them with keyboard shortcuts, switch themes, save named workspaces, and attach custom content widgets to any pane.
+A game-agnostic tiling window manager for [Mudlet](https://mudlet.org). Split the Mudlet window into panes, stack views in tabs, save named workspaces, and attach custom content widgets to any pane or tab.
 
-## Requirements
+---
+
+## For Users
+
+### Requirements
 
 - [Mudlet](https://mudlet.org) 4.x or later
 
-## Installation
+### Installation
 
 Open Mudlet's **Package Manager** (Toolbox → Package Manager), search for **Muxlet**, and click Install.
 
 Or download `Muxlet.mpackage` from the [Releases](https://github.com/tmtocloud/Muxlet/releases) page and install via **Install from file**.
 
-## Quick Start
+### Getting Started
+
+On first install a welcome dialog walks you through choosing a startup mode. If you skip it, type:
 
 ```
-mux start      — enable Muxlet (auto_start is off by default)
-mux help       — show all commands
-mux hint       — show keybind overlay (also: Alt+B)
+mux
 ```
 
-> **Note:** `auto_start` is disabled by default so Muxlet does not interfere with downstream packages. Enable it permanently with `mux settings set mux.auto_start true`.
+This starts Muxlet and restores your last session. On the very first run it applies the default workspace — a single pane hosting the main game console.
 
-## Commands
+Type `mux help` at any time for a command summary.
 
-### Session
+---
+
+### Commands
+
+#### Session
 
 | Command | Description |
 |---------|-------------|
-| `mux` / `mux start` | Enable Muxlet (restores last session) |
-| `mux stop` | Disable Muxlet, restore normal console |
+| `mux` / `mux start` | Start Muxlet (restores last session) |
+| `mux stop` | Stop Muxlet, restore the normal Mudlet console |
 | `mux reset` | Re-apply the default workspace |
-| `mux status` | Show session overview |
+| `mux status` | Show version, workspace, and pane count |
 
-### Panes
+#### Pane
+
+All pane commands act on the **focused** pane — the one with a highlighted border. Click a pane titlebar to focus it.
 
 | Command | Description |
 |---------|-------------|
-| `mux split v [ratio]` | Split left/right (vertical divider) |
-| `mux split h [ratio]` | Split top/bottom (horizontal divider) |
-| `mux zoom` | Zoom / unzoom focused pane |
-| `mux swap` | Swap focused pane with its sibling |
-| `mux close` | Close focused pane |
-| `mux float` | Float the focused pane |
-| `mux embed` | Re-attach the last floating pane |
-| `mux titlebar` | Toggle titlebar on focused pane |
-| `mux rename <name>` | Rename focused pane |
-| `mux lock` / `mux unlock` | Lock / unlock focused pane |
-| `mux new [name]` | Create a new floating pane |
+| `mux pane split v [ratio]` | Split left / right (vertical divider); ratio is 0.0–1.0, default 0.5 |
+| `mux pane split h [ratio]` | Split top / bottom (horizontal divider) |
+| `mux pane zoom` | Zoom the focused pane to fill the screen; repeat to restore |
+| `mux pane swap` | Swap the focused pane with its sibling in the split |
+| `mux pane close` | Close the focused pane |
+| `mux pane float` | Detach the focused pane into a free-floating window |
+| `mux pane embed` | Re-attach the last floating pane into the split tree |
+| `mux pane titlebar` | Toggle the titlebar on the focused pane |
+| `mux pane rename <name>` | Rename the focused pane |
+| `mux pane lock` / `mux pane unlock` | Lock or unlock the focused pane |
+| `mux pane new [name]` | Create a new free-floating pane |
+| `mux pane properties` | Open the Properties dialog for the focused pane |
 
-### Tabs
+Locked panes ignore drag, close, split, and rename actions. Unlock with `mux pane unlock` before making structural changes.
+
+#### Tab
+
+Tab commands act on the **active tab** in the focused pane.
 
 | Command | Description |
 |---------|-------------|
 | `mux tab add [name]` | Add a tab to the focused pane |
-| `mux tab close` | Close the active tab |
-| `mux tab rename [name]` | Rename the active tab |
-| `mux tab lock` / `mux tab unlock` | Lock / unlock active tab |
-| `mux tab next` / `mux tab prev` | Switch tabs |
+| `mux tab close` | Close the active tab (shows a confirmation dialog) |
+| `mux tab rename [name]` | Rename the active tab; opens a dialog if no name is given |
+| `mux tab lock` / `mux tab unlock` | Lock or unlock the active tab |
+| `mux tab next` / `mux tab prev` | Switch to the next or previous tab |
 
-### Workspaces
+Drag tab labels to reorder them within a bar, or drop them onto a different pane's tab bar to move them. Middle-click a tab label to close it (with confirmation). Double-click a tab label to enter move mode — the tab turns red and drop targets appear on every bar so you can click to place it anywhere.
 
-Save and restore complete workspace arrangements across sessions. Workspaces are persisted automatically to `Muxlet_persistent/workspaces.json` in your Mudlet profile directory.
+#### Workspace
+
+Save and restore complete window arrangements. Muxlet auto-saves the live session as `"current"` one second after any structural change, so your layout survives Mudlet restarts automatically.
 
 | Command | Description |
 |---------|-------------|
-| `mux workspace save <name>` | Save the current workspace |
+| `mux workspace save <name>` | Snapshot and name the current layout |
 | `mux workspace load <name>` | Restore a saved workspace |
 | `mux workspace list` | List all saved workspaces |
-| `mux workspace delete <name>` | Remove a workspace |
+| `mux workspace delete <name>` | Remove a named workspace |
 
-### Themes
+#### Theme
 
 | Command | Description |
 |---------|-------------|
-| `mux theme [name]` | Show active theme or switch to a named one |
-| `mux themes` | List available themes |
+| `mux theme [name]` | Show the active theme, or switch to a named theme |
+| `mux themes` | List all registered themes |
 
 Built-in themes: **dark** (default), **light**.
 
-### Settings
+#### Settings
 
 | Command | Description |
 |---------|-------------|
 | `mux settings` | Open the floating settings window |
-| `mux settings list` | List all settings |
-| `mux settings get mux.theme` | Read a setting |
-| `mux settings set mux.theme dark` | Change a setting |
+| `mux settings list [ns]` | List all settings for a namespace |
+| `mux settings get ns.key` | Read a setting value |
+| `mux settings set ns.key value` | Change a setting |
+| `mux settings clear ns.key` | Revert a setting to its default |
 
-### Focus
+Common settings:
+
+```
+mux settings set mux.auto_start true    — start automatically on every profile load
+mux settings set mux.theme light        — switch to light theme persistently
+```
+
+#### Focus
 
 | Command | Description |
 |---------|-------------|
-| `mux focus` | Show which pane has focus |
-| `mux focus next` / `mux focus prev` | Move focus |
+| `mux focus` | Show which pane currently has focus |
+| `mux focus next` / `mux focus prev` | Move focus forward or backward through panes |
 
-## Keyboard Shortcuts
+#### Debug
 
-Press **Alt+B** (or type `mux hint`) to show a keybind overlay at any time.
-Type `mux keys` to list them in the console.
+| Command | Description |
+|---------|-------------|
+| `mux debug [on\|off]` | Toggle (or set) debug output in the console |
+| `mux version` | Show installed version and check for updates |
 
-| Key | Action |
-|-----|--------|
-| `Alt+\` | Split left/right |
-| `Alt+-` | Split top/bottom |
-| `Alt+←/→/↑/↓` | Focus adjacent pane |
-| `Alt+N` / `Alt+P` | Next / previous pane |
-| `Alt+Z` | Zoom / unzoom pane |
-| `Alt+X` | Close pane |
-| `Alt+D` | Float pane |
-| `Alt+A` | Embed / re-attach pane |
-| `Alt+[` | Toggle titlebar |
-| `Alt+,` | Rename pane prompt |
-| `Alt+C` | New floating pane |
-| `Alt+L/R/U/J` | Toggle left/right/top/bottom panel |
-| `Alt+T` | Cycle theme |
-| `Alt+S` | Show status |
-| `Alt+B` | Keybind hint overlay |
-| `Alt+/` | Toggle debug output |
+---
 
-## Extending Muxlet
+### Attaching Content to Panes
 
-Muxlet exposes a Lua API for registering custom themes, workspaces, and content types from other packages.
+Right-click any pane titlebar and choose **Add Content** to see all available content types. Selecting one fills the pane with that view. Any content types registered by installed packages appear there automatically — no restart required.
 
-### Lifecycle events
+#### Built-in: GMCP Inspector
 
-#### `muxletReady`
+The **GMCP Inspector** is always available in the Add Content menu. It shows a live, type-grouped view of any GMCP path:
 
-Raised once after all Muxlet scripts have loaded and persisted settings (theme, debug flag) have been applied. This is the correct hook point for any package that depends on Muxlet — use it instead of guessing at timer delays.
+- Click the **PATH** label at the top to open a path browser and select a different GMCP path.
+- Click **−** / **+** to zoom the row height in or out.
+- Click **Live** to pause auto-refresh (it becomes **Paused**; click again to resume).
+
+You can pre-point an inspector at a specific path from script:
+
+```lua
+-- Point all active inspectors at a new path
+Mux.gmcpInspect("char.vitals")
+
+-- Point only the inspector in a specific pane
+Mux.gmcpInspect("room.info", "sidebar")
+```
+
+---
+
+## For Developers
+
+This section covers how external packages integrate with Muxlet: registering workspaces, themes, content types, and settings; using the dialog API; and accessing the live pane graph.
+
+### The `muxletReady` Event
+
+Wait for this event before calling any `Mux.*` API. It fires once after all Muxlet scripts have loaded and persisted settings have been applied — always after the synchronous script-loading stack unwinds, so a handler registered at load time never misses it regardless of package load order.
 
 ```lua
 registerAnonymousEventHandler("muxletReady", function()
     -- Safe to call any Mux.* API here.
-    Mux.fullStart()
-    Mux.applyWorkspace("my-workspace")
+    Mux.registerWorkspace("my-workspace", { ... })
 end)
 ```
 
-The handler is registered synchronously at package load time. Because `muxletReady` is fired from a `tempTimer(0)` callback inside Muxlet's own init, it always fires after the synchronous script-loading stack unwinds — so a handler registered at load time will never miss the event, regardless of which package Mudlet loads first.
+A separate `muxletStarted` event fires at the end of `fullStart()` each time Muxlet is started or restarted at runtime. Use it if you need to re-apply layout changes after a `mux stop` / `mux start` cycle.
 
-If your package also needs to handle a `mux stop` / `mux start` cycle at runtime, check `Mux._running` at the top of your handler; `muxletReady` only fires at session start (or after a fresh Muxlet install), not on every `fullStart()`.
+---
+
+### Controlling the Startup Sequence
+
+Most packages can ignore this section entirely — register your content and workspaces in `muxletReady` and let the user's Muxlet settings drive the rest. But if your package provides its own onboarding or startup logic, you may want finer control over how and when Muxlet initializes.
+
+**Suppressing the welcome dialog**
+
+Muxlet shows a first-run dialog the first time it loads. If your package provides its own onboarding, you can suppress it by setting `welcome_shown` before the 0.3-second check fires:
+
+```lua
+registerAnonymousEventHandler("muxletReady", function()
+    Mux.settings.set("mux", "welcome_shown", true)
+    -- Your own onboarding goes here.
+end)
+```
+
+**Calling `fullStart()` yourself**
+
+By default, Muxlet auto-starts 1.5 seconds after `muxletReady` if the user has `auto_start` enabled. If your package wants to register content and workspaces before anything renders — or drive a different startup flow — you can call `Mux.fullStart()` directly at the end of your `muxletReady` handler. The built-in timer checks `Mux._running` before it acts, so there is no double-start.
+
+```lua
+registerAnonymousEventHandler("muxletReady", function()
+    Mux.settings.set("mux", "welcome_shown", true)
+    Mux.registerContent("my-content", { ... })
+    Mux.registerWorkspace("my-workspace", { ... })
+    -- Everything is registered; start Muxlet on our terms.
+    Mux.fullStart()
+end)
+```
+
+If you want Muxlet available but not started — for example, to let the user trigger it manually or after your own async setup — just omit the `fullStart()` call and ensure `mux.auto_start` is not set to `true` in the user's saved settings.
+
+**Disabling the update checker**
+
+If your package manages which version of Muxlet is installed (for example, by pinning a specific release), you may want to disable Muxlet's built-in update check so it doesn't prompt the user to upgrade to an incompatible version:
+
+```lua
+registerAnonymousEventHandler("muxletReady", function()
+    Mux.settings.set("mux", "update_check_enabled", false)
+end)
+```
+
+The user can still run `mux version` to check manually, and can re-enable automatic checks with `mux settings set mux.update_check_enabled true`.
+
+---
 
 ### Workspaces
 
-Workspaces define a complete pane, split, and theme arrangement. Register them from any package and they appear in `mux workspace list`.
+A workspace is a complete snapshot of the pane/split tree, theme, and content assignments. Register from any package; registered workspaces appear in `mux workspace list` and survive package reloads.
 
 ```lua
-Mux.registerWorkspace("my-workspace", {
-    name  = "My Workspace",
-    theme = "dark",
+Mux.registerWorkspace("my-game-layout", {
+    name  = "My Game Layout",
+    theme = "dark",          -- optional; uses the active theme if omitted
     paneSets = {
         {
             id   = "screen",
             zone = "screen",
             root = {
-                type = "split", direction = "v", ratio = 0.65,
-                a = { type = "pane", id = "output", name = "Main", mainConsoleHost = true },
-                b = { type = "pane", id = "sidebar", name = "Info" },
+                type = "split", direction = "v", ratio = 0.70,
+                a = {
+                    type            = "pane",
+                    id              = "output",
+                    name            = "Main",
+                    mainConsoleHost = true,
+                    noContent       = true,
+                    noTabs          = true,
+                },
+                b = {
+                    type = "split", direction = "h", ratio = 0.50,
+                    a = { type = "pane", id = "chat",   name = "Chat" },
+                    b = { type = "pane", id = "status", name = "Status",
+                          activeContent = "gmcp:char.vitals" },
+                },
             },
         },
     },
 })
 
--- Apply immediately (it auto-saves and will be restored next session)
-Mux.applyWorkspace("my-workspace")
+-- Apply immediately (also auto-saves as "current" after 1 second)
+Mux.applyWorkspace("my-game-layout")
 ```
 
-**Workspace node fields:**
+#### Zone types
 
-| Field | Description |
-|-------|-------------|
-| `type` | `"pane"` or `"split"` |
-| `id` | Unique string identifier for the pane |
-| `name` | Display name shown in the titlebar |
-| `mainConsoleHost` | `true` to host the main MUD output console |
-| `showTitlebar` | Show/hide the pane titlebar (default: from settings) |
-| `noContent` | Suppress the "Add Content" context menu item |
-| `activeContent` | Content type to apply automatically on load |
-| `direction` | `"v"` (left/right) or `"h"` (top/bottom) for splits |
-| `ratio` | Split point as a fraction 0.0–1.0 |
+The `zone` field on a paneSet controls how it interacts with the main console borders:
 
-Workspaces are auto-saved to `Muxlet_persistent/workspaces.json` after every structural change. The `"current"` workspace key always holds the live session state so your arrangement survives Mudlet restarts even without an explicit save.
+| Zone | Behaviour |
+|------|-----------|
+| `"screen"` | Covers the full window. Use `mainConsoleHost = true` on one pane to show game output. |
+| `"left"` | Left border panel. Pushes the console right by the paneSet width. |
+| `"right"` | Right border panel. Pushes the console left. |
+| `"top"` | Top border panel. Pushes the console down. |
+| `"bottom"` | Bottom border panel. Pushes the console up. |
+| `"float"` | Free-floating overlay. No border management; supply explicit geometry. |
 
-### Content system
+Only **one paneSet per workspace** is supported. Use splits within it to arrange multiple panels.
 
-Content types are named widget factories that users can attach to any pane or tab from the right-click context menu. They're registered at runtime and catalogued in `Muxlet_persistent/content.json`.
+#### Pane node fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | `"pane"` |
+| `id` | string | Unique identifier. Becomes the `panes["id"]` key. |
+| `name` | string | Display name shown in the titlebar. |
+| `mainConsoleHost` | bool | Routes the main game console into this pane. Only one pane should set this. |
+| `show_titlebar` | bool | Override the default titlebar visibility for this pane. |
+| `locked` | bool | Pane starts locked (drag, split, close disabled). |
+| `activeContent` | string | Content type id to apply automatically on load. |
+| `noContent` | bool | Suppress the Add Content context menu item. |
+| `noTabs` | bool | Prevent tabs from being enabled on this pane. |
+| `noResize` | bool | Disable corner resize handles. |
+| `noTitlebarToggle` | bool | Keep the titlebar permanently visible. |
+| `noRename` | bool | Prevent renaming via UI or command. |
+| `connectionAware` | bool | Show a connection-status overlay while disconnected. |
+
+#### Split node fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | `"split"` |
+| `direction` | string | `"v"` — left / right slots. `"h"` — top / bottom slots. |
+| `ratio` | number | Fraction of space given to slot `a` (0.0–1.0). Default `0.5`. |
+| `a` | node | First child (left for `"v"`, top for `"h"`). |
+| `b` | node | Second child (right for `"v"`, bottom for `"h"`). |
+
+#### Floating panes in workspaces
 
 ```lua
-Mux.registerContent("my_widget", {
-    name        = "My Widget",
-    description = "Shows something useful in a pane",
+Mux.registerWorkspace("with-float", {
+    paneSets = { ... },
+    floatingPanes = {
+        {
+            type   = "pane",
+            id     = "notes",
+            name   = "Notes",
+            floatX = 200, floatY = 150,
+            floatW = 380, floatH = 260,
+        },
+    },
+})
+```
 
-    -- Called when the user selects this content type.
-    -- `target` is either a pane or a tab; both expose the same interface.
+#### Runtime workspace API
+
+```lua
+Mux.applyWorkspace("my-game-layout")   -- restore a workspace
+Mux.saveWorkspace("afternoon-session") -- snapshot the live layout
+Mux.listWorkspaces()                   -- list all registered workspaces
+Mux.deleteWorkspace("old-layout")      -- remove a saved workspace
+```
+
+---
+
+### Content Types
+
+Content types are named widget factories. Once registered they appear in the right-click Add Content menu on every pane and tab — immediately, with no restart. The catalog is persisted to `Muxlet_persistent/content.json` so names survive reloads.
+
+```lua
+Mux.registerContent("my_hud", {
+    name        = "My HUD",
+    description = "Shows something useful in a pane",
+    singleton   = false,   -- true = only one active instance at a time
+
+    -- Called when the user selects this content type, or a workspace loads it.
+    -- `target` is a pane or a tab — both expose the same interface.
     apply = function(target)
         -- target.id        — unique string id
         -- target.name      — display name
-        -- target.content   — Geyser.Container: parent for your widgets
-        -- target.contentBg — Geyser.Label: hide this once you attach real content
+        -- target.content   — Geyser.Container; parent all widgets here
+        -- target.contentBg — Geyser.Label placeholder; hide once real content is attached
         local lbl = Geyser.Label:new({
-            name = target.id .. "_my_lbl",
+            name = target.id .. "_hud_lbl",
             x = "0%", y = "0%", width = "100%", height = "100%",
         }, target.content)
-        lbl:echo("Hello from My Widget")
+        lbl:rawEcho("Hello from My HUD")
         target.contentBg:hide()
     end,
 
-    -- Optional: called before a different content type is applied to this target.
+    -- Optional. Called before a different content type replaces this one.
     remove = function(target)
-        hideWindow(target.id .. "_my_lbl")
+        hideWindow(target.id .. "_hud_lbl")
     end,
 })
 ```
 
-### GMCP viewer
+> **Text colour in content widgets:** Use `rawEcho` instead of `echo` when the label's text colour is controlled by `setStyleSheet`. Geyser's `echo` wraps content in a `<div style="color: #ffffff;">` that overrides the stylesheet colour. `rawEcho` bypasses that wrapper and lets the Qt stylesheet take effect.
 
-`Mux.registerGmcpViewer(path)` creates a content type for any dot-path under `gmcp`. It pretty-prints whatever value is there — tables, arrays, strings, numbers, booleans — and refreshes automatically whenever the corresponding GMCP event fires.
+Set `singleton = true` to allow only one active instance at a time. If the user tries to open it in a second pane, a dialog tells them where it is currently open and the apply is aborted.
+
+#### Applying content programmatically
 
 ```lua
--- Register viewers for any GMCP paths your game exposes
+Mux._applyContent(panes["sidebar"], "my_hud")
+
+-- Apply to a specific tab
+local tab = panes["chat"]:_findTab(panes["chat"]._activeTabId)
+Mux._applyContent(tab, "my_hud")
+```
+
+#### Built-in: GMCP Inspector
+
+`gmcp_inspector` is pre-registered and always available in the Add Content menu. It provides an interactive, type-grouped live view of any GMCP path with click-to-browse, expand/collapse, and zoom controls.
+
+Use it in a workspace definition like any other content type:
+
+```lua
+{ type = "pane", id = "gmcp", name = "GMCP", activeContent = "gmcp_inspector" }
+```
+
+#### Built-in: Fixed-path GMCP viewer
+
+`Mux.registerGmcpViewer(path)` creates a simple HTML content type that pretty-prints a single GMCP path and auto-refreshes on the corresponding event. Use this when you want a dedicated pane that always shows one specific path:
+
+```lua
 Mux.registerGmcpViewer("char.vitals")   -- → content id "gmcp:char.vitals"
-Mux.registerGmcpViewer("char.status")   -- → content id "gmcp:char.status"
 Mux.registerGmcpViewer("room.info")     -- → content id "gmcp:room.info"
 ```
 
-The following are pre-registered and available out of the box:
+Use the resulting id in a workspace definition:
 
-| Content ID | Watches |
-|------------|---------|
-| `gmcp:char.vitals` | `gmcp.char.vitals` |
-| `gmcp:room.info` | `gmcp.room.info` |
-
-Use in a workspace pane definition:
 ```lua
 { type = "pane", id = "vitals", name = "Vitals", activeContent = "gmcp:char.vitals" }
 ```
 
-Or apply at runtime:
-```lua
-Mux._applyContent(panes.vitals, "gmcp:char.vitals")
-```
+---
 
 ### Themes
 
+A theme is a Lua table of CSS strings, pixel dimensions, and color values. Register from any package; registered themes appear in `mux themes` and the settings dropdown.
+
+The recommended pattern is to extend an existing built-in rather than specifying every field from scratch:
+
 ```lua
-Mux.registerTheme("my-theme", {
-    titlebarHeight = 22,
-    paneOuterCss   = "background-color: #1a1a2e; border: 2px solid #444;",
-    -- see dark.lua / light.lua in the Muxlet source for the full spec
+registerAnonymousEventHandler("muxletReady", function()
+    local base = Mux._themes["dark"]
+
+    Mux.registerTheme("my-theme", Mux._merge(base, {
+        titlebarHeight  = 28,
+        titlebarCss     = "background-color: #1e1e2e; border: none;",
+        paneOuterCss    = "background-color: #181825; border: 2px solid #313244; border-radius: 4px;",
+        focusedFrameCss = "background-color: #181825; border: 2px solid #cba6f7; border-radius: 4px;",
+        handleCss       = "background-color: #313244;",
+        handleHoverCss  = "background-color: #45475a;",
+    }))
+
+    Mux.applyTheme("my-theme")
+end)
+```
+
+`Mux._merge(base, overrides)` returns a shallow-merged table — every field in `overrides` replaces the corresponding field in `base`, and unspecified fields inherit from `base`. This means your theme stays visually coherent even as new fields are added in future Muxlet versions.
+
+Runtime theme API:
+
+```lua
+Mux.applyTheme("my-theme")   -- applies immediately to all live panes and splits
+Mux.currentTheme()           -- returns the active theme name
+Mux.activeTheme()            -- returns the active theme table
+```
+
+See `src/scripts/themes/dark.lua` in the source for the full field reference.
+
+---
+
+### Settings
+
+Muxlet has a two-level namespace settings system (`ns.key`). Packages register their own namespaces, which appear as tabs in the floating settings window.
+
+#### Registering settings
+
+```lua
+registerAnonymousEventHandler("muxletReady", function()
+
+    -- Boolean toggle
+    Mux.settings.register("my-package", "show_timestamps", {
+        tab         = "My Package",
+        description = "Show timestamps on chat messages",
+        default     = true,
+    })
+
+    -- Dropdown from a fixed list
+    Mux.settings.register("my-package", "color_scheme", {
+        description = "Color scheme for chat messages",
+        default     = "blue",
+        choices     = { "blue", "green", "amber", "white" },
+    })
+
+    -- Integer stepper (when max - min ≤ 100)
+    Mux.settings.register("my-package", "font_size", {
+        description = "Font size for MiniConsoles",
+        default     = 12,
+        min         = 8,
+        max         = 24,
+    })
+
+    -- Free-text entry (any other type)
+    Mux.settings.register("my-package", "server_host", {
+        description = "MUD server hostname",
+        default     = "example.com",
+    })
+
+end)
+```
+
+The widget type is inferred automatically:
+- `choices` table → dropdown
+- `boolean` default → toggle
+- `number` default with `min`/`max` where `max − min ≤ 100` → stepper
+- Everything else → text entry with an Apply button
+
+#### Tab hierarchy
+
+The `tab` field on the first registered key for a namespace sets the tab label. A slash creates a sub-tab:
+
+```lua
+Mux.settings.register("my-package", "first_key", {
+    tab = "My Package",
+    ...
+})
+
+Mux.settings.register("my-package/map", "zoom", {
+    tab = "My Package/Map",
+    ...
 })
 ```
+
+#### Reading, writing, and reacting to settings
+
+```lua
+-- Read (returns persisted value, or default if never set)
+local showTs = Mux.settings.get("my-package", "show_timestamps")
+
+-- Write (validates, persists, fires onChange)
+local ok, err = Mux.settings.set("my-package", "font_size", 14)
+
+-- Revert to default
+Mux.settings.clear("my-package", "font_size")
+
+-- React to changes (fires on both UI and script changes)
+Mux.settings.onChange("my-package", "font_size", function(value)
+    applyFontSize(value)
+end)
+```
+
+Settings are persisted to `Muxlet_persistent/settings.json`.
+
+---
 
 ### Dialog API
 
-Create floating popup windows that integrate with the Muxlet theme system.
+Use `Mux.createDialog()` for all floating popup windows. Dialogs created through this API:
+
+- Get automatic frame, border, and titlebar styling from the active theme.
+- Update instantly when the user switches themes.
+- Stay above workspace panes automatically.
+- Have a working × close button built in.
+- Expose a `pane.content` Geyser.Container for widget placement.
+
+#### Creating a dialog
 
 ```lua
 local d = Mux.createDialog({
-    title     = "Confirm",
-    width     = 420,
-    height    = 180,
-    resizable = false,
+    title  = "Apply Workspace?",
+    width  = 480,
+    height = 220,
+    -- x, y: pixel coordinates (defaults to centered in main window)
+    -- resizable = true  (default false)
 })
 
--- d.content is a Geyser.Container — add your widgets here
-local msg = Geyser.Label:new({
-    name = "my_dialog_msg", x = "4%", y = 14, width = "92%", height = 40,
+local body = Geyser.Label:new({
+    name = "my_dlg_body", x = "4%", y = 14, width = "92%", height = 50,
 }, d.content)
-msg:setStyleSheet(Mux.dialogCss.body)
-msg:echo("Apply the recommended workspace?")
+body:setStyleSheet(Mux.dialogCss.body)
+body:rawEcho("Apply the recommended workspace?")
 
-local btnOk = Geyser.Label:new({
-    name = "my_dialog_ok", x = "30%", y = 120, width = "40%", height = 30,
+local btnYes = Geyser.Label:new({
+    name = "my_dlg_yes", x = "10%", y = 140, width = "35%", height = 34,
 }, d.content)
-btnOk:setStyleSheet(Mux.dialogCss.buttonPrimary)
-btnOk:echo("<center>OK</center>")
-btnOk:setClickCallback(function()
-    d:close()
+btnYes:setStyleSheet(Mux.dialogCss.buttonPrimary)
+btnYes:rawEcho("<center>Yes, Apply</center>")
+btnYes:setClickCallback(function()
     Mux.applyWorkspace("my-workspace")
+    d:close()
 end)
 
--- Optional cleanup hook
-d.onClose = function() end
+local btnNo = Geyser.Label:new({
+    name = "my_dlg_no", x = "55%", y = 140, width = "35%", height = 34,
+}, d.content)
+btnNo:setStyleSheet(Mux.dialogCss.button)
+btnNo:rawEcho("<center>Skip</center>")
+btnNo:setClickCallback(function() d:close() end)
+
+d.onClose = function()
+    -- cleanup when dismissed
+end
 ```
 
-**Predefined CSS classes:**
+#### `createDialog` options
 
-| Key | Style |
-|-----|-------|
-| `Mux.dialogCss.body` | Body text (light blue) |
-| `Mux.dialogCss.subtext` | Muted caption text |
-| `Mux.dialogCss.divider` | 1 px horizontal rule |
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `title` | string | `"Dialog"` | Titlebar label |
+| `width` | number | `440` | Width in pixels |
+| `height` | number | `280` | Height in pixels |
+| `x` | number | centered | Left edge in pixels |
+| `y` | number | centered | Top edge in pixels |
+| `resizable` | bool | `false` | Enable corner resize handles |
+| `id` | string | auto | Custom pane id |
+
+#### Pre-built CSS palette
+
+Use these on labels inside your dialog:
+
+| Key | Use for |
+|-----|---------|
+| `Mux.dialogCss.body` | Primary body text |
+| `Mux.dialogCss.subtext` | Secondary / caption text |
+| `Mux.dialogCss.divider` | 1 px horizontal rule (set on a height=1 label) |
 | `Mux.dialogCss.button` | Neutral action button |
-| `Mux.dialogCss.buttonPrimary` | Affirmative / green button |
-| `Mux.dialogCss.buttonDanger` | Destructive / red button |
+| `Mux.dialogCss.buttonPrimary` | Affirmative button (green) |
+| `Mux.dialogCss.buttonDanger` | Destructive action button (red) |
 
-## Developer Guide
+---
 
-See [DEVELOPER.md](DEVELOPER.md) for the local dev workflow, build setup, and release process.
+### Accessing the Live Pane Graph
+
+```lua
+-- Lookup by id (panes proxy is always current after workspace changes)
+local p = panes["sidebar"]        -- equivalent to Mux._panes["sidebar"]
+local s = Mux.getSplit("split_0001")
+local ps = Mux.getPaneSet("screen")
+
+-- Focus control
+Mux.setFocus(panes["sidebar"])
+Mux.focusNext()
+Mux.focusPrev()
+Mux.focusAdjacent("right")   -- "left" | "right" | "up" | "down"
+
+-- Structural operations
+Mux.splitFocused("v", 0.6)   -- "v" = left/right, "h" = top/bottom; ratio 0.0–1.0
+Mux.floatFocused()
+Mux.embedFocused()
+Mux.zoomFocused()
+Mux.swapFocused()
+Mux.closeFocused()
+
+-- Raise all floating panes above embedded ones
+-- Call this after adding widgets to any floating or dialog pane.
+Mux.raiseFloatingPanes()
+```
+
+The `panes` global is a metatable proxy over `Mux._panes`. Always use `panes["id"]` rather than storing a direct reference — the proxy remains valid after `_clearWorkspace()` rebuilds the internal table.
+
+---
+
+### Developer Notes
+
+- All Mux Lua identifiers use **camelCase** — `titlebarHeight`, `setFocus`, `applyTheme`. Match this in any code that touches Mux internals.
+- `MuxPane`, `MuxSplit`, and `MuxPaneSet` are the three concrete classes. Instances are registered in `Mux._panes`, `Mux._splits`, and `Mux._paneSets` automatically on creation.
+- IDs (e.g. `pane_0003`) are user-facing and recycle freed numbers. Internal Geyser widget names (e.g. `mux_w_0042`) never recycle — Qt holds named widgets in memory and recycled names would alias destroyed widgets.
+- `Mux._scheduleAutoSave()` is called internally after every structural change. You do not need to call it unless you make external modifications to the pane graph.
+- `Mux._applyBorders()` recomputes all border sizes atomically from `Mux._borders`. Never call `setBorderSizes` directly — route through this function so all PaneSet contributions are combined correctly.
+
+---
 
 ## License
 

@@ -173,20 +173,6 @@ Mux.registerTheme("dark", {
         border-radius: 3px;
     ]],
 
-    -- ── Keybind hint overlay ──────────────────────────────────────────────────
-    hintOverlayCss = [[
-        background-color: rgba(15, 15, 24, 235);
-        border: 1px solid rgba(100, 180, 255, 0.55);
-        border-radius: 5px;
-        color: rgba(210, 220, 235, 0.95);
-        font-size: 11px;
-        font-family: "Consolas", "Monaco", monospace;
-        padding: 8px;
-    ]],
-    hintKeyColor    = "rgba(100, 200, 255, 1.0)",
-    hintActionColor = "rgba(200, 210, 220, 0.85)",
-    hintFooterColor = "rgba(140, 155, 175, 0.50)",
-
     -- ── Tab system ────────────────────────────────────────────────────────────
     tabBarHeight    = 22,
     tabAddBtnWidth  = 24,
@@ -251,6 +237,26 @@ Mux.registerTheme("dark", {
             color: rgba(225, 228, 248, 1.0);
         }
     ]],
+    -- Active tab that hosts a sub-tab bar: no bottom border so it merges visually
+    -- into the child tab bar below it.
+    tabActiveParentCss = [[
+        QLabel {
+            background-color: rgba(46, 48, 70, 255);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            border-top: 2px solid rgba(110, 170, 255, 0.65);
+            border-bottom: none;
+            color: rgba(228, 228, 248, 1.0);
+            font-size: 11px;
+            font-weight: bold;
+            padding: 0 4px;
+        }
+    ]],
+    -- Child tab bar background matches the active parent tab so they appear fused.
+    subTabBarCss = [[
+        background-color: rgba(46, 48, 70, 255);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+    ]],
+
     tabActiveTextColor      = "rgba(228, 228, 248, 1.0)",
     tabInactiveTextColor    = "rgba(155, 162, 198, 0.88)",
     tabMovingTextColor      = "rgba(255, 170, 170, 1.0)",
@@ -267,6 +273,8 @@ Mux.registerTheme("dark", {
 
     -- ── Titlebar text color (explicit; CSS color ignored for HTML-mode echo) ─────
     titlebarTextColor = "rgba(215, 215, 230, 0.92)",
+    -- Estimated bold 11px character width for infoBtn positioning and overflow detection.
+    titlebarCharWidth = 7,
 
     -- ── Connection awareness screen ────────────────────────────────────────────
     connScreenBg                     = "background-color:rgba(8,8,14,250);border:none;",
@@ -321,6 +329,7 @@ Mux.registerTheme("dark", {
         tabActiveText    = "rgba(215, 215, 230, 0.95)",
         tabInactiveText  = "rgba(160, 165, 185, 0.75)",
         tabHoverText     = "rgba(215, 218, 232, 0.95)",
+        descTextColor    = "rgba(120, 130, 170, 0.85)",
         rowDivider       = "rgba(255, 255, 255, 0.12)",
         -- Widget colors (dropdowns, steppers, text inputs, apply button)
         widgetBg         = "rgb(38, 38, 58)",

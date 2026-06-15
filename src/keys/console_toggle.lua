@@ -1,1 +1,0 @@
-Mux._toggleConsole()

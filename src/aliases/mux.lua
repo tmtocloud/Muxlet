@@ -26,19 +26,20 @@ if sub == "help" then
   mux reset                    — re-apply the default workspace (discard session state)
   mux status                   — show status overview
 
-  <white>Pane Actions<reset>
-  mux split v [ratio]          — split left / right  (vertical divider)
-  mux split h [ratio]          — split top / bottom  (horizontal divider)
-  mux zoom                     — zoom / unzoom focused pane
-  mux swap                     — swap focused pane with its sibling in the split
-  mux close                    — close focused pane
-  mux float                    — float focused pane
-  mux embed                    — embed / re-attach last floating pane
-  mux titlebar                 — toggle titlebar on focused pane
-  mux rename <name>            — rename focused pane
-  mux lock                     — lock focused pane
-  mux unlock                   — unlock focused pane
-  mux new [name]               — create a new floating pane
+  <white>Pane Actions (focused pane)<reset>
+  mux pane split v [ratio]     — split left / right  (vertical divider)
+  mux pane split h [ratio]     — split top / bottom  (horizontal divider)
+  mux pane zoom                — zoom / unzoom focused pane
+  mux pane swap                — swap focused pane with its sibling in the split
+  mux pane close               — close focused pane
+  mux pane float               — float focused pane
+  mux pane embed               — embed / re-attach last floating pane
+  mux pane titlebar            — toggle titlebar on focused pane
+  mux pane rename <name>       — rename focused pane
+  mux pane lock                — lock focused pane
+  mux pane unlock              — unlock focused pane
+  mux pane new [name]          — create a new floating pane
+  mux pane properties          — open Properties dialog for focused pane
 
   <white>Tab Actions (active tab in focused pane)<reset>
   mux tab add [name]           — add a new tab
@@ -64,10 +65,6 @@ if sub == "help" then
   <white>Themes<reset>
   mux theme [name]             — show or switch active theme
   mux themes                   — list all registered themes
-
-  <white>Keybinds<reset>
-  mux keys                     — list all keybindings
-  mux hint                     — show keybind hint overlay  (Alt+B)
 
   <white>Settings<reset>
   mux settings                 — toggle settings window
@@ -129,53 +126,51 @@ elseif sub == "workspace" then
 elseif sub == "workspaces" then
     Mux.listWorkspaces()
 
--- ── mux split ────────────────────────────────────────────────────────────────
-elseif sub == "split" then
-    local dir   = words[2] and words[2]:lower() or "v"
-    local ratio = tonumber(words[3]) or 0.5
-    if dir ~= "v" and dir ~= "h" then
-        Mux._echo("\n<red>[Muxlet]<reset> Usage: mux split v [ratio] — split left/right (vertical divider)\n"
-               .. "                       mux split h [ratio] — split top/bottom (horizontal divider)\n")
+-- ── mux pane ─────────────────────────────────────────────────────────────────
+elseif sub == "pane" then
+    local paneAction = words[2] and words[2]:lower() or ""
+    if paneAction == "split" then
+        local dir   = words[3] and words[3]:lower() or "v"
+        local ratio = tonumber(words[4]) or 0.5
+        if dir ~= "v" and dir ~= "h" then
+            Mux._echo("\n<red>[Muxlet]<reset> Usage: mux pane split v [ratio] — left/right\n"
+                   .. "                            mux pane split h [ratio] — top/bottom\n")
+        else
+            local internalDir = (dir == "v") and "h" or "v"
+            Mux.splitFocused(internalDir, ratio)
+        end
+    elseif paneAction == "zoom" then
+        Mux.zoomFocused()
+    elseif paneAction == "swap" then
+        Mux.swapFocused()
+    elseif paneAction == "close" then
+        Mux.closeFocused()
+    elseif paneAction == "float" then
+        Mux.floatFocused()
+    elseif paneAction == "embed" then
+        Mux.embedFocused()
+    elseif paneAction == "titlebar" then
+        Mux.toggleTitlebarFocused()
+    elseif paneAction == "rename" then
+        local newName = table.concat(words, " ", 3)
+        Mux.renameFocused(newName)
+    elseif paneAction == "lock" then
+        Mux.lockFocused()
+    elseif paneAction == "unlock" then
+        Mux.unlockFocused()
+    elseif paneAction == "new" then
+        local name = words[3] and table.concat(words, " ", 3) or "Pane"
+        Mux.newFloatingPane({ name = name })
+    elseif paneAction == "properties" or paneAction == "props" then
+        local fp = Mux._focusedPane
+        if fp then
+            Mux.showPaneProperties(fp)
+        else
+            Mux._echo("\n<red>[Muxlet]<reset> No focused pane.\n")
+        end
     else
-        local internalDir = (dir == "v") and "h" or "v"
-        Mux.splitFocused(internalDir, ratio)
+        Mux._echo("\n<cyan>[Muxlet]<reset> Pane commands: split | zoom | swap | close | float | embed | titlebar | rename | lock | unlock | new | properties\n")
     end
-
--- ── mux zoom ─────────────────────────────────────────────────────────────────
-elseif sub == "zoom" then
-    Mux.zoomFocused()
-
--- ── mux swap ─────────────────────────────────────────────────────────────────
-elseif sub == "swap" then
-    Mux.swapFocused()
-
--- ── mux close ────────────────────────────────────────────────────────────────
-elseif sub == "close" then
-    Mux.closeFocused()
-
--- ── mux float ────────────────────────────────────────────────────────────────
-elseif sub == "float" then
-    Mux.floatFocused()
-
--- ── mux embed ────────────────────────────────────────────────────────────────
-elseif sub == "embed" then
-    Mux.embedFocused()
-
--- ── mux titlebar ─────────────────────────────────────────────────────────────
-elseif sub == "titlebar" then
-    Mux.toggleTitlebarFocused()
-
--- ── mux rename ───────────────────────────────────────────────────────────────
-elseif sub == "rename" then
-    local newName = table.concat(words, " ", 2)
-    Mux.renameFocused(newName)
-
--- ── mux lock / unlock ─────────────────────────────────────────────────────────
-elseif sub == "lock" then
-    Mux.lockFocused()
-
-elseif sub == "unlock" then
-    Mux.unlockFocused()
 
 -- ── mux tab ───────────────────────────────────────────────────────────────────
 elseif sub == "tab" then
@@ -199,11 +194,6 @@ elseif sub == "tab" then
     else
         Mux._echo("\n<cyan>[Muxlet]<reset> Tab commands: add [name] | close | rename [name] | lock | unlock | next | prev\n")
     end
-
--- ── mux new ──────────────────────────────────────────────────────────────────
-elseif sub == "new" then
-    local name = words[2] and table.concat(words, " ", 2) or "Pane"
-    Mux.newFloatingPane({ name = name })
 
 -- ── mux focus ────────────────────────────────────────────────────────────────
 elseif sub == "focus" then
@@ -258,13 +248,6 @@ elseif sub == "settings" then
             Mux._echo("\n<red>[Muxlet]<reset> Usage: mux settings [list [ns] | get ns.key | set ns.key val | clear ns.key]\n")
         end
     end
-
--- ── mux keys ─────────────────────────────────────────────────────────────────
-elseif sub == "keys" then
-    Mux.listBindings()
-
-elseif sub == "hint" then
-    Mux._showHintOverlay()
 
 -- ── mux version ──────────────────────────────────────────────────────────────
 elseif sub == "version" then

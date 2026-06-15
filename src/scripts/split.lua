@@ -19,7 +19,7 @@
 --
 -- With slotA.sf = r and slotB.sf = (1-r):
 --   dynamic_count = r + (1-r) = 1
---   slotA gets (dynamic_space * r)  pixels
+--   slotA gets (dynamic_space * r)     pixels
 --   slotB gets (dynamic_space * (1-r)) pixels
 --
 -- Drag resize:
@@ -49,10 +49,6 @@ function MuxSplit:init(opts)
     local parent   = opts.parent or Geyser
     local handlePx = theme.handleSize
 
-    -- ── Box container (VBox or HBox) ──────────────────────────────────────────
-    -- This is what fills the parent space.  Children are added to it as:
-    --   slotA (Dynamic)  → handle (Fixed)  → slotB (Dynamic)
-    -- VBox.organize() / HBox.organize() lay them out automatically.
     local BoxClass = (self.direction == "v") and Geyser.VBox or Geyser.HBox
     self.box = BoxClass:new({
         name   = self.id .. "_box",
@@ -62,7 +58,6 @@ function MuxSplit:init(opts)
         height = opts.height or "100%",
     }, parent)
 
-    -- ── Slot A (top or left) ──────────────────────────────────────────────────
     self.slotA = Geyser.Container:new({
         name             = self.id .. "_slot_a",
         h_policy         = Geyser.Dynamic,
@@ -71,8 +66,6 @@ function MuxSplit:init(opts)
         v_stretch_factor = (self.direction == "v") and self.ratio or 1.0,
     }, self.box)
 
-    -- ── Resize handle ─────────────────────────────────────────────────────────
-    -- A Label with Fixed policy in the constrained axis.
     -- For "v" split: Fixed height, Dynamic width (full-width horizontal bar).
     -- For "h" split: Fixed width, Dynamic height (full-height vertical bar).
     local handleCons
@@ -98,7 +91,6 @@ function MuxSplit:init(opts)
         or  (theme.handleCursorH or "ResizeHorizontal")
     self.handle:setCursor(cursor)
 
-    -- ── Slot B (bottom or right) ──────────────────────────────────────────────
     self.slotB = Geyser.Container:new({
         name             = self.id .. "_slot_b",
         h_policy         = Geyser.Dynamic,
@@ -107,18 +99,14 @@ function MuxSplit:init(opts)
         v_stretch_factor = (self.direction == "v") and (1 - self.ratio) or 1.0,
     }, self.box)
 
-    -- ── Handle drag callbacks ─────────────────────────────────────────────────
     self:_setupHandleDrag(theme, handlePx)
 
-    -- Register globally
     Mux._splits[self.id] = self
     Mux._log("MuxSplit created: %s dir=%s ratio=%.2f", self.id, self.direction, self.ratio)
 end
 
--- ── Handle drag mechanics ─────────────────────────────────────────────────────
-
 function MuxSplit:_setupHandleDrag(theme, handlePx)
-    -- Drag state: local per-split, no shared globals → multiple splits coexist.
+    -- Drag state: local per-split so multiple splits can be dragged concurrently.
     local drag = {
         active    = false,
         startPos  = 0,     -- globalX or globalY at mouse-down
@@ -137,8 +125,8 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
 
     self.handle:setClickCallback(function(event)
         if event.button ~= "LeftButton" then return end
-        drag.active   = true
-        -- Measure slotA and dynamic space NOW (after any prior organise call).
+        drag.active = true
+        -- Measure slotA and dynamic space NOW (after any prior organize call).
         if self.direction == "v" then
             drag.startPos  = event.globalY
             drag.slotAPx   = self.slotA:get_height()
@@ -155,7 +143,7 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
         local pos    = (self.direction == "v") and event.globalY or event.globalX
         local delta  = pos - drag.startPos
         local target = drag.slotAPx + delta
-        -- Guard against zero dynamic space (layout not yet rendered)
+        -- Guard against zero dynamic space (layout not yet rendered).
         if drag.dynamicPx <= 0 then return end
         local newR = Mux._clamp(target / drag.dynamicPx, minRatio, 1 - minRatio)
         self:_setRatio(newR)
@@ -169,8 +157,6 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
     end)
 end
 
--- ── Ratio update ──────────────────────────────────────────────────────────────
-
 function MuxSplit:_setRatio(r)
     self.ratio = r
     if self.direction == "v" then
@@ -182,33 +168,29 @@ function MuxSplit:_setRatio(r)
     end
     -- organize() updates the constraint closures (get_x/y/w/h) for all children.
     -- reposition() then cascades moveWindow/resizeWindow to every native-window
-    -- descendant (Labels, MiniConsoles, etc.) using those updated closures.
+    -- descendant using those updated closures.
     -- VBox.reposition() calls Container.reposition first then organize internally,
-    -- so we must call organize() before reposition() to ensure correct ordering.
+    -- so organize() must be called first to ensure correct ordering.
     self.box:organize()
     self.box:reposition()
-    -- Keep the main console clipped to its host pane after any ratio change.
     for _, p in pairs(Mux._panes) do
-        if p.mainConsoleHost then p:updateConsoleBorders() end
+        if p.onReposition then p.onReposition(p) end
     end
 end
 
--- ── Place content in a slot ───────────────────────────────────────────────────
--- Accepts a MuxPane or a MuxSplit.  Reparents its root widget into the slot.
-
+-- Accepts a MuxPane or a MuxSplit. Reparents its root widget into the slot.
 function MuxSplit:place(child, side)
     assert(side == "a" or side == "b", "side must be 'a' or 'b'")
     local slot = (side == "a") and self.slotA or self.slotB
 
     local rootWidget
     if child.outer then
-        -- MuxPane: reparent outer Container into the slot
         rootWidget      = child.outer
         child._slot     = slot
         child._split    = self
         child._slotSide = side
+        if child._updateZoomBtn then child:_updateZoomBtn() end
     elseif child.box then
-        -- Nested MuxSplit: reparent its box into the slot; record parent for collapse
         rootWidget          = child.box
         child._parentSlot   = slot
         child._parentSplit  = self
@@ -229,13 +211,11 @@ function MuxSplit:place(child, side)
     Mux._log("MuxSplit.place: %s → slot_%s of %s", child.id or "?", side, self.id)
 end
 
--- ── Collapse a slot ───────────────────────────────────────────────────────────
 -- Called when the pane in `closedSide` has been closed.
 -- Promotes the sibling to fill this split's place in the hierarchy, then
--- removes the split from the registry.  The caller has already hidden its outer.
-
+-- removes the split from the registry.
 function MuxSplit:collapseSlot(closedSide)
-    -- Clear split/slot refs on the closed-side child if it is a floating pane, so
+    -- Clear split/slot refs on the closed-side child if it is a floating pane so
     -- it can re-embed anywhere once this split is retired.
     local closedChild = (closedSide == "a") and self.childA or self.childB
     if closedChild and closedChild.outer and closedChild.floating then
@@ -249,16 +229,15 @@ function MuxSplit:collapseSlot(closedSide)
     local siblingSide = (closedSide == "a") and "b" or "a"
     local sibling = (siblingSide == "a") and self.childA or self.childB
 
-    -- The sibling is a floating pane — not physically embedded in this split.
     if sibling and sibling.outer and sibling.floating then
-        -- Find the ghost at the sibling's slot by slot-container lookup (no pane→ghost key).
+        -- Ghost slot lookup is by slot container (not pane→ghost) so promotion
+        -- works correctly regardless of which pane left the ghost.
         local siblingSlot = (siblingSide == "a") and self.slotA or self.slotB
         local sibGhost    = Mux._findGhostBySlot(siblingSlot)
 
         if sibGhost then
-            -- Sibling still has a ghost slot.  Promote that ghost to fill this
-            -- split's place in the parent so the column/row stays visible as a
-            -- single ghost rather than vanishing entirely.
+            -- Promote the sibling's ghost to fill this split's space in the parent
+            -- so the column/row stays visible as a single ghost rather than vanishing.
             sibGhost.label:changeContainer(parentContainer)
             sibGhost.label:move("0%", "0%")
             sibGhost.label:resize("100%", "100%")
@@ -268,17 +247,15 @@ function MuxSplit:collapseSlot(closedSide)
                 Mux.raiseFloatingPanes()
             end
 
-            -- Update the ghost record so its dismiss button calls the right split.
             sibGhost.slot  = parentContainer
             sibGhost.split = self._parentSplit
             sibGhost.side  = self._parentSide
 
-            -- Re-wire the sibling pane's slot bookkeeping to the promoted location.
             sibling._slot     = parentContainer
             sibling._split    = self._parentSplit
             sibling._slotSide = self._parentSide
+            if sibling._updateZoomBtn then sibling:_updateZoomBtn() end
 
-            -- Update the parent's child pointer (or PaneSet root) to the sibling.
             if self._parentSplit then
                 if self._parentSide == "a" then self._parentSplit.childA = sibling
                 else                           self._parentSplit.childB = sibling
@@ -293,7 +270,6 @@ function MuxSplit:collapseSlot(closedSide)
                 end
             end
 
-            -- Retire this split (the promoted ghost already occupies the space).
             self.box:hide()
             if parentContainer then
                 pcall(function() parentContainer:remove(self.box) end)
@@ -307,14 +283,14 @@ function MuxSplit:collapseSlot(closedSide)
                 parentContainer:reposition()
             end
             for _, p in pairs(Mux._panes) do
-                if p.mainConsoleHost then p:updateConsoleBorders() end
+                if p.onReposition then p.onReposition(p) end
             end
             return
         else
-            -- No ghost — the sibling is truly absent; free its stale refs.
             sibling._split    = nil
             sibling._slot     = nil
             sibling._slotSide = nil
+            if sibling._updateZoomBtn then sibling:_updateZoomBtn() end
             sibling = nil
         end
     end
@@ -325,7 +301,6 @@ function MuxSplit:collapseSlot(closedSide)
         self.box:hide()
         if parentContainer then parentContainer:remove(self.box) end
         Mux._splits[self.id] = nil
-        -- Sweep ghost slots, freeing vacating-pane refs so those floaters can move freely.
         local keysToRemove = {}
         for key, ghost in pairs(Mux._ghostSlots) do
             if ghost.split == self then keysToRemove[#keysToRemove + 1] = key end
@@ -333,8 +308,6 @@ function MuxSplit:collapseSlot(closedSide)
         for _, key in ipairs(keysToRemove) do
             Mux._removeGhostSlot(key)
         end
-        -- Cascade: collapse the slot we occupied in the parent split, or clear
-        -- the PaneSet root reference if we were at the top of the tree.
         if self._parentSplit then
             self._parentSplit:collapseSlot(self._parentSide)
         else
@@ -356,17 +329,14 @@ function MuxSplit:collapseSlot(closedSide)
 
     -- changeContainer internally calls self.container:remove(self) on the old slot,
     -- which removes from BOTH windowList AND the windows ordered array (what VBox
-    -- uses in organize()).  No manual eviction needed before this call.
+    -- uses in organize()). No manual eviction needed before this call.
     siblingWidget:changeContainer(parentContainer)
     siblingWidget:move("0%", "0%")
     siblingWidget:resize("100%", "100%")
     siblingWidget:reposition()
 
-    -- Update sibling's parent-split bookkeeping to reflect new position.
     if sibling.outer then
-        -- Sibling is a MuxPane.
         if self._parentSplit then
-            -- Grandparent is another MuxSplit — update its child pointer.
             local gp = self._parentSplit
             if self._parentSide == "a" then
                 gp.childA         = sibling
@@ -380,13 +350,12 @@ function MuxSplit:collapseSlot(closedSide)
                 sibling._slotSide = "b"
             end
         else
-            -- Grandparent is a PaneSet outer — clear split refs.
             sibling._split    = nil
             sibling._slot     = parentContainer
             sibling._slotSide = nil
         end
+        if sibling._updateZoomBtn then sibling:_updateZoomBtn() end
     elseif sibling.box then
-        -- Sibling is a nested MuxSplit — propagate parent info.
         sibling._parentSplit = self._parentSplit
         sibling._parentSide  = self._parentSide
         if self._parentSplit then
@@ -397,7 +366,6 @@ function MuxSplit:collapseSlot(closedSide)
         end
     end
 
-    -- Update PaneSet root reference if this split was the root.
     for _, ps in pairs(Mux._paneSets) do
         if ps.root == self then
             ps.root = sibling
@@ -406,16 +374,15 @@ function MuxSplit:collapseSlot(closedSide)
         end
     end
 
-    -- Retire this split's box.  Use remove() which clears BOTH windowList AND
-    -- the windows ordered array — VBox.organize() iterates windows, so simply
-    -- clearing windowList (as done previously) left the retired split still
-    -- consuming layout space.
+    -- Use remove() which clears BOTH windowList AND the windows ordered array —
+    -- VBox.organize() iterates windows, so simply clearing windowList (as done
+    -- previously) left the retired split still consuming layout space.
     self.box:hide()
     parentContainer:remove(self.box)
     Mux._splits[self.id] = nil
 
     -- Re-layout from the grandparent's perspective so the promoted sibling fills
-    -- its new space immediately.  For a nested case the grandparent is another
+    -- its new space immediately. For a nested case the grandparent is another
     -- MuxSplit whose VBox needs organize(); for the root case reposition() on the
     -- PaneSet outer is sufficient.
     if self._parentSplit then
@@ -425,23 +392,15 @@ function MuxSplit:collapseSlot(closedSide)
         parentContainer:reposition()
     end
 
-    -- Sync main console borders now that the layout has changed.
     for _, p in pairs(Mux._panes) do
-        if p.mainConsoleHost then p:updateConsoleBorders() end
+        if p.onReposition then p.onReposition(p) end
     end
 
     Mux._log("MuxSplit.collapseSlot: %s retired, sibling promoted", self.id)
 end
 
--- ── Split an existing pane ────────────────────────────────────────────────────
--- Replaces pane (which must currently be placed somewhere) with a new MuxSplit
--- that contains:  side "a" → the existing pane,  side "b" → a new empty pane.
--- Returns the new MuxSplit.
---
--- Usage:
---   local newSplit = Mux.splitPane(pane, "v", 0.5)
---   -- newSplit.slotB is now an empty pane ready for content
---
+-- Replaces `pane`'s slot with a new inner MuxSplit containing the existing pane
+-- in slot "a" and a new blank pane in slot "b". Returns the new MuxSplit.
 function MuxSplit:_splitPaneInSlot(pane, direction, ratio)
     local side = pane._slotSide
     if not side then
@@ -450,24 +409,18 @@ function MuxSplit:_splitPaneInSlot(pane, direction, ratio)
     end
     local slot = (side == "a") and self.slotA or self.slotB
 
-    -- Create the new inner split occupying the same slot
     local newSplit = MuxSplit:new({
         direction = direction or "v",
         ratio     = ratio or 0.5,
         parent    = slot,
     })
 
-    -- Move the existing pane into newSplit slotA
     newSplit:place(pane, "a")
 
-    -- Create a blank pane in newSplit slotB, inheriting the parent PaneSet reference
-    -- so drag-to-float detection works correctly for nested splits.
     local newPane = MuxPane:new({ parent = newSplit.slotB })
     newSplit:place(newPane, "b")
     newPane._paneSet = pane._paneSet
 
-    -- Record this split's slot as the new split's parent so collapseSlot can
-    -- correctly re-wire bookkeeping when the inner split is later retired.
     newSplit._parentSplit = self
     newSplit._parentSide  = side
 
@@ -475,25 +428,19 @@ function MuxSplit:_splitPaneInSlot(pane, direction, ratio)
     else                self.childB = newSplit
     end
 
-    -- Organize from the parent split downward so the new inner VBox/HBox gets
-    -- its slot sizes calculated and all child native windows are positioned.
     self.box:organize()
     self.box:reposition()
 
-    -- Sync main console borders in case Main pane geometry changed.
     for _, p in pairs(Mux._panes) do
-        if p.mainConsoleHost then p:updateConsoleBorders() end
+        if p.onReposition then p.onReposition(p) end
     end
 
     return newSplit
 end
 
--- ── Split a slot and embed an incoming floating pane ─────────────────────────
 -- Creates a new inner split replacing existingPane's slot.
--- floatOnSide: "a" | "b" — which new slot the floating pane occupies.
+-- floatOnSide: "a"|"b" — which new slot the floating pane occupies.
 -- existingPane is placed on the opposite side.
--- ratio: fraction of the new split's space given to slotA.
-
 function MuxSplit:_splitAndEmbed(existingPane, floatingPane, direction, floatOnSide, ratio)
     local existingSide       = existingPane._slotSide
     local existingGoesToSide = (floatOnSide == "a") and "b" or "a"
@@ -503,7 +450,6 @@ function MuxSplit:_splitAndEmbed(existingPane, floatingPane, direction, floatOnS
         direction = direction, ratio = ratio or 0.5, parent = slot,
     })
 
-    -- Move existing pane into its new side of the inner split.
     local existingSlot = (existingGoesToSide == "a") and newSplit.slotA or newSplit.slotB
     existingPane.outer:changeContainer(existingSlot)
     moveWindow(existingPane.outer.name, 0, 0)
@@ -515,8 +461,8 @@ function MuxSplit:_splitAndEmbed(existingPane, floatingPane, direction, floatOnS
     if existingGoesToSide == "a" then newSplit.childA = existingPane
     else                             newSplit.childB = existingPane
     end
+    if existingPane._updateZoomBtn then existingPane:_updateZoomBtn() end
 
-    -- Embed floating pane into the other side.
     local floatSlot = (floatOnSide == "a") and newSplit.slotA or newSplit.slotB
     floatingPane._slot     = floatSlot
     floatingPane._split    = newSplit
@@ -527,7 +473,6 @@ function MuxSplit:_splitAndEmbed(existingPane, floatingPane, direction, floatOnS
     end
     floatingPane:embed(floatSlot)
 
-    -- Wire parent bookkeeping so collapseSlot works correctly up the tree.
     newSplit._parentSplit = self
     newSplit._parentSide  = existingSide
     if existingSide == "a" then self.childA = newSplit
@@ -537,17 +482,15 @@ function MuxSplit:_splitAndEmbed(existingPane, floatingPane, direction, floatOnS
     self.box:organize()
     self.box:reposition()
     for _, p in pairs(Mux._panes) do
-        if p.mainConsoleHost then p:updateConsoleBorders() end
+        if p.onReposition then p.onReposition(p) end
     end
     Mux._log("MuxSplit._splitAndEmbed: new split %s in slot_%s of %s",
         newSplit.id, existingSide, self.id)
     return newSplit
 end
 
--- ── Swap slots ────────────────────────────────────────────────────────────────
--- Swaps the content of slotA and slotB in place.  Updates all parent/slot
--- bookkeeping so focus, close, and collapse all still work correctly after swap.
-
+-- Swaps the content of slotA and slotB. Updates all parent/slot bookkeeping
+-- so focus, close, and collapse all still work correctly after the swap.
 function MuxSplit:swapSlots()
     local ca = self.childA
     local cb = self.childB
@@ -559,14 +502,12 @@ function MuxSplit:swapSlots()
     local wa = ca.outer or ca.box
     local wb = cb.outer or cb.box
 
-    -- Move a's widget into slotB, b's widget into slotA.
     wa:changeContainer(self.slotB)
     wa:move("0%", "0%"); wa:resize("100%", "100%"); wa:reposition()
 
     wb:changeContainer(self.slotA)
     wb:move("0%", "0%"); wb:resize("100%", "100%"); wb:reposition()
 
-    -- Update MuxPane bookkeeping.
     if ca.outer then
         ca._slot     = self.slotB
         ca._slotSide = "b"
@@ -582,27 +523,22 @@ function MuxSplit:swapSlots()
         cb._parentSide = "a"
     end
 
-    -- Swap the split's own child pointers.
     self.childA = cb
     self.childB = ca
 
-    -- Re-layout and sync main console borders.
     self.box:organize()
     self.box:reposition()
     for _, p in pairs(Mux._panes) do
-        if p.mainConsoleHost then p:updateConsoleBorders() end
+        if p.onReposition then p.onReposition(p) end
     end
     Mux._scheduleAutoSave()
     Mux._log("MuxSplit.swapSlots: %s swapped a↔b", self.id)
 end
 
--- ── Zoom / unzoom ─────────────────────────────────────────────────────────────
 -- Zoom: expand one slot to fill all dynamic space, collapsing the other.
 -- Implemented by zeroing the non-zoomed slot's stretch factor and setting
--- the handle height to 0px so VBox/HBox allocates it no space.
---
--- Calling zoom() on an already-zoomed split toggles back (same as unzoom).
-
+-- the handle size to 0px so VBox/HBox allocates it no space.
+-- Calling zoom() again on the same split toggles back (same as unzoom).
 function MuxSplit:zoom(side)
     assert(side == "a" or side == "b", "zoom: side must be 'a' or 'b'")
     if self._zoomed then
@@ -615,14 +551,12 @@ function MuxSplit:zoom(side)
         and self.handle:get_height()
         or  self.handle:get_width()
 
-    -- Collapse the handle to 0px (removes its space contribution to VBox/HBox)
     if self.direction == "v" then
         self.handle:resize(nil, "0px")
     else
         self.handle:resize("0px", nil)
     end
 
-    -- Give ALL dynamic space to the zoomed slot; zero the other
     if self.direction == "v" then
         self.slotA.v_stretch_factor = (side == "a") and 1.0 or 0.0
         self.slotB.v_stretch_factor = (side == "b") and 1.0 or 0.0
@@ -639,22 +573,18 @@ end
 
 function MuxSplit:unzoom()
     if not self._zoomed then return end
-    -- Restore handle size
     local h = self._savedHandleH or (Mux.activeTheme().handleSize or 5)
     if self.direction == "v" then
-        self.handle:resize(nil, Mux._px(h))
+        self.handle:resize(nil, Mux._toPx(h))
     else
-        self.handle:resize(Mux._px(h), nil)
+        self.handle:resize(Mux._toPx(h), nil)
     end
     self.handle:show()
-    -- Restore saved ratio
     self:_setRatio(self._savedRatio or 0.5)
     self._zoomed = nil
     Mux._scheduleAutoSave()
     Mux._log("MuxSplit unzoomed: %s", self.id)
 end
-
--- ── Show / hide entire split tree ─────────────────────────────────────────────
 
 function MuxSplit:show()
     self.box:show()
@@ -663,8 +593,6 @@ end
 function MuxSplit:hide()
     self.box:hide()
 end
-
--- ── Theme refresh ─────────────────────────────────────────────────────────────
 
 function MuxSplit:applyTheme()
     local theme = Mux.activeTheme()

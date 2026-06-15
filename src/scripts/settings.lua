@@ -26,49 +26,43 @@
 --
 -- NOTE: Geyser.CommandLine does not support setStyleSheet() — Mudlet limitation.
 
--- ── Data API state (survive package reloads) ──────────────────────────────────
 Mux.settings = Mux.settings or {}
 Mux.settings._registry  = Mux.settings._registry  or {}
 Mux.settings._order     = Mux.settings._order     or {}
 Mux.settings._data      = Mux.settings._data      or {}
 Mux.settings._onChange  = Mux.settings._onChange  or {}
+-- Tab path per namespace — set via the optional `tab` field in register() cfg.
+-- Format: "TopLabel" for a top-level tab, "TopLabel/SubLabel" for nested.
+-- Drives UI tab hierarchy only; has no effect on get/set/clear.
+Mux.settings._tabPaths  = Mux.settings._tabPaths  or {}
 Mux._persistentDir      = getMudletHomeDir() .. "/Muxlet_persistent"
 lfs.mkdir(Mux._persistentDir)
 Mux.settings._file      = Mux._persistentDir .. "/settings.json"
 
--- ── UI state (survive package reloads) ───────────────────────────────────────
 Mux._settings_ui = Mux._settings_ui or {
-    window      = nil,
-    visible     = false,
-    tabs        = {},
-    content     = nil,
-    contentBox  = nil,
-    rows        = {},
-    drawEpoch   = 0,
-    currentTab  = nil,
-    dropdown    = nil,
-    tooltip     = nil,
+    window     = nil,
+    visible    = false,
+    rows       = {},
+    drawEpoch  = 0,
+    currentTab = nil,
+    dropdown   = nil,
+    tooltip    = nil,
 }
 local settingsUi = Mux._settings_ui
 
--- ── Layout constants ──────────────────────────────────────────────────────────
 local rowH      = 56
 local rowHWide  = 64
-local tabH      = 28
 local widgetW   = 130
 local widgetH   = 26
 local padL      = 10
 local padR      = 6
 local resetW    = 20
-local tabCharW  = 8
-local tabPad    = 24
 local footerPad = 16
 
--- ── CSS upvalues (set in buildWindow from active theme) ───────────────────────
 -- ALL echo() calls must use explicit <span style='color:...'> — Mudlet QLabels do
 -- not reliably apply CSS color: to HTML content, so text falls back to Qt's palette
 -- default (which can be white, making text invisible on light backgrounds).
-local cssOdd, cssEven, cssTabActive, cssTabInactive, cssName
+local cssOdd, cssEven, cssName
 local cssToggleOn, cssToggleOff
 local cssWidgetBtn, cssStepperBtn, cssStepperVal
 local cssTextInput, cssApplyBtn
@@ -77,13 +71,9 @@ local cssResetIcon
 local cssHelpIcon
 -- Plain color strings used directly in HTML echo() spans.
 local labelFgColor        -- setting name labels
-local settingsTabActiveFg -- active settings-window tab text
-local settingsTabInactiveFg
 local toggleOnFgColor     -- toggle TRUE state
 local toggleOffFgColor    -- toggle FALSE state
 local widgetFgColor       -- dropdown, stepper, apply-btn text
-
--- ── Persistence ───────────────────────────────────────────────────────────────
 
 function Mux.settings.save()
     local ok, err = pcall(function()
@@ -120,12 +110,24 @@ function Mux.settings.load()
     return true
 end
 
--- ── Registry ──────────────────────────────────────────────────────────────────
-
+-- Register a setting key.
+--
+-- Optional cfg.tab sets the UI tab path for this namespace, e.g.:
+--   tab = "Muxlet"              → top-level "Muxlet" tab
+--   tab = "Fed2-Tools/Map"      → "Map" sub-tab under top-level "Fed2-Tools"
+-- The tab path is remembered on the first registration for each namespace and
+-- ignored on subsequent ones (no need to repeat it on every key).
+-- If no tab is ever specified for a namespace, the namespace key is used as-is
+-- for a top-level tab label.
 function Mux.settings.register(ns, key, cfg)
     assert(type(ns)  == "string", "settings.register: ns must be a string")
     assert(type(key) == "string", "settings.register: key must be a string")
     assert(type(cfg) == "table",  "settings.register: cfg must be a table")
+
+    -- Store tab path on first registration for this namespace.
+    if cfg.tab and not Mux.settings._tabPaths[ns] then
+        Mux.settings._tabPaths[ns] = cfg.tab
+    end
 
     Mux.settings._registry[ns] = Mux.settings._registry[ns] or {}
     Mux.settings._order[ns]    = Mux.settings._order[ns]    or {}
@@ -146,22 +148,6 @@ function Mux.settings.register(ns, key, cfg)
     if not found then table.insert(Mux.settings._order[ns], key) end
 
     Mux._log("settings.register: %s.%s (default=%s)", ns, key, tostring(cfg.default))
-end
-
--- Bulk-register an ordered list: { {key=k, cfg={...}}, ... }
--- The namespace becomes a tab in the settings window.
--- Call this from any package's init script at load time (or any time;
--- the window rebuilds its tab bar automatically on next open).
-function Mux.settings.registerTab(ns, settingsList)
-    assert(type(ns) == "string" and ns ~= "", "registerTab: ns must be a non-empty string")
-    assert(type(settingsList) == "table",     "registerTab: settingsList must be a table")
-    for _, entry in ipairs(settingsList) do
-        if type(entry.key) == "string" and type(entry.cfg) == "table" then
-            Mux.settings.register(ns, entry.key, entry.cfg)
-        else
-            Mux._warn("registerTab: skipping malformed entry in namespace '%s'", ns)
-        end
-    end
 end
 
 function Mux.settings.get(ns, key)
@@ -226,6 +212,10 @@ function Mux.settings.onChange(ns, key, fn)
     Mux.settings._onChange[ns .. "." .. key] = fn
 end
 
+local function nsDisplay(ns)
+    return ns == "mux" and "Muxlet" or ns
+end
+
 function Mux.settings.handleCommand(component, argsStr)
     if not argsStr or argsStr == "" or argsStr == "list" then
         Mux.settings.showList(component); return true
@@ -236,55 +226,57 @@ function Mux.settings.handleCommand(component, argsStr)
     if sub == "list" then
         Mux.settings.showList(component); return true
     end
+    local disp = nsDisplay(component)
     if sub == "get" then
         if not words[2] then
-            cecho(string.format("\n<red>[%s]<reset> Usage: settings get <name>\n", component))
+            cecho(string.format("\n<red>[%s]<reset> Usage: settings get <name>\n", disp))
             return false
         end
         Mux.settings.showSetting(component, words[2]); return true
     end
     if sub == "set" then
         if not words[2] or not words[3] then
-            cecho(string.format("\n<red>[%s]<reset> Usage: settings set <name> <value>\n", component))
+            cecho(string.format("\n<red>[%s]<reset> Usage: settings set <name> <value>\n", disp))
             return false
         end
         local value = table.concat(words, " ", 3)
         local ok, err = Mux.settings.set(component, words[2], value)
         if ok then
             cecho(string.format("\n<green>[%s]<reset> <cyan>%s<reset> = <yellow>%s<reset>\n",
-                component, words[2], value))
+                disp, words[2], value))
         else
-            cecho(string.format("\n<red>[%s]<reset> %s\n", component, err or "unknown error"))
+            cecho(string.format("\n<red>[%s]<reset> %s\n", disp, err or "unknown error"))
         end
         return ok
     end
     if sub == "clear" then
         if not words[2] then
-            cecho(string.format("\n<red>[%s]<reset> Usage: settings clear <name>\n", component))
+            cecho(string.format("\n<red>[%s]<reset> Usage: settings clear <name>\n", disp))
             return false
         end
         local ok, err = Mux.settings.clear(component, words[2])
         if ok then
             cecho(string.format("\n<green>[%s]<reset> <cyan>%s<reset> cleared (default: <yellow>%s<reset>)\n",
-                component, words[2], tostring(Mux.settings.get(component, words[2]))))
+                disp, words[2], tostring(Mux.settings.get(component, words[2]))))
         else
-            cecho(string.format("\n<red>[%s]<reset> %s\n", component, err or "error"))
+            cecho(string.format("\n<red>[%s]<reset> %s\n", disp, err or "error"))
         end
         return ok
     end
-    cecho(string.format("\n<red>[%s]<reset> Unknown settings command: %s\n", component, sub))
+    cecho(string.format("\n<red>[%s]<reset> Unknown settings command: %s\n", disp, sub))
     cecho("<cyan>Available: list, get, set, clear<reset>\n")
     return false
 end
 
 function Mux.settings.showList(ns)
-    local reg = Mux.settings._registry[ns]
+    local reg  = Mux.settings._registry[ns]
+    local disp = nsDisplay(ns)
     if not reg then
-        cecho(string.format("\n<yellow>[mux]<reset> No settings registered under '%s'\n", ns))
+        cecho(string.format("\n<yellow>[%s]<reset> No settings registered under '%s'\n", disp, ns))
         return
     end
     local order = Mux.settings._order[ns] or {}
-    cecho(string.format("\n<green>[%s]<reset> Settings:\n\n", ns))
+    cecho(string.format("\n<green>[%s]<reset> Settings:\n\n", disp))
     for _, key in ipairs(order) do
         local cfg = reg[key]
         if cfg then
@@ -301,34 +293,42 @@ function Mux.settings.showList(ns)
 end
 
 function Mux.settings.showSetting(ns, key)
-    local cfg = Mux.settings._registry[ns] and Mux.settings._registry[ns][key]
+    local cfg  = Mux.settings._registry[ns] and Mux.settings._registry[ns][key]
+    local disp = nsDisplay(ns)
     if not cfg then
-        cecho(string.format("\n<red>[mux]<reset> Unknown setting '%s.%s'\n", ns, key))
+        cecho(string.format("\n<red>[%s]<reset> Unknown setting '%s.%s'\n", disp, ns, key))
         return
     end
     local val   = Mux.settings.get(ns, key)
     local isDef = Mux.settings._data[ns] == nil or Mux.settings._data[ns][key] == nil
     local tag   = isDef and " <dim_grey>(default)<reset>" or ""
     cecho(string.format("\n<green>[%s]<reset> <cyan>%s<reset>: <yellow>%s<reset>%s\n",
-        ns, key, tostring(val), tag))
+        disp, key, tostring(val), tag))
     if cfg.description and cfg.description ~= "" then
         cecho(string.format("  <dim_grey>%s<reset>\n", cfg.description))
     end
     cecho("\n")
 end
 
--- ── Load persisted data ───────────────────────────────────────────────────────
 Mux.settings.load()
 
--- ── UI helpers ────────────────────────────────────────────────────────────────
-
-local function contentScreenPos()
+-- Returns the absolute console position of a namespace's content area.
+-- ns is needed to determine whether this setting lives in a sub-tab (two
+-- tab bars above the content) or a top-level tab (one tab bar above).
+local function contentScreenPos(ns)
     local win = settingsUi.window
     if not win then return 0, 0 end
-    local theme = Mux.activeTheme()
-    local bi = 2
-    return (win.floatX or 0) + bi,
-           (win.floatY or 0) + bi + theme.titlebarHeight + tabH
+    local theme   = Mux.activeTheme()
+    local tabBarH = theme.tabBarHeight or 22
+    local bi      = 2
+    local cx      = (win.floatX or 0) + bi
+    local cy      = (win.floatY or 0) + bi + (theme.titlebarHeight or 22) + tabBarH
+    -- Sub-tab namespaces have a second tab bar above the content.
+    local path = Mux.settings._tabPaths[ns]
+    if path and path:find("/", 1, true) then
+        cy = cy + tabBarH
+    end
+    return cx, cy
 end
 
 local function closeDropdown()
@@ -376,8 +376,6 @@ local function applyValue(ns, key, value)
     return ok
 end
 
--- ── Widget type inference ─────────────────────────────────────────────────────
-
 local function widgetType(cfg)
     if cfg.choices then return "dropdown" end
     if type(cfg.default) == "boolean" then return "toggle" end
@@ -396,8 +394,6 @@ local function calcWidgetWidth(cfg, contentW)
     if isWideRow(cfg) then return contentW - padL * 2 - resetW - padR end
     return widgetW
 end
-
--- ── Widget builders ───────────────────────────────────────────────────────────
 
 local function makeToggle(parent, wx, wy, uid, ns, key, ww)
     local cssOn  = cssToggleOn
@@ -447,7 +443,7 @@ local function makeDropdown(parent, wx, wy, uid, ns, key, choices, ww, rowY)
     end
 
     local function openOverlay()
-        local cx, cy = contentScreenPos()
+        local cx, cy = contentScreenPos(ns)
         local absBtnX = cx + wx
         local absBtnY = cy + rowY + wy + widgetH
         overlay = Geyser.Label:new({
@@ -547,7 +543,7 @@ local function makeResetIcon(parent, rx, ry, uid, ns, key, refreshFn, contentY)
     icon:setStyleSheet(cssResetIcon)
     icon:echo("<center><span style='color:rgba(140,145,165,0.55);font-size:11px;'>↺</span></center>")
     icon:setOnEnter(function()
-        local cx, cy = contentScreenPos()
+        local cx, cy = contentScreenPos(ns)
         showTooltip("Reset to default", cx + rx + resetW + 4, cy + (contentY or 0) + ry)
     end)
     icon:setOnLeave(function() hideTooltip() end)
@@ -563,8 +559,6 @@ local function makeResetIcon(parent, rx, ry, uid, ns, key, refreshFn, contentY)
         end
     end)
 end
-
--- ── Build all rows for one namespace tab ──────────────────────────────────────
 
 local function buildRows(ns, contentLbl)
     local contentW = contentLbl:get_width()
@@ -605,7 +599,7 @@ local function buildRows(ns, contentLbl)
                 local hiColor = (Mux.activeTheme().settingsUi or {}).helpIconFg or "rgba(100,160,255,0.85)"
                 hi:echo(string.format("<center><span style='color:%s;font-size:11px;font-weight:bold;'>i</span></center>", hiColor))
                 hi:setOnEnter(function()
-                    local cx, cy = contentScreenPos()
+                    local cx, cy = contentScreenPos(ns)
                     showTooltip(desc, cx + padL + 16 + 4, cy + capturedRowY + 6)
                 end)
                 hi:setOnLeave(function() hideTooltip() end)
@@ -627,7 +621,7 @@ local function buildRows(ns, contentLbl)
                 local hiColor = (Mux.activeTheme().settingsUi or {}).helpIconFg or "rgba(100,160,255,0.85)"
                 hi:echo(string.format("<center><span style='color:%s;font-size:11px;font-weight:bold;'>i</span></center>", hiColor))
                 hi:setOnEnter(function()
-                    local cx, cy = contentScreenPos()
+                    local cx, cy = contentScreenPos(ns)
                     showTooltip(desc, cx + padL + 16 + 4, cy + capturedRowY + hiY)
                 end)
                 hi:setOnLeave(function() hideTooltip() end)
@@ -650,44 +644,90 @@ local function buildRows(ns, contentLbl)
     return y
 end
 
-local function sortedNamespaces()
-    local list = {}
-    for ns in pairs(Mux.settings._registry) do list[#list+1] = ns end
-    table.sort(list, function(a, b)
-        if a == "mux"    then return true  end
-        if b == "mux"    then return false end
-        if a == "mapper" then return true  end
-        if b == "mapper" then return false end
-        return a < b
+-- Builds the tab hierarchy from _tabPaths and the registered namespaces.
+-- Returns a sorted list: { {label, ns, children={label,ns}...}, ... }
+-- Entries without children are leaf tabs; entries with children are package tabs
+-- whose sub-tabs hold the actual settings content.
+local function tabHierarchy()
+    local tops = {}   -- {topLabel → {ns=..., children={...}}}
+
+    for ns in pairs(Mux.settings._registry) do
+        local path    = Mux.settings._tabPaths[ns] or ns
+        local parts   = {}
+        for p in path:gmatch("[^/]+") do parts[#parts+1] = p end
+        local topLabel = parts[1]
+        tops[topLabel] = tops[topLabel] or {}
+        if #parts == 1 then
+            tops[topLabel].ns = ns
+        else
+            local subLabel = table.concat(parts, "/", 2)
+            tops[topLabel].children = tops[topLabel].children or {}
+            table.insert(tops[topLabel].children, {label = subLabel, ns = ns})
+        end
+    end
+
+    local result = {}
+    for label, info in pairs(tops) do
+        table.insert(result, {label = label, ns = info.ns, children = info.children})
+    end
+    table.sort(result, function(a, b)
+        -- "Muxlet" always first, then alphabetical
+        if a.label == "Muxlet" then return true  end
+        if b.label == "Muxlet" then return false end
+        return a.label < b.label
     end)
-    return list
+    for _, entry in ipairs(result) do
+        if entry.children then
+            table.sort(entry.children, function(a, b) return a.label < b.label end)
+        end
+    end
+    return result
 end
 
--- ── Tab switching ─────────────────────────────────────────────────────────────
-
+-- Activate the tab (or sub-tab) that corresponds to namespace ns.
 function Mux.settings.showTab(ns)
     closeDropdown(); hideTooltip()
-    for _, r in ipairs(settingsUi.rows) do r:hide() end
-    settingsUi.rows      = {}
-    settingsUi.drawEpoch = settingsUi.drawEpoch + 1
-    -- Re-echo each tab with explicit HTML color; CSS color: alone is unreliable in Mudlet.
-    for n, tab in pairs(settingsUi.tabs) do
-        local isActive = (n == ns)
-        tab:setStyleSheet(isActive and cssTabActive or cssTabInactive)
-        local tc = isActive and settingsTabActiveFg or settingsTabInactiveFg
-        tab:echo(string.format("<center><span style='color:%s;font-size:11px;font-weight:bold;'>%s</span></center>",
-            tc or "#d8d8f0", n))
+    local pane = settingsUi.window
+    if not pane then return end
+    for _, tab in ipairs(pane._tabs or {}) do
+        if tab._settingsNs == ns then
+            pane:activateTab(tab.id)
+            settingsUi.currentTab = ns
+            return
+        end
+        -- Check one level of sub-tabs
+        for _, subTab in ipairs(tab._tabs or {}) do
+            if subTab._settingsNs == ns then
+                pane:activateTab(tab.id)
+                tab:activateTab(subTab.id)
+                settingsUi.currentTab = ns
+                return
+            end
+        end
     end
-    local totalH = buildRows(ns, settingsUi.content)
-    if settingsUi.content and settingsUi.contentBox then
-        local viewH = settingsUi.contentBox:get_height()
-        local fitH  = math.max(viewH, totalH + footerPad)
-        resizeWindow("mux_set_content", settingsUi.content:get_width(), fitH)
-    end
-    settingsUi.currentTab = ns
 end
 
--- ── Build the floating window ─────────────────────────────────────────────────
+-- Builds a ScrollBox + form rows inside a leaf settings tab.
+local function buildSettingsContent(targetTab, ns, bgCol)
+    targetTab.contentBg:hide()
+    local safeName = ns:gsub("[^%w_]", "_")
+    local scrollBox = Geyser.ScrollBox:new({
+        name = "mux_set_sb_" .. safeName,
+        x = 0, y = 0, width = "100%", height = "100%",
+    }, targetTab.content)
+    local cw = targetTab.content:get_width()
+    if cw < 50 then cw = 400 end
+    local contentLbl = Geyser.Label:new({
+        name = "mux_set_cl_" .. safeName,
+        x = 0, y = 0, width = cw - 8, height = 500,
+    }, scrollBox)
+    contentLbl:setStyleSheet(string.format("background:%s; border:none;", bgCol))
+    settingsUi.rows = settingsUi.rows or {}
+    local totalH = buildRows(ns, contentLbl)
+    local viewH  = scrollBox:get_height()
+    local fitH   = math.max(viewH > 0 and viewH or 200, totalH + footerPad)
+    resizeWindow("mux_set_cl_" .. safeName, cw - 8, fitH)
+end
 
 local function buildWindow()
     local sw, sh = getMainWindowSize()
@@ -696,15 +736,10 @@ local function buildWindow()
     local x = math.floor((sw - w) / 2)
     local y = math.floor((sh - h) / 2)
 
-    local pane = MuxPane:new({
-        name             = string.format("⚙  Settings  v%s", Mux._version),
+    local pane = Mux.createDialog({
+        title    = string.format("⚙  Settings  v%s", Mux._version),
         x=x, y=y, width=w, height=h,
-        parent           = Geyser,
-        permanentFloat   = true,
-        noResize         = true,
-        noTitlebarToggle = true,
-        noRename         = true,
-        noContent        = true,
+        noTabs   = false,
     })
     local theme = Mux.activeTheme()
     local sui   = theme.settingsUi or {}
@@ -713,16 +748,8 @@ local function buildWindow()
     local rowOddColor     = sui.rowOdd          or "rgb(16, 16, 24)"
     local rowEvenColor    = sui.rowEven         or "rgb(34, 34, 50)"
     local textColor       = sui.textColor       or "rgba(215, 215, 230, 0.92)"
-    local tabActiveBg     = sui.tabActiveBg     or "rgb(40, 40, 62)"
-    local tabInactiveBg   = sui.tabInactiveBg   or "rgb(18, 18, 26)"
-    local tabHoverBg      = sui.tabHoverBg      or "rgb(35, 35, 55)"
-    local tabActiveLine   = sui.tabActiveLine   or "rgba(100, 180, 255, 0.8)"
-    local tabActiveText   = sui.tabActiveText   or "rgba(215, 215, 230, 0.95)"
-    local tabInactiveText = sui.tabInactiveText or "rgba(160, 165, 185, 0.75)"
-    local tabHoverText    = sui.tabHoverText    or "rgba(210, 215, 230, 0.95)"
     local rowDivider      = sui.rowDivider      or "rgba(255, 255, 255, 0.12)"
 
-    -- Widget colors (theme-aware; fall back to dark defaults if not in theme).
     local widgetBg      = sui.widgetBg          or "rgb(38,38,58)"
     local widgetFg      = sui.widgetFg          or "#d8d8f0"
     local widgetBorder  = sui.widgetBorder      or "rgba(255,255,255,0.22)"
@@ -761,7 +788,7 @@ local function buildWindow()
             font-size: 11px;
             font-weight: bold;
             border: 1px solid %s;
-            border-radius: 8px;
+            border-radius: 3px;
         }
         QLabel::hover{
             color: rgba(180,210,255,1.0);
@@ -770,134 +797,78 @@ local function buildWindow()
         }
     ]], helpBg, helpFg, helpBd)
 
-    -- Plain color values for explicit HTML span colors in echo() calls.
-    settingsTabActiveFg   = tabActiveText
-    settingsTabInactiveFg = tabInactiveText
-    toggleOnFgColor       = togOnFg
-    toggleOffFgColor      = togOffFg
-    widgetFgColor         = widgetFg
+    toggleOnFgColor  = togOnFg
+    toggleOffFgColor = togOffFg
+    widgetFgColor    = widgetFg
 
-    -- Row backgrounds and dividers.
     cssOdd  = string.format("background:%s; border:none; border-bottom:1px solid %s;", rowOddColor,  rowDivider)
     cssEven = string.format("background:%s; border:none; border-bottom:1px solid %s;", rowEvenColor, rowDivider)
-
-    -- Tabs: echo uses <center>ns</center> (no explicit font color tag).
-    -- CSS color becomes the HTML document base color that uncolored HTML inherits,
-    -- so QLabel::hover { color: ... } changes text color on hover without re-echoing.
-    cssTabActive = string.format([[
-    QLabel{
-        background: %s;
-        color: %s;
-        font-size: 11px;
-        font-weight: bold;
-        border: none;
-        border-bottom: 2px solid %s;
-        border-right: 1px solid %s;
-        padding: 0 2px;
-        text-align: center;
-    }
-]], tabActiveBg, tabActiveText, tabActiveLine, rowDivider)
-    cssTabInactive = string.format([[
-    QLabel{
-        background: %s;
-        color: %s;
-        font-size: 11px;
-        border: none;
-        border-right: 1px solid %s;
-        padding: 0 2px;
-        text-align: center;
-    }
-    QLabel::hover{
-        background: %s;
-        color: %s;
-        border-bottom: 1px solid %s;
-    }
-]], tabInactiveBg, tabInactiveText, rowDivider, tabHoverBg, tabHoverText, tabActiveLine)
-
-    -- Row label names: plain text echo + CSS color (same approach as toggle TRUE/FALSE).
-    cssName = string.format(
-        "background:transparent; color:%s; font-size:11px; font-weight:bold;",
-        textColor)
+    cssName = string.format("background:transparent; color:%s; font-size:11px; font-weight:bold;", textColor)
 
     pane.floatX = x; pane.floatY = y
     pane.floatW = w; pane.floatH = h
-    pane:_detachToFloat()
     pane.onClose = function()
         closeDropdown(); hideTooltip()
-        settingsUi.visible    = false
-        settingsUi.window     = nil
-        settingsUi.contentBox = nil
-        settingsUi.content    = nil
+        settingsUi.visible = false
+        settingsUi.window  = nil
+        settingsUi.rows    = {}
     end
     settingsUi.window = pane
+    settingsUi.rows   = {}
 
-    local interior = pane.content
-    local bi       = 2
-    local innerW   = w - bi * 2
-    local innerH   = h - theme.titlebarHeight - bi * 2
+    -- Lock the pane so the real tab system hides the + button and disables drag.
+    -- closeable = true (set at construction) keeps the X button visible.
+    pane:lock()
+    pane:enableTabs({ noDefaultTab = true })
 
-    -- Tab bar.
-    local tabBar = Geyser.Label:new({ name="mux_set_tabbar", x=0, y=0, width=innerW, height=tabH }, interior)
-    tabBar:setStyleSheet(string.format([[
-        background: %s;
-        border: none;
-        border-bottom: 1px solid %s;
-    ]], bgColor, rowDivider))
+    -- Build tabs from the hierarchy derived from registered tab paths.
+    local hierarchy = tabHierarchy()
+    for _, entry in ipairs(hierarchy) do
+        local tab = pane:addTab(entry.label)
+        tab.locked        = true
+        tab.noContextMenu = true
+        tab._settingsNs   = entry.ns  -- nil for package-level grouper tabs
 
-    local namespaces = sortedNamespaces()
-    settingsUi.tabs = {}
-    local tx = 0
-    for _, ns in ipairs(namespaces) do
-        local tw  = #ns * tabCharW + tabPad
-        local tab = Geyser.Label:new({ name="mux_set_tab_"..ns, x=tx, y=0, width=tw, height=tabH }, tabBar)
-        tab:setStyleSheet(cssTabInactive)
-        tab:echo(string.format("<center><span style='color:%s;font-size:11px;font-weight:bold;'>%s</span></center>",
-            settingsTabInactiveFg, ns))
-        local capturedNs = ns
-        tab:setClickCallback(function() Mux.settings.showTab(capturedNs) end)
-        settingsUi.tabs[ns] = tab
-        tx = tx + tw
+        if entry.children and #entry.children > 0 then
+            -- Package tab: enable sub-tabs for each child namespace.
+            tab:enableTabs({ noDefaultTab = true })
+            for _, child in ipairs(entry.children) do
+                local subTab = tab:addTab(child.label)
+                subTab.locked        = true
+                subTab.noContextMenu = true
+                subTab._settingsNs   = child.ns
+                buildSettingsContent(subTab, child.ns, bgColor)
+            end
+        elseif entry.ns then
+            -- Leaf tab: settings content goes directly here.
+            buildSettingsContent(tab, entry.ns, bgColor)
+        end
     end
 
-    -- ScrollBox viewport.
-    local contentH = innerH - tabH
-    settingsUi.contentBox = Geyser.ScrollBox:new({
-        name="mux_set_viewport", x=0, y=tabH, width=innerW, height=contentH,
-    }, interior)
-
-    -- Content label: 8px narrower than viewport to leave room for the 6px scrollbar.
-    settingsUi.content = Geyser.Label:new({
-        name="mux_set_content", x=0, y=0, width=innerW-8, height=contentH,
-    }, settingsUi.contentBox)
-    settingsUi.content:setStyleSheet(string.format("background:%s; border:none;", bgColor))
-
-    settingsUi.rows = {}
-    local firstNs = #namespaces > 0 and namespaces[1] or nil
-    if firstNs then
-        tempTimer(0, function()
-            if settingsUi.window then Mux.settings.showTab(firstNs) end
-        end)
+    -- Set the current tab namespace (first tab was already activated by addTab).
+    if pane._tabs and #pane._tabs > 0 then
+        settingsUi.currentTab = pane._tabs[1]._settingsNs
     end
     settingsUi.window:raise()
 end
 
--- ── Public toggle ─────────────────────────────────────────────────────────────
-
 function Mux.settings.toggle()
+    -- Tear down a stale window if new namespaces were registered since it was built.
     if settingsUi.window then
-        for ns in pairs(Mux.settings._registry) do
-            if not settingsUi.tabs[ns] then
-                closeDropdown(); hideTooltip()
-                settingsUi.window:hide()
-                settingsUi.window     = nil
-                settingsUi.contentBox = nil
-                settingsUi.content    = nil
-                break
-            end
+        local builtCount  = settingsUi.window._settingsNsCount or 0
+        local currentCount = 0
+        for _ in pairs(Mux.settings._registry) do currentCount = currentCount + 1 end
+        if currentCount ~= builtCount then
+            closeDropdown(); hideTooltip()
+            settingsUi.window:close()
+            -- onClose nulls settingsUi.window
         end
     end
     if not settingsUi.window then
+        local count = 0
+        for _ in pairs(Mux.settings._registry) do count = count + 1 end
         buildWindow()
+        settingsUi.window._settingsNsCount = count
         settingsUi.visible = true
         return
     end
@@ -913,9 +884,8 @@ function Mux.settings.toggle()
     end
 end
 
--- ── Built-in Muxlet settings (mux namespace) ──────────────────────────────────
-
 Mux.settings.register("mux", "theme", {
+    tab         = "Muxlet",
     description = "Active color theme",
     default     = "dark",
     choices     = {"dark", "light"},
@@ -938,19 +908,18 @@ Mux.settings.register("mux", "default_split_ratio", {
     max         = 90,
 })
 
-Mux.settings.register("mux", "hint_timeout", {
-    description = "Seconds the Alt+B keybind hint overlay stays visible",
-    default     = 4,
-    min         = 1,
-    max         = 10,
-})
-
 Mux.settings.register("mux", "auto_start", {
     description = "Automatically run mux start on profile load using the configured workspace",
     default     = false,
 })
 
--- ── onChange handlers ─────────────────────────────────────────────────────────
+-- Tracks whether the first-run welcome dialog has been dismissed.
+-- Downstream packages (e.g. fed2-tools) set this to true in their muxletReady
+-- handler to suppress the popup — no separate "disabled" flag is needed.
+Mux.settings.register("mux", "welcome_shown", {
+    description = "Whether the first-run welcome dialog has been shown",
+    default     = false,
+})
 
 Mux.settings.onChange("mux", "theme", function(value)
     if Mux.applyTheme then Mux.applyTheme(value) end
@@ -959,15 +928,17 @@ Mux.settings.onChange("mux", "theme", function(value)
         local wasVisible = settingsUi.visible
         local savedTab   = settingsUi.currentTab
         closeDropdown(); hideTooltip()
-        settingsUi.tabs = {}
         settingsUi.rows = {}
         settingsUi.window:close()
-        -- onClose already nulled window/contentBox/content/visible
+        -- onClose nulled window/visible
         if wasVisible then
+            local count = 0
+            for _ in pairs(Mux.settings._registry) do count = count + 1 end
             buildWindow()
+            settingsUi.window._settingsNsCount = count
             settingsUi.visible = true
             if savedTab then
-                tempTimer(0, function()
+                tempTimer(0.05, function()
                     if settingsUi.window then Mux.settings.showTab(savedTab) end
                 end)
             end
@@ -975,15 +946,26 @@ Mux.settings.onChange("mux", "theme", function(value)
     end
 end)
 
+Mux.settings.register("mux", "compact_titlebar", {
+    tab         = "Muxlet",
+    description = "Hide all titlebar buttons — use right-click menu instead",
+    default     = false,
+})
+
+Mux.settings.onChange("mux", "compact_titlebar", function()
+    for _, pane in pairs(Mux._panes or {}) do
+        if pane._checkOverflow then pane:_checkOverflow() end
+    end
+end)
+
 Mux.settings.onChange("mux", "debug", function(value)
     Mux.debug = value
 end)
 
--- ── Post-load init: apply persisted settings, then signal readiness ───────────
 -- tempTimer(0) defers past the synchronous script-loading stack so all Muxlet
 -- functions are defined before this runs. raiseEvent("muxletReady") fires last
--- so downstream packages (e.g. fed2-tools) can register a handler and be
--- guaranteed Muxlet's full API is available when they receive it.
+-- so downstream packages can register a handler and be guaranteed Muxlet's full
+-- API is available when they receive it.
 
 tempTimer(0, function()
     local savedTheme = Mux.settings.get("mux", "theme")
@@ -994,9 +976,16 @@ tempTimer(0, function()
     raiseEvent("muxletReady")
 end)
 
+-- Fires after all muxletReady consumers have had a chance to set welcome_shown = true.
+-- welcome.lua defines Mux._checkWelcome(); guard against load-order gaps.
+tempTimer(0.3, function()
+    if Mux._checkWelcome then Mux._checkWelcome() end
+end)
+
 tempTimer(1.5, function()
     if Mux._running then return end
     if Mux.settings.get("mux", "auto_start") then
+        if not Mux.settings.get("mux", "welcome_shown") then return end
         if Mux.fullStart then Mux.fullStart() end
     else
         Mux._echo(

@@ -62,6 +62,22 @@
 -- Muxlet's built-in dialogs so custom popups look at home alongside them.
 -- All entries are fixed dark-palette values that read well in both themes.
 --
+-- ── Interaction model ────────────────────────────────────────────────────────────
+--
+-- Three meaningful states control how much the user can manipulate a dialog:
+--
+--   Default (no extra opts)   — moveable, fixed size.  The user drags the titlebar
+--                               to reposition but cannot resize.  Right for most popups.
+--
+--   opts.locked = true        — fully locked.  Neither movement nor resizing is
+--                               possible.  The × close button still works if
+--                               opts.closeable is not false.  Right for modal-style
+--                               confirmations where accidental repositioning would
+--                               confuse the user.
+--
+--   opts.resizable = true     — moveable and resizable.  Right for content that
+--                               can reflow (e.g. a scrollable log viewer).
+--
 -- ── Advanced positioning ─────────────────────────────────────────────────────────
 --
 -- Omit opts.x / opts.y to center the dialog in the main window (default).
@@ -70,10 +86,6 @@
 --   local bx = somePane.floatX + somePane.floatW + 8
 --   local by = somePane.floatY
 --   local d  = Mux.createDialog({ title="…", width=300, height=200, x=bx, y=by })
---
--- opts.resizable = true enables corner resize handles (default: false).
--- Dialogs are fixed-size by default because most popups have a layout that breaks
--- when resized.  Enable only when the content can reflow gracefully.
 
 -- ── Shared CSS palette ────────────────────────────────────────────────────────
 
@@ -154,6 +166,7 @@ Mux.dialogCss = {
 -- @param  opts.x         number   left edge px   (default: centered)
 -- @param  opts.y         number   top  edge px   (default: centered)
 -- @param  opts.resizable boolean  resize handles (default: false)
+-- @param  opts.locked    boolean  block drag movement (default: false)
 -- @param  opts.id        string   custom pane id (default: auto "dialog_N")
 -- @return MuxPane  add widgets to pane.content; dismiss with pane:close()
 function Mux.createDialog(opts)
@@ -170,12 +183,18 @@ function Mux.createDialog(opts)
         x = x, y = y, width = w, height = h,
         parent           = Geyser,
         permanentFloat   = true,
-        noResize         = not opts.resizable,
-        noTitlebarToggle = true,
-        noRename         = true,
-        noContent        = true,
-        noTabs           = true,
+        zoomable         = false,
+        splittable       = false,
+        swappable        = false,
+        noResize         = opts.resizable and false or true,
+        noTitlebarToggle = opts.noTitlebarToggle ~= false,
+        noRename         = opts.noRename ~= false,
+        noContent        = opts.noContent ~= false,
+        noTabs           = opts.noTabs ~= false,
+        noContextMenu    = opts.noContextMenu ~= false,
+        closeable        = opts.closeable ~= false,
     })
+    if opts.locked then pane.locked = true end
     pane.floatX = x
     pane.floatY = y
     pane.floatW = w

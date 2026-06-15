@@ -1,6 +1,7 @@
 [
   {"name": "globals"},
   {"name": "settings"},
+  {"name": "content"},
   {"name": "update"},
   {"name": "theme"},
   {"name": "pane"},
@@ -10,9 +11,10 @@
   {"name": "pane_set"},
   {"name": "manager"},
   {"name": "dialog"},
+  {"name": "welcome"},
   {"name": "workspace"},
-  {"name": "content"},
   {"name": "content_builtins"},
-  {"name": "keybinds"},
-  {"name": "devmode"}
+  {"name": "properties"},
+  {"name": "devmode"},
+  {"name": "themes"}
 ]

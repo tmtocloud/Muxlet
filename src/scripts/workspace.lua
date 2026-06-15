@@ -15,21 +15,20 @@
 --
 -- Static workspace node format:
 --   Leaf  : { type="pane",  id="chat",  name="Chat",  showTitlebar=true,
---             activeContent="my_content" }   -- optional: content applied on load
+--             activeContent="my_content" }
 --   Split : { type="split", direction="v", ratio=0.6, a=<node>, b=<node> }
 --
--- Only one paneSet per workspace is supported.  Multiple paneSets create
--- overlapping containers that have no awareness of each other's boundaries,
+-- Only one paneSet per workspace is supported. Multiple paneSets create
+-- overlapping containers with no awareness of each other's boundaries,
 -- which breaks split operations and console border management.
 
 Mux._workspaces     = Mux._workspaces     or {}
 Mux._userWorkspaces = Mux._userWorkspaces or {}  -- names explicitly saved by the user
 Mux._wsFile         = Mux._persistentDir .. "/workspaces.json"
 
--- ── Workspace file persistence ────────────────────────────────────────────────
 -- File format: { _userSaved = ["name", ...], name = {def}, ..., current = {def} }
--- _userSaved is the authoritative list of workspaces the user explicitly named and
--- saved.  "current" (auto-save) and built-in/package workspaces are never in it.
+-- _userSaved is the authoritative list of workspaces the user explicitly saved.
+-- "current" (auto-save) and built-in/package workspaces are never in it.
 
 local function saveWorkspacesFile()
     local userSavedList = {}
@@ -56,14 +55,12 @@ local function loadWorkspacesFile()
         f:close()
         local data = yajl.to_value(raw)
         if type(data) ~= "table" then return end
-        -- Restore the explicit user-saved set first.
         local saved = data._userSaved
         if type(saved) == "table" then
             for _, name in ipairs(saved) do
                 Mux._userWorkspaces[name] = true
             end
         end
-        -- Register workspace definitions (skip the metadata key).
         for name, def in pairs(data) do
             if name ~= "_userSaved" and type(def) == "table" then
                 Mux._workspaces[name] = def
@@ -73,7 +70,7 @@ local function loadWorkspacesFile()
     if not ok then Mux._err("workspace file load failed: %s", tostring(err)) end
 end
 
--- Auto-save timer handle; reset on package reload (old ID is stale).
+-- Reset on package reload; old ID is stale after a reload.
 if Mux._autoSaveTimer then killTimer(Mux._autoSaveTimer) end
 Mux._autoSaveTimer = nil
 
@@ -85,8 +82,6 @@ local function tableCount(t)
     for _ in pairs(t) do n = n + 1 end
     return n
 end
-
--- ── Register / apply ──────────────────────────────────────────────────────────
 
 function Mux.registerWorkspace(name, def)
     assert(type(name) == "string", "workspace name must be a string")
@@ -151,7 +146,6 @@ function Mux.applyWorkspace(name)
     end
 
     tempTimer(0, function()
-        -- Apply activeContent declared in workspace pane nodes.
         for _, p in pairs(Mux._panes) do
             if p._pendingContent then
                 if not Mux._content or not Mux._content[p._pendingContent] then
@@ -164,7 +158,7 @@ function Mux.applyWorkspace(name)
             end
         end
         for _, p in pairs(Mux._panes) do
-            if p.mainConsoleHost then p:updateConsoleBorders() end
+            if p.onReposition then p.onReposition(p) end
         end
         if not Mux._focusedPane then
             local target
@@ -181,7 +175,6 @@ function Mux.applyWorkspace(name)
         local sw = Mux._settings_ui
         if sw and sw.window and sw.visible then sw.window:raise() end
         Mux.raiseFloatingPanes()
-        -- Persist the newly applied workspace so it is restored next session.
         Mux._scheduleAutoSave()
     end)
 
@@ -189,13 +182,8 @@ function Mux.applyWorkspace(name)
     return paneMap
 end
 
--- ── Serialization ─────────────────────────────────────────────────────────────
--- Captures the full pane/split tree including all flags, float positions,
--- and connection-awareness opt-ins.
-
 local function serializeNode(obj)
     if not obj then return nil end
-    -- Split node
     if obj.slotA and obj.slotB then
         return {
             type      = "split",
@@ -205,7 +193,6 @@ local function serializeNode(obj)
             b         = serializeNode(obj.childB),
         }
     end
-    -- Skip permanent-float system panes (settings window, etc.)
     if obj.permanentFloat then return nil end
 
     local node = {
@@ -215,7 +202,6 @@ local function serializeNode(obj)
         showTitlebar    = obj.titlebarVisible,
         mainConsoleHost = obj.mainConsoleHost or false,
     }
-    -- Non-default flags — omitted when false to keep hand-written defs readable.
     if obj.noContent        then node.noContent        = true end
     if obj.noResize         then node.noResize         = true end
     if obj.noTitlebarToggle then node.noTitlebarToggle = true end
@@ -223,9 +209,7 @@ local function serializeNode(obj)
     if obj.noTabs           then node.noTabs           = true end
     if obj.locked           then node.locked           = true end
     if obj._connectionAware then node.connectionAware  = true end
-    -- Persist applied content so it is re-applied when the workspace is loaded.
     if obj._activeContent   then node.activeContent   = obj._activeContent end
-    -- Float position (floating panes only; populated by saveWorkspace caller)
     if obj.floating then
         node.floating = true
         node.floatX   = obj.floatX
@@ -233,7 +217,6 @@ local function serializeNode(obj)
         node.floatW   = obj.floatW
         node.floatH   = obj.floatH
     end
-    -- Tabs
     if obj._serializeTabs then
         local tabs, activeTabName = obj:_serializeTabs()
         if tabs then
@@ -243,8 +226,6 @@ local function serializeNode(obj)
     end
     return node
 end
-
--- ── Save workspace ────────────────────────────────────────────────────────────
 
 function Mux.saveWorkspace(name)
     if not name or name == "" then
@@ -289,13 +270,11 @@ function Mux.saveWorkspace(name)
         name, name))
 end
 
--- ── Auto-save ─────────────────────────────────────────────────────────────────
 -- Every structural change (float, embed, close, split resize, content applied)
--- calls Mux._scheduleAutoSave().  A 1-second debounce prevents write storms
--- during rapid operations (e.g. drag-resizing).  The saved workspace is named
--- "current" — fullStart() restores it automatically on the next session, so
--- users never lose workspace changes without any explicit save step.
-
+-- calls _scheduleAutoSave(). A 1-second debounce prevents write storms during
+-- rapid operations (e.g. drag-resizing). The saved workspace is named "current"
+-- and is restored automatically on the next session, so users never lose
+-- workspace changes without an explicit save step.
 function Mux._scheduleAutoSave()
     if Mux._autoSaveTimer then killTimer(Mux._autoSaveTimer) end
     Mux._autoSaveTimer = tempTimer(1.0, function()
@@ -334,8 +313,6 @@ function Mux._doAutoSave()
     Mux._log("auto-saved workspace to 'current'")
 end
 
--- ── List / delete ─────────────────────────────────────────────────────────────
-
 function Mux.listWorkspaces()
     local names = {}
     for n in pairs(Mux._workspaces) do names[#names+1] = n end
@@ -343,7 +320,6 @@ function Mux.listWorkspaces()
         Mux._echo("\n<cyan>[Muxlet]<reset> No registered workspaces.\n")
         return
     end
-    -- current first, default second, then alphabetical
     table.sort(names, function(a, b)
         if a == "current" then return true  end
         if b == "current" then return false end
@@ -400,8 +376,6 @@ function Mux.deleteWorkspace(name)
     Mux._echo(string.format("\n<green>[Muxlet]<reset> Workspace '<cyan>%s<reset>' deleted.\n", name))
 end
 
--- ── Internal tree builder ─────────────────────────────────────────────────────
-
 -- Tab restoration shared between embedded and floating panes.
 -- Deferred 0.1 s so pane geometry resolves before tab widgets are built.
 local function restoreTabsOnPane(p, node)
@@ -455,11 +429,12 @@ buildNode = function(node, parentContainer, paneMap, paneSet)
             noTitlebarToggle = node.noTitlebarToggle  or false,
             noRename         = node.noRename         or false,
             noTabs           = node.noTabs           or false,
-            -- Float position saved by saveWorkspace; used when _detachToFloat() fires.
             floatX           = node.floatX or 100,
             floatY           = node.floatY or 100,
             floatW           = node.floatW or 400,
             floatH           = node.floatH or 300,
+            splittable       = node.splittable,
+            swappable        = node.swappable,
         })
         p._paneSet = paneSet
         if node.id then paneMap[node.id] = p end
@@ -503,8 +478,6 @@ buildNode = function(node, parentContainer, paneMap, paneSet)
     end
 end
 
--- ── Built-in workspaces ───────────────────────────────────────────────────────
-
 Mux.registerWorkspace("default", {
     name     = "Default",
     theme    = "dark",
@@ -521,8 +494,6 @@ Mux.registerWorkspace("default", {
         },
     },
 })
-
--- ── Load persisted workspaces ─────────────────────────────────────────────────
 
 loadWorkspacesFile()
 

@@ -326,7 +326,7 @@ function Mux.checkForUpdates(silent)
 
     if not mpkg or not mpkg.ready(true) then
         if not silent then
-            Mux._echo("<red> Error: mpkg repository data not loaded.\n")
+            Mux._echo("<yellow> mpkg not available — install via Package Manager to enable update checks.\n")
         end
         return
     end

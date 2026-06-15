@@ -1,0 +1,317 @@
+# Muxlet — Claude Working Notes
+
+Muxlet is a game-agnostic tiling window manager for Mudlet, written in Lua.  It is modelled on tmux: panes, splits, tab bars, themes, workspaces, and a content registry that any downstream package can populate.
+
+---
+
+## Core philosophy: Muxlet is built from its own primitives
+
+Every piece of Muxlet's own UI — settings window, properties dialog, popups, notifications — is a **MuxPane**.  Nothing uses native Mudlet dialogs or bare Geyser widgets as top-level windows.  This keeps the theme system universal: if the active theme changes, every surface refreshes automatically because `applyTheme()` walks `Mux._panes`.
+
+Consequences:
+- "Popup windows" → `Mux.createDialog(opts)` which returns a `permanentFloat` MuxPane.  Put widgets in `pane.content`.
+- "Settings window" → a dialog-mode MuxPane that is `locked`, `noResize`, `noContextMenu`, with tabs enabled internally.
+- "Properties panel" → same dialog pattern, content applied via `Mux.registerContent`/`Mux._applyContent` so the placeholder is suppressed and the content lifecycle (singleton tracking, remove callbacks) is respected.
+- Any new system UI follows the same pattern.  Never create a raw `Geyser.Label` or `Geyser.Container` as a floating window; always go through `Mux.createDialog`.
+
+---
+
+## Startup: "start without starting"
+
+`Mux._running` tracks whether a workspace is live.  **Muxlet does not auto-apply a default workspace on load.**  Startup runs `fullStart()` which does:
+
+1. Load persistent data (settings, workspaces, content catalog).
+2. If the saved `"current"` workspace exists → restore it exactly.
+3. If no `"current"` exists and a `"default"` workspace is registered → apply that.
+4. Only if nothing is registered does Muxlet fall back to a bare single-pane layout.
+
+The implication: Muxlet should never discard the user's live arrangement on reload.  The `"current"` workspace is always the source of truth for the next session.
+
+---
+
+## Workspace model
+
+| Term | Meaning |
+|------|---------|
+| `"current"` | Auto-saved on every structural change (1 s debounce). Restored automatically next session. The live state. |
+| Named workspaces | Explicit snapshots the user saves with `mux workspace save <name>`. Restored on demand with `mux workspace load <name>`. Think of them as bookmarks, not the live state. |
+| `Mux.registerWorkspace` | Registers a *static* workspace definition (usually from a package). Applied once; overwritten when the user modifies the layout. |
+
+What `saveWorkspace` / `_doAutoSave` capture per pane:
+- `id`, `name`, `showTitlebar`, `mainConsoleHost`
+- All non-default flags: `noContent`, `noResize`, `noTitlebarToggle`, `noRename`, `noTabs`, `locked`, `connectionAware`
+- `activeContent` — the content type currently applied; re-applied on load
+- Float position (`floatX/Y/W/H`) for floating panes
+- Full tab tree (via `_serializeTabs`): tab names, locked state, active tab, nested sub-tab structure, each tab's `activeContent`
+
+`permanentFloat` panes (dialogs) are **excluded** from serialization — they are transient system UI.
+
+---
+
+## The content system
+
+`Mux.registerContent(id, def)` + `Mux._applyContent(target, id)` is the canonical way to put UI into a pane or tab.  **This applies to Muxlet's own system UI as much as to user or downstream-package content.**  Every surface that fills a pane or tab — settings panel, properties editor, GMCP viewer, custom widgets — should be registered content.  This ensures the placeholder (`contentBg`) is properly suppressed, the content lifecycle (remove callbacks, singleton tracking) is respected, and workspace auto-save captures `activeContent` correctly.
+
+`target` is the same interface whether it is a pane or a tab:
+```
+target.id          — unique string ID
+target.name        — display name
+target.content     — Geyser.Container  → parent all your widgets here
+target.contentBg   — Geyser.Label      → hide this after attaching real content:
+                       target.contentBg:echo("")
+                       target.contentBg:hide()
+target._activeContent  — set to your content id by _applyContent; suppresses placeholder
+```
+
+`def` fields:
+```
+name        string   display name (shown in context menu)
+description string   optional tooltip
+singleton   bool     only one active instance at a time; extra opens are blocked with a dialog
+internal    bool     Muxlet system-only content; hidden from the "Add Content" menu and
+                     excluded from the content catalog persistence.  Use for all internal
+                     Muxlet UI (properties, settings pane, connection screen, etc.)
+apply(target)        REQUIRED — build widgets in target.content; hide target.contentBg
+remove(target)       optional — called before a different content is applied (tear down timers, etc.)
+```
+
+Key behaviour:
+- Calling `_applyContent(target, id)` when `target._activeContent ~= id` first calls `old.remove(target)`.
+- Setting `target._activeContent` before calling `apply` is handled by `_applyContent`; do not set it manually.
+- The content registry is read at context-menu open time, so registrations made after startup appear without a reload.
+- `Mux._listContent()` returns only non-internal entries — the "Add Content" menu never shows system content.
+- Internal content is also excluded from the catalog persistence file (`content.json`).
+
+---
+
+## MuxPane — constructor options and runtime fields
+
+`MuxPane:new(opts)` — most fields survive workspace serialization.
+
+| Option | Effect |
+|--------|--------|
+| `id` | Stable user-facing ID (reused after close via free pool) |
+| `name` | Titlebar display text; changed with `pane:setName(text)` |
+| `permanentFloat` | Always floating; excluded from workspace serialization; cannot be embedded |
+| `noResize` | Corner drag handles hidden |
+| `noTitlebarToggle` | Titlebar is permanently visible; `setTitlebarVisible` is a no-op |
+| `noRename` | Rename is blocked from UI and API |
+| `noContent` | "Add Content" item hidden in context menu (does not block `_applyContent`) |
+| `noTabs` | Tab bar cannot be enabled |
+| `noContextMenu` | Right-click menu suppressed entirely |
+| `locked` | Prevents drag, split, resize; hides close button unless `closeable = true` |
+| `closeable` | Show close button even when `locked = true` |
+| `titlebarVisible` | Persisted; toggled via `pane:setTitlebarVisible(bool)` |
+| `mainConsoleHost` | Pane hosts the Mudlet main console via border sizing; special casing throughout |
+
+Runtime methods used frequently:
+```lua
+pane:setName(text)
+pane:lock() / pane:unlock()
+pane:setTitlebarVisible(bool)
+pane:_applyTitlebarVisibility()   -- refresh after changing .closeable
+pane:enableTabs([opts])           -- opts.noDefaultTab = true to skip creating first tab
+pane:disableTabs()
+pane:addTab(name, pos)
+pane:renameTab(tabId, newName)
+pane:removeTab(tabId)
+pane:close()
+pane:float() / pane:embed()
+pane:_detachToFloat()             -- used internally after createDialog
+```
+
+Geyser widget name uniqueness: pane IDs are user-facing and recycled; internal Geyser widget names use `Mux._newInternalId()` (ever-increasing `mux_w_NNNN`) to prevent Qt name conflicts with hidden old widgets.
+
+---
+
+## Tab objects — property parity with panes
+
+Wherever a pane has a property or behaviour, consider whether a tab should too.  Current tab fields:
+
+| Field | Notes |
+|-------|-------|
+| `tab.id` | Unique, generated by `Mux._newId("tab")` |
+| `tab.name` | Display text on the tab label |
+| `tab.locked` | Prevents rename and close |
+| `tab.noContextMenu` | Suppresses the tab right-click menu |
+| `tab.pane` | Back-reference to the containing MuxPane (the "host") |
+| `tab.content` | `Geyser.Container` — parent for tab content widgets; same interface as `pane.content` |
+| `tab.contentBg` | `Geyser.Label` — placeholder; hide after attaching content |
+| `tab._activeContent` | Set by `_applyContent`; suppresses placeholder |
+| `tab._tabsEnabled` | True if this tab itself hosts a nested sub-tab bar |
+
+When adding new properties or behaviours to panes, evaluate them for tabs.  The `_applyContent` system already treats panes and tabs identically.  Properties dialog (`Mux.showTabProperties`) should mirror pane properties to the degree that they make sense for a tab.
+
+---
+
+## Dialog pattern
+
+```lua
+local d = Mux.createDialog({
+    title         = "My Dialog",
+    width         = 440,
+    height        = 280,
+    -- x, y         default: centered in main window
+    resizable     = false,   -- default; set true only when content can reflow
+    noContextMenu = true,    -- almost always true for system dialogs
+    noTabs        = true,    -- unless the dialog needs its own tab bar
+    closeable     = true,    -- default; gives a close button
+})
+-- d is a permanentFloat MuxPane; put widgets in d.content
+-- Dismiss: d:close()
+```
+
+`Mux.createDialog` calls `_detachToFloat()` immediately, so `d.content:get_width()` is correct synchronously after the call — no timer needed to query geometry.
+
+For dialogs that show dynamic content (settings, properties) use `Mux._applyContent(d, "my_content_id")` so `contentBg` is hidden and the content lifecycle is tracked.
+
+---
+
+## Theme system
+
+`Mux.applyTheme(name)` walks every live `Mux._panes` entry and every `Mux._splits` entry and calls `applyTheme()` on each.  Theme changes are therefore instant.
+
+**All new UI must read colours from the active theme**, never hard-code values.  Pattern:
+```lua
+local theme = Mux.activeTheme()
+local sui   = theme.settingsUi or {}   -- for settings/properties-style UI
+local bg    = sui.bg or "rgb(18,18,26)"
+local text  = sui.textColor or "rgba(215,215,230,0.92)"
+-- ...derive CSS strings here, then apply to widgets
+```
+
+Theme fields used by settings / properties UI (all accessed via `theme.settingsUi`):
+`bg`, `rowOdd`, `rowEven`, `rowDivider`, `textColor`,
+`widgetBg`, `widgetFg`, `widgetBorder`, `widgetHoverBg`,
+`inputBg`, `inputFg`, `inputBorder`,
+`toggleOnBg/Fg/Border/HoverBg`, `toggleOffBg/Fg/Border/HoverBg`,
+`helpIconFg/Bg/Border`
+
+Direct theme fields (not under `settingsUi`):
+`titlebarHeight`, `revealStripHeight`, `tabBarHeight`,
+`contextMenuItemHeight`, `contextMenuWidth`,
+`titlebarTextColor`, `btnTextColor`,
+`scrollbarCss` (pushed to `setProfileStyleSheet` for Qt scrollbar styling)
+
+Registering a theme:
+```lua
+local base = Mux._merge(Mux._themes["dark"], { titlebarHeight = 28 })
+Mux.registerTheme("my_theme", base)
+```
+
+---
+
+## Settings window
+
+`Mux.settings.toggle()` opens/closes the settings dialog.  Internally it is a `Mux.createDialog` pane with `noTabs = false` (tabs enabled for category navigation).  Its widget content is built via `buildSettingsContent` which creates a `Geyser.ScrollBox` inside the tab's `content` container, then rows of toggle / dropdown / stepper / text-entry widgets.
+
+Settings keys are registered with `Mux.settings.register(ns, key, cfg)`:
+```lua
+Mux.settings.register("mux", "debugMode", {
+    tab         = "Muxlet",          -- top-level tab label in settings UI
+    description = "Enable debug logging",
+    default     = false,
+})
+```
+`tab = "Parent/Child"` nests under a sub-tab.  Reading: `Mux.settings.get(ns, key)`.  Writing: `Mux.settings.set(ns, key, value)`.  Both trigger `onChange` callbacks and auto-save.
+
+Widget type is inferred from `cfg.default`:
+- `boolean` → toggle
+- `number` with `min`/`max` where range ≤ 100 → stepper
+- `choices` table → dropdown
+- anything else → text entry
+
+---
+
+## Properties dialog
+
+`Mux.showPaneProperties(pane)` / `Mux.showTabProperties(host, tab)` — open a small locked `createDialog` pane and apply `"mux_properties"` content to it.
+
+The content type is registered at properties.lua load time (`Mux.registerContent("mux_properties", ...)`).  The apply function reads `pendingRows` (a module-level variable set synchronously before calling `_applyContent`) to build the row widgets.
+
+Adding new properties: extend `paneRows()` / `tabRows()` in `src/scripts/properties.lua`.  Row schema:
+```lua
+{
+    label   = "Display Name",
+    desc    = "One-line description shown below the label",
+    type    = "toggle",   -- or "text"
+    readFn  = function() return target.someField end,
+    writeFn = function(v) ... end,
+}
+```
+
+---
+
+## Key files
+
+```
+src/scripts/globals.lua            — Mux table, ID generators, class factory, context menu renderer
+src/scripts/pane.lua               — MuxPane class: construction, titlebar, lock/unlock, close, resize
+src/scripts/tabs.lua               — Tab infrastructure: buildTabInfrastructure, addTab, activateTabObj
+src/scripts/split.lua              — MuxSplit: binary split with drag-resize handle
+src/scripts/pane_set.lua           — MuxPaneSet: border-zone management, root node management
+src/scripts/manager.lua            — High-level commands: splitFocused, zoomFocused, renameFocused, tabRename
+src/scripts/workspace.lua          — registerWorkspace, applyWorkspace, saveWorkspace, auto-save
+src/scripts/theme.lua              — registerTheme, applyTheme, activeTheme()
+src/scripts/settings.lua           — settings registry, settings dialog, row builders
+src/scripts/dialog.lua             — Mux.createDialog(opts), Mux.dialogCss palette
+src/scripts/properties.lua         — Mux.showPaneProperties, Mux.showTabProperties, mux_properties content
+src/scripts/content.lua            — registerContent, _applyContent, singleton tracking
+src/scripts/content_builtins.lua   — registerGmcpViewer factory
+src/scripts/connection.lua         — connectionAware pane integration
+src/scripts/keybinds.lua           — Alt+key bindings wired to Mux.* commands
+src/scripts/update.lua             — version check and auto-update logic
+src/scripts/devmode.lua            — hot-reload for development
+src/scripts/themes/                — dark.lua, light.lua (theme definitions)
+src/keys/rename_prompt.lua         — Alt+, shortcut → Mux.showPaneProperties(focused)
+```
+
+Load order (src/scripts/scripts.json): globals → settings → update → theme → pane → tabs → connection → split → pane_set → manager → dialog → workspace → content → content_builtins → properties → keybinds → devmode → themes
+
+---
+
+## Geyser notes
+
+- **Widget names must be globally unique** across the entire Mudlet session.  Use `Mux._newInternalId()` for widget names, or prefix with a pane/dialog ID: `"mux_prop_" .. pane.id .. "_widget"`.
+- **`Geyser.ScrollBox`** overrides `get_x()` / `get_y()` to return 0 after construction.  Child widgets inside a ScrollBox should use absolute pixel offsets relative to the scroll origin (0,0), not relative to the screen.
+- **`Geyser.Container:show(auto)`** — `auto=true` clears `auto_hidden` but not `hidden`.  Widgets explicitly hidden with `:hide()` stay hidden when a parent is shown with `show(true)`.
+- **`base_add`** calls `reposition()` after adding a child, so widget sizes are immediately correct after `Geyser.Label:new(...)` — no timer required.
+- **Synchronous geometry**: after `Mux.createDialog` returns, all geometry is computed.  Build widgets immediately; never use `tempTimer(0, ...)` just to defer widget construction.
+- **`fillBg=1`** on a Label makes it render a solid CSS background.  The `contentBg` placeholder label in every pane uses this; it covers the entire content area until `contentBg:hide()` is called by the content system.
+
+---
+
+## Naming conventions
+
+All Lua identifiers: **camelCase**, descriptive, no abbreviations.
+
+```lua
+-- correct
+local itemHeight = 24
+local function buildTitlebar(theme) end
+self.titlebarVisible = true
+
+-- wrong
+local IH = 24
+local function build_titlebar(theme) end
+self.titlebar_visible = true
+```
+
+Leading underscore (`_applyBorders`, `_focusedPane`) signals internal/private by convention — Lua gives it no enforcement.
+
+External API names (Geyser, Mudlet built-ins) are not ours to rename.
+
+---
+
+## What NOT to do
+
+- Do not build UI directly into `pane.content` without going through `Mux._applyContent` — doing so leaves `contentBg` visible (placeholder on top), bypasses the content lifecycle, and causes `activeContent` to not be saved in workspaces.
+- Do not register Muxlet system UI content without `internal = true` — it will appear in the user-facing "Add Content" menu and be written to the content catalog file.
+- Do not use `tempTimer(0, fn)` to defer widget construction — geometry is synchronous after `createDialog` / `_detachToFloat`.
+- Do not set `pane._activeContent` manually — use `Mux._applyContent` which handles cleanup of previous content.
+- Do not create floating system UI as raw Geyser windows — always use `Mux.createDialog`.
+- Do not hardcode CSS colours — derive them from `Mux.activeTheme()` so the theme system can refresh them.
+- Do not skip `contentBg:hide()` when applying content — the placeholder label covers the entire content area with `fillBg=1`.
+- Do not serialise `permanentFloat` panes into workspaces — they are transient system UI and are excluded by `serializeNode`.
+- Do not use `\xNN` or `\uXXXX` Lua escape sequences for Unicode characters — embed them as literal UTF-8 in source files.
+- Do not create `Geyser.ScrollBox` children using percentage constraints — ScrollBox's `get_x/get_y` returns 0 after construction; use absolute pixel values.

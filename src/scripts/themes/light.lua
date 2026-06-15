@@ -168,22 +168,9 @@ Mux.registerTheme("light", {
         border-radius: 3px;
     ]],
 
-    -- ── Keybind hint overlay ──────────────────────────────────────────────────
-    hintOverlayCss = [[
-        background-color: rgba(228, 230, 242, 240);
-        border: 1px solid rgba(50, 100, 220, 0.50);
-        border-radius: 5px;
-        color: rgba(15, 18, 40, 0.95);
-        font-size: 11px;
-        font-family: "Consolas", "Monaco", monospace;
-        padding: 8px;
-    ]],
-    hintKeyColor    = "rgba(20, 60, 180, 1.0)",
-    hintActionColor = "rgba(25, 30, 55, 0.90)",
-    hintFooterColor = "rgba(40, 50, 80, 0.55)",
-
     -- ── Titlebar text color ───────────────────────────────────────────────────
     titlebarTextColor = "rgba(18, 18, 32, 0.95)",
+    titlebarCharWidth = 7,
 
     -- ── Connection awareness screen ────────────────────────────────────────────
     connScreenBg                     = "background-color:rgba(242,242,248,250);border:none;",
@@ -260,6 +247,23 @@ Mux.registerTheme("light", {
             color: rgba(25, 30, 60, 0.95);
         }
     ]],
+    tabActiveParentCss = [[
+        QLabel {
+            background-color: rgba(255, 255, 255, 246);
+            border: 1px solid rgba(0, 0, 0, 0.20);
+            border-top: 2px solid rgba(55, 110, 230, 0.65);
+            border-bottom: none;
+            color: rgba(14, 14, 28, 0.95);
+            font-size: 11px;
+            font-weight: bold;
+            padding: 0 4px;
+        }
+    ]],
+    subTabBarCss = [[
+        background-color: rgba(255, 255, 255, 246);
+        border-bottom: 1px solid rgba(0, 0, 0, 0.14);
+    ]],
+
     tabActiveTextColor      = "rgba(14, 14, 28, 0.95)",
     tabInactiveTextColor    = "rgba(55, 62, 95, 0.88)",
     tabMovingTextColor      = "rgba(255, 240, 240, 1.0)",
@@ -314,6 +318,7 @@ Mux.registerTheme("light", {
         tabActiveText    = "rgba(14, 14, 28, 0.95)",
         tabInactiveText  = "rgba(60, 65, 90, 0.72)",
         tabHoverText     = "rgba(14, 14, 28, 0.95)",
+        descTextColor    = "rgba(65, 75, 115, 0.80)",
         rowDivider       = "rgba(0, 0, 0, 0.13)",
         -- Widget colors (dropdowns, steppers, text inputs, apply button)
         widgetBg         = "rgb(200, 202, 218)",
