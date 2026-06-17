@@ -115,6 +115,7 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
     }
 
     self.handle:setOnEnter(function()
+        if self._dragDisabled then return end
         self.handle:setStyleSheet(theme.handleHoverCss or theme.handleCss)
     end)
     self.handle:setOnLeave(function()
@@ -125,6 +126,7 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
 
     self.handle:setClickCallback(function(event)
         if event.button ~= "LeftButton" then return end
+        if self._dragDisabled then return end
         drag.active = true
         -- Measure slotA and dynamic space NOW (after any prior organize call).
         if self.direction == "v" then
@@ -155,6 +157,35 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
         self.handle:setStyleSheet(theme.handleCss or "")
         Mux._scheduleAutoSave()
     end)
+end
+
+-- Returns true if the child (MuxPane or nested MuxSplit) allows the handle to be dragged.
+-- Recurses into nested splits: if any pane in the sub-tree is non-resizable, the
+-- entire sub-tree is treated as non-resizable so ancestor handles also lock.
+function MuxSplit:_childResizable(child)
+    if not child then return true end
+    if child.outer then return child.resizable ~= false end          -- MuxPane
+    if child.childA ~= nil then                                      -- nested MuxSplit
+        return child:_childResizable(child.childA)
+           and child:_childResizable(child.childB)
+    end
+    return true
+end
+
+-- Rechecks both children's resizable flags and either enables or disables the handle.
+-- Called whenever a child is placed, embedded, or its resizable flag changes.
+function MuxSplit:_updateHandleResizability()
+    local theme    = Mux.activeTheme()
+    local canDrag  = self:_childResizable(self.childA) and self:_childResizable(self.childB)
+    self._dragDisabled = not canDrag
+    if canDrag then
+        local cursor = (self.direction == "v")
+            and (theme.handleCursorV or "ResizeVertical")
+            or  (theme.handleCursorH or "ResizeHorizontal")
+        self.handle:setCursor(cursor)
+    else
+        self.handle:setCursor("Arrow")
+    end
 end
 
 function MuxSplit:_setRatio(r)
@@ -190,6 +221,7 @@ function MuxSplit:place(child, side)
         child._split    = self
         child._slotSide = side
         if child._updateZoomBtn then child:_updateZoomBtn() end
+        if child._updateSwapBtn then child:_updateSwapBtn() end
     elseif child.box then
         rootWidget          = child.box
         child._parentSlot   = slot
@@ -208,6 +240,7 @@ function MuxSplit:place(child, side)
     else                self.childB = child
     end
 
+    self:_updateHandleResizability()
     Mux._log("MuxSplit.place: %s → slot_%s of %s", child.id or "?", side, self.id)
 end
 
@@ -255,6 +288,7 @@ function MuxSplit:collapseSlot(closedSide)
             sibling._split    = self._parentSplit
             sibling._slotSide = self._parentSide
             if sibling._updateZoomBtn then sibling:_updateZoomBtn() end
+            if sibling._updateSwapBtn then sibling:_updateSwapBtn() end
 
             if self._parentSplit then
                 if self._parentSide == "a" then self._parentSplit.childA = sibling
@@ -291,6 +325,7 @@ function MuxSplit:collapseSlot(closedSide)
             sibling._slot     = nil
             sibling._slotSide = nil
             if sibling._updateZoomBtn then sibling:_updateZoomBtn() end
+            if sibling._updateSwapBtn then sibling:_updateSwapBtn() end
             sibling = nil
         end
     end
@@ -355,6 +390,7 @@ function MuxSplit:collapseSlot(closedSide)
             sibling._slotSide = nil
         end
         if sibling._updateZoomBtn then sibling:_updateZoomBtn() end
+        if sibling._updateSwapBtn then sibling:_updateSwapBtn() end
     elseif sibling.box then
         sibling._parentSplit = self._parentSplit
         sibling._parentSide  = self._parentSide
@@ -462,6 +498,7 @@ function MuxSplit:_splitAndEmbed(existingPane, floatingPane, direction, floatOnS
     else                             newSplit.childB = existingPane
     end
     if existingPane._updateZoomBtn then existingPane:_updateZoomBtn() end
+    if existingPane._updateSwapBtn then existingPane:_updateSwapBtn() end
 
     local floatSlot = (floatOnSide == "a") and newSplit.slotA or newSplit.slotB
     floatingPane._slot     = floatSlot
@@ -597,10 +634,7 @@ end
 function MuxSplit:applyTheme()
     local theme = Mux.activeTheme()
     self.handle:setStyleSheet(theme.handleCss or "")
-    local cursor = (self.direction == "v")
-        and (theme.handleCursorV or "ResizeVertical")
-        or  (theme.handleCursorH or "ResizeHorizontal")
-    self.handle:setCursor(cursor)
+    self:_updateHandleResizability()
 end
 
 Mux._log("mux_split loaded")

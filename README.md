@@ -131,11 +131,11 @@ mux settings set mux.theme light        — switch to light theme persistently
 
 ### Attaching Content to Panes
 
-Right-click any pane titlebar and choose **Add Content** to see all available content types. Selecting one fills the pane with that view. Any content types registered by installed packages appear there automatically — no restart required.
+Right-click any pane titlebar and choose **Content Library** to see all available content types. Selecting one fills the pane with that view. Any content types registered by installed packages appear there automatically — no restart required.
 
 #### Built-in: GMCP Inspector
 
-The **GMCP Inspector** is always available in the Add Content menu. It shows a live, type-grouped view of any GMCP path:
+The **GMCP Inspector** is always available in the Content Library menu. It shows a live, type-grouped view of any GMCP path:
 
 - Click the **PATH** label at the top to open a path browser and select a different GMCP path.
 - Click **−** / **+** to zoom the row height in or out.
@@ -236,8 +236,6 @@ Mux.registerWorkspace("my-game-layout", {
                     id              = "output",
                     name            = "Main",
                     mainConsoleHost = true,
-                    noContent       = true,
-                    noTabs          = true,
                 },
                 b = {
                     type = "split", direction = "h", ratio = 0.50,
@@ -271,21 +269,139 @@ Only **one paneSet per workspace** is supported. Use splits within it to arrange
 
 #### Pane node fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | string | `"pane"` |
-| `id` | string | Unique identifier. Becomes the `panes["id"]` key. |
-| `name` | string | Display name shown in the titlebar. |
-| `mainConsoleHost` | bool | Routes the main game console into this pane. Only one pane should set this. |
-| `show_titlebar` | bool | Override the default titlebar visibility for this pane. |
-| `locked` | bool | Pane starts locked (drag, split, close disabled). |
-| `activeContent` | string | Content type id to apply automatically on load. |
-| `noContent` | bool | Suppress the Add Content context menu item. |
-| `noTabs` | bool | Prevent tabs from being enabled on this pane. |
-| `noResize` | bool | Disable corner resize handles. |
-| `noTitlebarToggle` | bool | Keep the titlebar permanently visible. |
-| `noRename` | bool | Prevent renaming via UI or command. |
-| `connectionAware` | bool | Show a connection-status overlay while disconnected. |
+All behavioral flags default to `true` (the permissive state). Set a flag to `false` only when you want to restrict that capability. These same field names are used in workspace registration, the workspace JSON file, and on live `MuxPane` objects.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `type` | string | — | `"pane"` |
+| `id` | string | — | Unique identifier. Becomes the `panes["id"]` key. |
+| `name` | string | — | Display name shown in the titlebar. |
+| `mainConsoleHost` | bool | `false` | Routes the main game console into this pane. Only one pane should set this. Automatically sets `closeable = false`, `convertible = false`, and `contentable = false`. |
+| `showTitlebar` | bool | `false` | Override the default titlebar visibility for this pane. |
+| `locked` | bool | `false` | Pane starts locked (drag, split, close, minimize disabled). |
+| `activeContent` | string | — | Content type id to apply automatically on load. |
+| `contentable` | bool | `true` | Show the Content Library (▥) button and context menu item. |
+| `tabsLocked` | bool | `false` | Prevent new tabs from being added to an existing tab bar (NoAdd state). Pair with a `tabs` array to define a read-only set of tabs that users cannot extend. |
+| `resizable` | bool | `true` | Show corner resize handles when floating. |
+| `titlebarHideable` | bool | `true` | Allow the titlebar to be hidden via toggle. Set to `false` to keep it permanently visible. |
+| `renamable` | bool | `true` | Allow renaming via UI or command. |
+| `connectionAware` | bool | `false` | Show a ⊘ / ⟳ overlay while the client is disconnected or connecting. Covers the full content area including any tab bar. See **Connection Awareness** below. |
+| `zoomable` | bool | `true` | Show a zoom button in the titlebar. |
+| `splittable` | bool | `true` | Show split buttons in the titlebar. |
+| `swappable` | bool | `true` | Show the swap button when the pane is part of a split. |
+| `closeable` | bool | `true` | Show the close button and allow `close()`. Set to `false` to make the pane permanently uncloseable (e.g. `mainConsoleHost`). `lock()` sets this to `false`; `unlock()` restores it. |
+| `minimizable` | bool | `true` | Show the minimize (–) button on floating panes. `lock()` sets this to `false`; `unlock()` restores it. |
+| `convertible` | bool | `true` | Allow switching between embedded and floating states. Set to `false` to lock the pane in its initial position permanently. |
+| `movable` | bool | `true` | Allow repositioning by dragging the titlebar. |
+| `contextMenu` | bool | `true` | Show the right-click context menu on the titlebar. |
+| `propertiesButton` | bool | `true` | Show the Properties (≡) button in the titlebar and context menu. |
+| `highlightable` | bool | `true` | Show a focus border when this pane has keyboard/click focus. Set to `false` to keep the frame permanently unfocused-looking. |
+| `insertable` | bool | `true` | Include this pane as a drop target when another pane is dragged over it for edge-insertion. |
+| `overlay` | bool | `false` | Pane is always floating and excluded from workspace save/restore, the focus system, and ghost slots. Used for system dialogs and persistent HUDs that should not participate in the split tree. |
+| `transparentFrame` | bool | `false` | Makes the frame transparent and click-through. Use for HUD overlays that sit above the Qt surface without blocking interaction. |
+| `floatX` | number | `100` | Initial left edge (px) when the pane is floating. |
+| `floatY` | number | `100` | Initial top edge (px) when the pane is floating. |
+| `floatW` | number | `400` | Initial width (px) when the pane is floating. |
+| `floatH` | number | `300` | Initial height (px) when the pane is floating. |
+
+#### Tab node fields
+
+Pre-create tabs on a pane by including a `tabs` array in the pane node. Each entry defines one tab in order; `activeTabName` controls which tab is active after restore. The same format is used for sub-tabs inside a tab (tabs-in-tabs).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | — | Display name shown on the tab label. |
+| `renamable` | bool | `true` | Allow renaming via the Properties dialog or `mux tab rename`. |
+| `closeable` | bool | `true` | Allow this tab to be closed. |
+| `movable` | bool | `true` | Allow this tab to be dragged to reorder or moved to another pane. |
+| `contentable` | bool | `true` | Allow Content Library assignments on this tab. |
+| `propertiesButton` | bool | `true` | Show the Properties item in the tab's right-click context menu. |
+| `connectionAware` | bool | `false` | Show a ⊘ / ⟳ overlay when the client is not connected. Suppressed when the parent pane has `connectionAware` enabled. |
+| `tabsLocked` | bool | `false` | Host sub-tabs in this tab but prevent new ones from being added (NoAdd state). |
+| `tabs` | array | — | Sub-tab definitions. Same format as this table — enables tabs-in-tabs. |
+| `activeTabName` | string | — | Name of the sub-tab to activate after restore. |
+| `activeContent` | string | — | Content type id to apply automatically on restore. |
+
+```lua
+{
+    type = "pane",
+    id   = "sidebar",
+    name = "Sidebar",
+    tabs = {
+        { name = "Chat",   activeContent = "my_chat_view" },
+        { name = "Map",    closeable = false, renamable = false },
+        { name = "Status", connectionAware = true },
+    },
+    activeTabName = "Chat",
+}
+```
+
+#### Tabs in tabs
+
+Any tab can host its own nested tab bar. Enable this from the Properties dialog on an active tab by setting **Tabs** to **Enabled** or **NoAdd**, or include a `tabs` array in the tab's workspace entry.
+
+Sub-tabs follow the same rules as top-level tabs: they hold content, support connection awareness, and can be dragged and reordered within their bar. Cross-pane tab moves are only supported at the top level — sub-tabs cannot be relocated to a different pane's bar.
+
+```lua
+-- A tab that hosts two sub-tabs
+{
+    name  = "Analysis",
+    tabsLocked = true,   -- bar shown but no new sub-tabs can be added
+    tabs  = {
+        { name = "Chart",  activeContent = "my_chart" },
+        { name = "Table",  activeContent = "my_table" },
+    },
+    activeTabName = "Chart",
+}
+```
+
+#### Lifecycle callbacks
+
+Supply these as fields on the pane node. Each is an optional function that Muxlet calls when the corresponding event occurs.
+
+| Field | Signature | When called |
+|-------|-----------|-------------|
+| `onClose` | `function(pane)` | After the pane is closed and removed from the graph. |
+| `onFloat` | `function(pane)` | After the pane transitions to floating. |
+| `onEmbed` | `function(pane)` | After the pane is embedded back into a split slot. |
+| `onMinimize` | `function(pane, isMinimized)` | After minimize or restore. `isMinimized` is `true` when collapsing, `false` when restoring. |
+| `onReposition` | `function(pane)` | After the pane's geometry changes due to a split rebalance, window resize, workspace restore, or zoom. |
+
+```lua
+{
+    type = "pane",
+    id   = "sidebar",
+    name = "Sidebar",
+
+    onFloat = function(p)
+        echo("sidebar is now floating at " .. p.floatX .. "," .. p.floatY .. "\n")
+    end,
+
+    onEmbed = function(p)
+        echo("sidebar embedded\n")
+    end,
+
+    onMinimize = function(p, minimized)
+        if minimized then
+            echo("sidebar minimized\n")
+        else
+            echo("sidebar restored\n")
+        end
+    end,
+
+    onReposition = function(p)
+        -- fires on every resize; keep external widgets in sync here
+    end,
+}
+```
+
+Callbacks can also be assigned after a workspace is applied:
+
+```lua
+panes["sidebar"].onClose = function(p)
+    echo("sidebar was closed\n")
+end
+```
 
 #### Split node fields
 
@@ -327,7 +443,7 @@ Mux.deleteWorkspace("old-layout")      -- remove a saved workspace
 
 ### Content Types
 
-Content types are named widget factories. Once registered they appear in the right-click Add Content menu on every pane and tab — immediately, with no restart. The catalog is persisted to `Muxlet_persistent/content.json` so names survive reloads.
+Content types are named widget factories. Once registered they appear in the right-click **Content Library** menu on every pane and tab — immediately, with no restart. The catalog is persisted to `Muxlet_persistent/content.json` so names survive reloads.
 
 ```lua
 Mux.registerContent("my_hud", {
@@ -373,7 +489,7 @@ Mux._applyContent(tab, "my_hud")
 
 #### Built-in: GMCP Inspector
 
-`gmcp_inspector` is pre-registered and always available in the Add Content menu. It provides an interactive, type-grouped live view of any GMCP path with click-to-browse, expand/collapse, and zoom controls.
+`gmcp_inspector` is pre-registered and always available in the Content Library menu. It provides an interactive, type-grouped live view of any GMCP path with click-to-browse, expand/collapse, and zoom controls.
 
 Use it in a workspace definition like any other content type:
 
@@ -595,6 +711,69 @@ Use these on labels inside your dialog:
 
 ---
 
+### Connection Awareness
+
+Panes and tabs can display a status overlay when the game client is disconnected or mid-handshake. The overlay shows **⊘ DISCONNECTED** or **⟳ CONNECTING…** and disappears automatically once the connection is ready.
+
+#### Enabling via Properties
+
+Open the Properties dialog for any pane or tab and toggle **Connection Awareness** to **On**. The overlay appears immediately if the client is currently in a non-connected state.
+
+Enabling connection awareness on a **pane** covers the entire content area, including the tab bar. Per-tab overlays are suppressed for all tabs in that pane while pane-level awareness is active. Disabling pane-level awareness restores any enrolled tab overlays automatically.
+
+#### API
+
+```lua
+-- Pane-level: covers the full content area including the tab bar.
+pane:setConnectionAware(true)
+pane:setConnectionAware(false)
+
+-- Tab-level: covers one tab's content area only.
+-- Has no effect when the parent pane already has connectionAware = true.
+pane:setTabConnectionAware(tabId, true)
+pane:setTabConnectionAware(tabId, false)
+
+-- Drive state from game-specific logic.
+-- States: "connected" | "connecting" | "disconnected"
+Mux.setConnectionState("connected")
+```
+
+#### State machine
+
+Muxlet listens for Mudlet system events and advances state automatically:
+
+| Mudlet event | Argument | State transition |
+|--------------|----------|-----------------|
+| `sysConnectionEvent` | — | → `"connecting"` (⟳) |
+| `sysProtocolEnabled` | `"GMCP"` | → `"connected"` (overlay hidden) |
+| `sysDisconnectionEvent` | — | → `"disconnected"` (⊘) |
+
+`sysProtocolEnabled` fires within milliseconds of a TCP connect on any GMCP-capable MUD, so the connecting screen is effectively invisible on those games. For games that do not use GMCP, a fallback timer advances the state to `"connected"` after a configurable delay.
+
+```lua
+-- Default fallback delay is 30 seconds. Change it in a muxletReady handler.
+Mux._connReadyDelay = 10
+
+-- Set to 0 to disable the fallback entirely.
+-- You are then responsible for calling Mux.setConnectionState("connected")
+-- from your own game-ready event handler (e.g. a game-specific GMCP event).
+Mux._connReadyDelay = 0
+```
+
+#### Workspace persistence
+
+`connectionAware` is saved and restored automatically. Set it in a workspace definition:
+
+```lua
+-- Pane-level connection awareness
+{ type = "pane", id = "chat", name = "Chat", connectionAware = true }
+
+-- Tab-level (inside the pane's tabs array)
+{ name = "Chat", connectionAware = true }
+```
+
+---
+
 ### Accessing the Live Pane Graph
 
 ```lua
@@ -629,6 +808,7 @@ The `panes` global is a metatable proxy over `Mux._panes`. Always use `panes["id
 ### Developer Notes
 
 - All Mux Lua identifiers use **camelCase** — `titlebarHeight`, `setFocus`, `applyTheme`. Match this in any code that touches Mux internals.
+- All behavioral pane flags use a **positive convention** — `closeable`, `minimizable`, `resizable`, `renamable`, `contentable`, `highlightable`, `convertible`, `contextMenu`, `propertiesButton`, `insertable`, `titlebarHideable`. A flag set to `false` restricts that capability; omitting it (or setting `true`) leaves it enabled. `lock()` sets all mutable flags to `false`; `unlock()` restores them.
 - `MuxPane`, `MuxSplit`, and `MuxPaneSet` are the three concrete classes. Instances are registered in `Mux._panes`, `Mux._splits`, and `Mux._paneSets` automatically on creation.
 - IDs (e.g. `pane_0003`) are user-facing and recycle freed numbers. Internal Geyser widget names (e.g. `mux_w_0042`) never recycle — Qt holds named widgets in memory and recycled names would alias destroyed widgets.
 - `Mux._scheduleAutoSave()` is called internally after every structural change. You do not need to call it unless you make external modifications to the pane graph.

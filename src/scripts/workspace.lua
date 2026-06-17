@@ -2,7 +2,7 @@
 --
 -- A workspace is a complete snapshot of the Muxlet UI state: pane arrangement,
 -- split ratios, theme, tab structure, loaded content, all configuration flags
--- (noContent, locked, connectionAware, …), and floating pane positions.
+-- (contentable, locked, connectionAware, …), and floating pane positions.
 --
 -- API:
 --   Mux.registerWorkspace("name", def)   register a static workspace definition
@@ -193,7 +193,7 @@ local function serializeNode(obj)
             b         = serializeNode(obj.childB),
         }
     end
-    if obj.permanentFloat then return nil end
+    if obj.overlay then return nil end
 
     local node = {
         type            = "pane",
@@ -202,12 +202,14 @@ local function serializeNode(obj)
         showTitlebar    = obj.titlebarVisible,
         mainConsoleHost = obj.mainConsoleHost or false,
     }
-    if obj.noContent        then node.noContent        = true end
-    if obj.noResize         then node.noResize         = true end
-    if obj.noTitlebarToggle then node.noTitlebarToggle = true end
-    if obj.noRename         then node.noRename         = true end
-    if obj.noTabs           then node.noTabs           = true end
-    if obj.locked           then node.locked           = true end
+    if not obj.contentable       then node.contentable       = false end
+    if not obj.resizable         then node.resizable         = false end
+    if not obj.titlebarHideable  then node.titlebarHideable  = false end
+    if not obj.renamable         then node.renamable         = false end
+    if not obj.propertiesButton  then node.propertiesButton  = false end
+    if obj.tabsLocked            then node.tabsLocked         = true  end
+    if not obj.convertible       then node.convertible       = false end
+    if not obj.movable        then node.movable            = false end
     if obj._connectionAware then node.connectionAware  = true end
     if obj._activeContent   then node.activeContent   = obj._activeContent end
     if obj.floating then
@@ -249,7 +251,7 @@ function Mux.saveWorkspace(name)
     end
 
     for _, pane in pairs(Mux._panes) do
-        if pane.floating and not pane.permanentFloat then
+        if pane.floating and not pane.overlay then
             local node = serializeNode(pane)
             if node then table.insert(def.floatingPanes, node) end
         end
@@ -300,7 +302,7 @@ function Mux._doAutoSave()
     end
 
     for _, pane in pairs(Mux._panes) do
-        if pane.floating and not pane.permanentFloat then
+        if pane.floating and not pane.overlay then
             local node = serializeNode(pane)
             if node then table.insert(def.floatingPanes, node) end
         end
@@ -386,8 +388,24 @@ local function restoreTabsOnPane(p, node)
         for _, tabDef in ipairs(savedTabs) do
             local tab = p:addTab(tabDef.name)
             if tab then
-                if tabDef.locked then tab.locked = true end
-                local savedContent = tabDef.activeContent or tabDef._activeContent or tabDef.preset
+                -- Individual capability flags; backward-compat: old saves only have `locked`.
+                -- If the new flags are present use them; otherwise derive from old locked field.
+                if tabDef.renamable ~= nil or tabDef.closeable ~= nil or tabDef.movable ~= nil then
+                    tab.renamable   = tabDef.renamable   ~= false
+                    tab.closeable   = tabDef.closeable   ~= false
+                    tab.movable     = tabDef.movable     ~= false
+                    if tabDef.contentable ~= nil then
+                        tab.contentable = tabDef.contentable ~= false
+                    end
+                elseif tabDef.locked then
+                    tab.renamable   = false
+                    tab.closeable   = false
+                    tab.movable     = false
+                    tab.contentable = false
+                end
+                if tabDef.tabsLocked                then tab.tabsLocked       = true  end
+                if tabDef.propertiesButton == false then tab.propertiesButton = false end
+                local savedContent = tabDef.activeContent or tabDef._activeContent
                 if savedContent and Mux._content and Mux._content[savedContent] then
                     if Mux._applyContent then
                         pcall(Mux._applyContent, tab, savedContent)
@@ -395,6 +413,9 @@ local function restoreTabsOnPane(p, node)
                 end
                 if tabDef.connectionAware and p.setTabConnectionAware then
                     p:setTabConnectionAware(tab.id, true)
+                end
+                if tabDef.tabs and #tabDef.tabs > 0 then
+                    restoreTabsOnPane(tab, tabDef)
                 end
             end
         end
@@ -414,21 +435,22 @@ buildNode = function(node, parentContainer, paneMap, paneSet)
 
     if node.type == "pane" then
         local showTitlebar = node.showTitlebar
-        if showTitlebar == nil then showTitlebar = node.show_titlebar end
-        local mainHost = node.mainConsoleHost
-        if mainHost == nil then mainHost = node.main_console_host end
+        local mainHost     = node.mainConsoleHost
 
         local p = MuxPane:new({
             id               = node.id,
             name             = node.name or node.id or "Pane",
-            show_titlebar    = showTitlebar,
+            showTitlebar     = showTitlebar,
             mainConsoleHost  = mainHost,
             parent           = parentContainer,
-            noContent        = node.noContent        or false,
-            noResize         = node.noResize         or false,
-            noTitlebarToggle = node.noTitlebarToggle  or false,
-            noRename         = node.noRename         or false,
-            noTabs           = node.noTabs           or false,
+            contentable      = node.contentable ~= false,
+            resizable        = node.resizable ~= false,
+            titlebarHideable = node.titlebarHideable ~= false,
+            renamable        = node.renamable ~= false,
+            propertiesButton = node.propertiesButton ~= false,
+            tabsLocked       = node.tabsLocked or false,
+            convertible      = node.convertible ~= false,
+            movable          = node.movable ~= false,
             floatX           = node.floatX or 100,
             floatY           = node.floatY or 100,
             floatW           = node.floatW or 400,
@@ -439,7 +461,6 @@ buildNode = function(node, parentContainer, paneMap, paneSet)
         p._paneSet = paneSet
         if node.id then paneMap[node.id] = p end
 
-        if node.locked then p:lock() end
         if node.connectionAware and p.setConnectionAware then
             p:setConnectionAware(true)
         end

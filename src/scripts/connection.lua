@@ -104,6 +104,7 @@ function MuxPane:_showConnScreen(state)
     self._connScreen:echo(Mux._connScreenHtml(state))
     self.content:hide()
     self._connScreen:show()
+    Mux.raiseFloatingPanes()
 end
 
 function MuxPane:_hideConnScreen()
@@ -165,6 +166,7 @@ function MuxPane:_showTabConnScreen(tab, state)
     if self._activeTabId == tab.id then
         tab.content:hide()
         tab._connScreen:show()
+        Mux.raiseFloatingPanes()
     end
 end
 
@@ -196,12 +198,24 @@ function MuxPane:setConnectionAware(enabled)
     local key = "pane_" .. self.id
     if enabled then
         Mux._connAware[key] = { kind = "pane", obj = self }
+        -- Suppress any visible tab-level screens — pane screen covers everything.
+        for _, tab in ipairs(self._tabs or {}) do
+            if tab._connScreen then tab._connScreen:hide() end
+        end
         if Mux._connState ~= "connected" then
             self:_showConnScreen(Mux._connState)
         end
     else
         Mux._connAware[key] = nil
         self:_hideConnScreen()
+        -- Restore tab-level screens for enrolled tabs if still disconnected.
+        if Mux._connState ~= "connected" then
+            for _, entry in pairs(Mux._connAware) do
+                if entry.kind == "tab" and entry.pane == self then
+                    self:_showTabConnScreen(entry.obj, Mux._connState)
+                end
+            end
+        end
     end
 end
 
@@ -214,7 +228,7 @@ function MuxPane:setTabConnectionAware(tabId, enabled)
     local key = "tab_" .. self.id .. "_" .. tab.id
     if enabled then
         Mux._connAware[key] = { kind = "tab", obj = tab, pane = self }
-        if Mux._connState ~= "connected" then
+        if Mux._connState ~= "connected" and not self._connectionAware then
             self:_showTabConnScreen(tab, Mux._connState)
         end
     else
@@ -227,6 +241,10 @@ end
 
 function Mux.setConnectionState(state)
     if Mux._connState == state then return end
+    if state == "connected" and Mux._connReadyTimer then
+        killTimer(Mux._connReadyTimer)
+        Mux._connReadyTimer = nil
+    end
     Mux._connState = state
     for _, entry in pairs(Mux._connAware) do
         if entry.kind == "pane" then
@@ -236,10 +254,13 @@ function Mux.setConnectionState(state)
                 entry.obj:_showConnScreen(state)
             end
         elseif entry.kind == "tab" then
-            if state == "connected" then
-                entry.pane:_hideTabConnScreen(entry.obj)
-            else
-                entry.pane:_showTabConnScreen(entry.obj, state)
+            -- Pane-level awareness takes precedence; tab screens stay hidden.
+            if not entry.pane._connectionAware then
+                if state == "connected" then
+                    entry.pane:_hideTabConnScreen(entry.obj)
+                else
+                    entry.pane:_showTabConnScreen(entry.obj, state)
+                end
             end
         end
     end
@@ -263,26 +284,70 @@ function MuxPane:_activateTabObj(tab)
     -- Run the original activation (updates label styles, hides old content, sets _activeTabId).
     _origActivateTabObj(self, tab)
 
-    -- After switch: if this tab is connection-aware and disconnected, override content visibility.
-    if tab._connectionAware and Mux._connState ~= "connected" then
+    -- After switch: show tab screen only when tab is enrolled and pane-level is not active.
+    if tab._connectionAware and not self._connectionAware and Mux._connState ~= "connected" then
         tab.content:hide()
         self:_showTabConnScreen(tab, Mux._connState)
     end
 end
 
 -- ── Mudlet event handlers ─────────────────────────────────────────────────────
+--
+-- sysConnectionEvent (TCP socket open) → "connecting"  shows ⟳
+-- sysProtocolEnabled with "GMCP"       → "connected"   hides overlay
+--   GMCP negotiation completes within milliseconds of TCP connect on any
+--   GMCP-capable game, so this is effectively instant for modern MUDs.
+-- sysDisconnectionEvent                → "disconnected" shows ⊘
+--
+-- For non-GMCP games, application code should call
+-- Mux.setConnectionState("connected") when the game is ready.
+-- _connReadyDelay (default 30s) is a last-resort fallback for those cases.
+
+Mux._connReadyDelay = Mux._connReadyDelay or 30
+
+local function _cancelConnReady()
+    if Mux._connReadyTimer then
+        killTimer(Mux._connReadyTimer)
+        Mux._connReadyTimer = nil
+    end
+end
 
 if not Mux._connHandlerConn then
     Mux._connHandlerConn = registerAnonymousEventHandler(
         "sysConnectionEvent",
-        function() Mux.setConnectionState("connected") end
+        function()
+            _cancelConnReady()
+            Mux.setConnectionState("connecting")
+            if Mux._connReadyDelay and Mux._connReadyDelay > 0 then
+                Mux._connReadyTimer = tempTimer(Mux._connReadyDelay, function()
+                    Mux._connReadyTimer = nil
+                    if Mux._connState == "connecting" then
+                        Mux.setConnectionState("connected")
+                    end
+                end)
+            end
+        end
+    )
+end
+
+if not Mux._connHandlerGmcp then
+    Mux._connHandlerGmcp = registerAnonymousEventHandler(
+        "sysProtocolEnabled",
+        function(_, protocol)
+            if protocol == "GMCP" and Mux._connState == "connecting" then
+                Mux.setConnectionState("connected")
+            end
+        end
     )
 end
 
 if not Mux._connHandlerDisc then
     Mux._connHandlerDisc = registerAnonymousEventHandler(
         "sysDisconnectionEvent",
-        function() Mux.setConnectionState("disconnected") end
+        function()
+            _cancelConnReady()
+            Mux.setConnectionState("disconnected")
+        end
     )
 end
 

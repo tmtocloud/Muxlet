@@ -56,7 +56,7 @@ function MuxPane._echoTabPlaceholder(contentBg, tabName, paneId, tabId)
         .. "</span>"
         .. "<br/><br/>"
         .. "<span style='%s'>"
-        .. "right-click tab label -> Add Content"
+        .. "right-click tab label -> Content Library"
         .. "</span>"
         .. "</div>",
         ds, tabName,
@@ -319,10 +319,6 @@ local function buildTabInfrastructure(host)
     host._tabBar:setStyleSheet(theme.tabBarCss or "")
     if not host._isSubTabHost then
         host._tabBar:setClickCallback(function(event)
-            if event.button == "RightButton" then
-                Mux._showTabBarMenu(host, event.globalX or 0, event.globalY or 0)
-                return
-            end
             if Mux.setFocus then Mux.setFocus(host) end
         end)
     end
@@ -342,9 +338,11 @@ local function buildTabInfrastructure(host)
         "<center><span style='color:%s;font-size:15px;font-weight:bold;'>+</span></center>",
         addTc))
     host._addTabBtn:setClickCallback(function(event)
-        if event.button == "LeftButton" and not host.locked then host:addTab() end
+        if event.button == "LeftButton" and not host.tabsLocked then
+            host:addTab()
+        end
     end)
-    if host.locked then host:_setAddTabBtnVisible(false) end
+    if host.tabsLocked then host:_setAddTabBtnVisible(false) end
 
     host._tabViewport = Geyser.Container:new({
         name = host._gid .. "_tab_vp",
@@ -359,21 +357,25 @@ end
 function MuxPane:enableTabs(opts)
     opts = opts or {}
     -- Tab objects (sub-tab hosts) have a .pane back-reference; panes do not.
-    -- Sub-tab hosts bypass permanentFloat and noTabs guards.
+    -- Sub-tab hosts use a different code path for infrastructure setup.
     local isSubTabHost = (self.pane ~= nil)
-    if not isSubTabHost then
-        if self.noTabs then
-            Mux._warn("MuxPane '%s': this pane cannot use tabs", self.name or self._gid)
-            return
-        end
-    end
     if self._tabsEnabled then return end
     self._tabsEnabled  = true
     self._tabs         = self._tabs or {}
     self._activeTabId  = nil
     self._isSubTabHost = isSubTabHost
     Mux._tabHosts[self._gid] = self
-    buildTabInfrastructure(self)
+    if self._tabBar then
+        -- Infrastructure exists from a prior enableTabs(); just show it and restore the + button.
+        self._tabBar:show()
+        if self._tabViewport then self._tabViewport:show() end
+        self.contentBg:hide()
+    else
+        buildTabInfrastructure(self)
+    end
+    -- Content now belongs in tabs; hide the pane-level add-content controls.
+    if self.contentBtn then self.contentBtn:hide() end
+    if self._tabBar and not self.tabsLocked then self:_setAddTabBtnVisible(true) end
     if not opts.noDefaultTab and #self._tabs == 0 then
         local priorContent = self._activeContent
         local tab1 = self:addTab("Tab 1")
@@ -412,6 +414,11 @@ function MuxPane:_hideTabBar()
     if self._tabViewport then self._tabViewport:hide() end
     self.contentBg:show()
     self:_updatePlaceholder()
+    -- Restore content button if tabs are fully gone and tabs are disabled.
+    -- (If tabs are still enabled but empty, the button stays hidden.)
+    if self.contentBtn and self:_contentEnabled() then
+        self.contentBtn:show()
+    end
 end
 
 function MuxPane:_collapseIfDone()
@@ -451,8 +458,9 @@ function MuxPane:addTab(name, pos)
     self._tabBarBox:organize()
 
     local tab = {
-        id = tabId, name = name, locked = false, pane = self,
+        id = tabId, name = name, pane = self,
         label = label, content = content, contentBg = contentBg,
+        renamable = true, closeable = true, movable = true, contentable = true,
         -- _gid provides unique widget name prefixes if this tab later hosts sub-tabs.
         _gid = self._gid .. "_st" .. tabId,
     }
@@ -473,7 +481,7 @@ end
 function MuxPane:removeTab(tabId)
     local tab, idx = self:_findTab(tabId)
     if not tab then return end
-    if tab.locked then Mux._warn("Tab '%s' is locked", tab.name); return end
+    if tab.closeable == false then Mux._warn("Tab '%s' is not closeable", tab.name); return end
     local isLast = (#self._tabs <= 1)
     if self._activeTabId == tabId then
         if not isLast then
@@ -502,21 +510,39 @@ function MuxPane:removeTab(tabId)
     if tab._tabsEnabled and tab._gid then
         Mux._tabHosts[tab._gid] = nil
     end
+    -- Close any open properties dialogs for this tab.
+    if tab._propertiesDialogs then
+        for _, dlg in pairs(tab._propertiesDialogs) do
+            pcall(function() dlg:close() end)
+        end
+        tab._propertiesDialogs = nil
+    end
     table.remove(self._tabs, idx)
     Mux._freeId(tabId)
-    if isLast then
+    if isLast and not self._tabsEnabled then
+        -- Only collapse the tab bar when tabs have been fully disabled;
+        -- with tabs still enabled the empty bar remains so the user can add more.
         self:_hideTabBar()
     end
     Mux._scheduleAutoSave()
 end
 
 -- Shows a confirmation popup before closing a tab.
--- Locked tabs are silently ignored. Calls removeTab on confirm.
+-- Silently ignores non-closeable tabs. Calls removeTab on confirm.
 function MuxPane:_confirmCloseTab(tab)
-    if not tab or tab.locked then return end
+    if not tab or tab.closeable == false then return end
+    local doConfirm = Mux.settings.get("mux", "confirmTabClose")
+    if doConfirm == nil then doConfirm = true end
+    if not doConfirm then
+        self:removeTab(tab.id)
+        return
+    end
     local confirmD = Mux.createDialog({
-        title  = "Close Tab?",
-        width  = 340, height = 140,
+        title         = "Close Tab?",
+        width         = 340, height = 140,
+        closeable     = false,
+        minimizable   = false,
+        contextMenu   = false,
     })
     _closeTabPending = { tab = tab, pane = self, dlg = confirmD }
     Mux._applyContent(confirmD, "mux_close_tab_confirm")
@@ -556,6 +582,7 @@ end
 function MuxPane:renameTab(tabId, newName)
     local tab = self:_findTab(tabId)
     if not tab then return end
+    if not tab.renamable then return end
     tab.name = newName
     local theme    = Mux.activeTheme()
     local isActive = (self._activeTabId == tabId)
@@ -574,16 +601,17 @@ end
 -- Adjustable.TabWindow.clicked.
 function MuxPane:_wireTabLabel(tab)
     local pane = self
-    local drag = { clicked = false, active = false, startX = 0, startY = 0 }
+    local drag = { clicked = false, active = false, startX = 0, startY = 0, middleCloseFired = false }
 
     tab.label:setClickCallback(function(event)
         if event.button == "RightButton" then
-            if not pane.noContextMenu and not tab.noContextMenu then
+            if pane.contextMenu and tab.contextMenu ~= false then
                 pane:_showTabContextMenu(tab, event.globalX, event.globalY)
             end
             return
         end
-        if event.button == "MiddleButton" then
+        if event.button == "MidButton" then
+            drag.middleCloseFired = true
             pane:_confirmCloseTab(tab)
             return
         end
@@ -604,7 +632,7 @@ function MuxPane:_wireTabLabel(tab)
     tab.label:setMoveCallback(function(event)
         -- GATE: only run when button is physically held (drag.clicked).
         if not drag.clicked then return end
-        if pane.locked then return end
+        if not tab.movable then return end
         if Mux._movingTab then return end
 
         local dx = math.abs(event.globalX - drag.startX)
@@ -642,6 +670,13 @@ function MuxPane:_wireTabLabel(tab)
     end)
 
     tab.label:setReleaseCallback(function(event)
+        if event.button == "MidButton" then
+            if not drag.middleCloseFired then
+                pane:_confirmCloseTab(tab)
+            end
+            drag.middleCloseFired = false
+            return
+        end
         if event.button ~= "LeftButton" then return end
         local wasDragging = drag.active
         drag.clicked = false
@@ -679,7 +714,7 @@ function MuxPane:_wireTabLabel(tab)
     -- ALL bars, set a 10-second auto-cancel.
     tab.label:setDoubleClickCallback(function(event)
         if event.button ~= "LeftButton" then return end
-        if tab.locked or pane.locked then return end
+        if not tab.movable then return end
 
         if Mux._movingTab and Mux._movingTab.tab == tab then
             Mux._resetOverlay(); return
@@ -765,7 +800,7 @@ function MuxPane:_syncHBoxOrder()
 end
 
 function MuxPane:_receiveTab(tab, fromPane, insertPos)
-    if self.locked or self.permanentFloat or self.noTabs then return end
+    if not tab.movable then return end
     if not self._tabsEnabled then self:enableTabs({ noDefaultTab = true }) end
 
     local _, srcIdx = fromPane:_findTab(tab.id)
@@ -848,12 +883,14 @@ function MuxPane:_showTabContextMenu(tab, gx, gy)
 
     local items = {}
 
-    items[#items+1] = { text = "⚙  Properties", fn = function()
-        Mux.showTabProperties(self, tab)
-    end }
+    if tab.propertiesButton ~= false then
+        items[#items+1] = { text = "⚙  Properties", fn = function()
+            Mux.showTabProperties(self, tab)
+        end }
+    end
 
     local contentNames = Mux._listContent and Mux._listContent() or {}
-    if #contentNames > 0 then
+    if #contentNames > 0 and tab.contentable ~= false then
         local contentItems = {}
         for _, contentName in ipairs(contentNames) do
             local def        = Mux._content[contentName]
@@ -866,25 +903,43 @@ function MuxPane:_showTabContextMenu(tab, gx, gy)
                 end,
             }
         end
-        items[#items+1] = { sep = true }
-        items[#items+1] = { text = "◈  Add Content  ▶", submenu = contentItems }
+        if #items > 0 then items[#items+1] = { sep = true } end
+        items[#items+1] = { text = "▥  Content Library  ▶", submenu = contentItems }
     end
 
-    if not tab.locked then
-        items[#items+1] = { sep = true }
+    if tab.closeable ~= false then
+        if #items > 0 then items[#items+1] = { sep = true } end
         items[#items+1] = { text = "✕  Close Tab", danger = true,
             fn = function() self:_confirmCloseTab(tab) end }
     end
 
-    Mux._showItemMenu(gx, gy, items)
+    if #items > 0 then
+        Mux._showItemMenu(gx, gy, items)
+    end
 end
 
 function MuxPane:_serializeTabs()
     if not self._tabsEnabled or not self._tabs or #self._tabs == 0 then return nil end
     local tabs = {}
     for _, tab in ipairs(self._tabs) do
-        local tabEntry = { name = tab.name, locked = tab.locked or false, _activeContent = tab._activeContent }
-        if tab._connectionAware then tabEntry.connectionAware = true end
+        local tabEntry = {
+            name        = tab.name,
+            renamable   = tab.renamable   ~= false,
+            closeable   = tab.closeable   ~= false,
+            movable     = tab.movable     ~= false,
+            contentable = tab.contentable ~= false,
+            _activeContent = tab._activeContent,
+        }
+        if tab._connectionAware          then tabEntry.connectionAware  = true  end
+        if tab.tabsLocked                then tabEntry.tabsLocked       = true  end
+        if tab.propertiesButton == false then tabEntry.propertiesButton = false end
+        if tab._tabsEnabled then
+            local subTabs, subActiveName = tab:_serializeTabs()
+            if subTabs then
+                tabEntry.tabs          = subTabs
+                tabEntry.activeTabName = subActiveName
+            end
+        end
         tabs[#tabs+1] = tabEntry
     end
     local activeTabName
@@ -924,28 +979,33 @@ Mux.registerContent("mux_close_tab_confirm", {
         _closeTabPending = nil
         local tab, pane, dlg = pending.tab, pending.pane, pending.dlg
 
+        local cw = target.content:get_width()
+        if cw < 50 then cw = (target.floatW or 340) - 4 end
         local body = Geyser.Label:new({
-            name=target._gid.."_body", x=10, y=8, width=320, height=36,
+            name=target._gid.."_body", x=10, y=10, width=cw-20, height=36,
         }, target.content)
         body:setStyleSheet(Mux.dialogCss.body)
         body:rawEcho(string.format("Close tab <b>%s</b>?", tab.name))
 
-        local btnYes = Geyser.Label:new({
-            name=target._gid.."_yes", x=20, y=74, width=135, height=34,
+        local btnProceed = Geyser.Label:new({
+            name=target._gid.."_proceed", x=20, y=54, width=135, height=34,
         }, target.content)
-        btnYes:setStyleSheet(Mux.dialogCss.buttonDanger)
-        btnYes:rawEcho("<center>Close</center>")
-        btnYes:setClickCallback(function()
+        btnProceed:setStyleSheet(Mux.dialogCss.buttonDanger)
+        btnProceed:rawEcho("<center>Proceed</center>")
+        Mux.wireDialogButton(btnProceed, Mux.dialogCss.buttonDanger, Mux.dialogCss.buttonDangerHover)
+        btnProceed:setClickCallback(function()
             dlg:close()
             pane:removeTab(tab.id)
         end)
 
-        local btnNo = Geyser.Label:new({
-            name=target._gid.."_no", x=185, y=74, width=135, height=34,
+        local btnCancel = Geyser.Label:new({
+            name=target._gid.."_cancel", x=185, y=54, width=135, height=34,
         }, target.content)
-        btnNo:setStyleSheet(Mux.dialogCss.button)
-        btnNo:rawEcho("<center>Cancel</center>")
-        btnNo:setClickCallback(function() dlg:close() end)
+        btnCancel:setStyleSheet(Mux.dialogCss.buttonPrimary)
+        btnCancel:rawEcho("<center>Cancel</center>")
+        Mux.wireDialogButton(btnCancel, Mux.dialogCss.buttonPrimary, Mux.dialogCss.buttonPrimaryHover)
+        btnCancel:setClickCallback(function() dlg:close() end)
+        target._autoFitHeight = 98
     end,
     remove = function(_) end,
 })

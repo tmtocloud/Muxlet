@@ -97,7 +97,7 @@ Mux.debug = false
 
 function Mux._log(fmt, ...)
     if not Mux.debug then return end
-    printError(string.format("[Muxlet] %s", string.format(fmt, ...)))
+    cecho(string.format("\n<dim_grey>[Muxlet]<reset> %s\n", string.format(fmt, ...)))
 end
 
 function Mux._err(fmt, ...)
@@ -105,7 +105,7 @@ function Mux._err(fmt, ...)
 end
 
 function Mux._warn(fmt, ...)
-    printError(string.format("[Muxlet] %s", string.format(fmt, ...)))
+    cecho(string.format("\n<yellow>[Muxlet]<reset> %s\n", string.format(fmt, ...)))
 end
 
 -- MuxPaneSet instances write their pixel contributions here; _applyBorders()
@@ -387,13 +387,13 @@ function Mux._showContextMenu(pane, globalX, globalY)
     local items = {}
 
     -- Close (mirrors closeBtn)
-    local showClose = not pane.noClose and not (pane.locked and not pane.closeable)
+    local showClose = pane.closeable
     if showClose then
-        items[#items+1] = { text="✕  Close Pane", fn=function() pane:close() end, danger=true }
+        items[#items+1] = { text="✕  Close Pane", fn=function() pane:_confirmClose() end, danger=true }
     end
 
     -- Minimize (mirrors minBtn — floating only)
-    if pane.floating and not pane.noFloat then
+    if pane.floating and pane.minimizable then
         items[#items+1] = { text="–  Minimize", fn=function() pane:toggleMinimize() end }
     end
 
@@ -404,19 +404,19 @@ function Mux._showContextMenu(pane, globalX, globalY)
     end
 
     -- Embed (floating panes only)
-    if pane.floating and not pane.permanentFloat then
+    if pane.floating and pane.convertible then
         if #items > 0 then items[#items+1] = { sep=true } end
         items[#items+1] = { text="Embed Pane", fn=function() pane:embed() end }
     end
 
     -- Swap / Split (mirrors swapBtn, splitHBtn, splitVBtn)
-    if not pane.floating and not pane.locked then
-        if pane.swappable or pane.splittable then
+    if not pane.floating then
+        if (pane.swappable and pane._split) or pane.splittable then
             if #items > 0 then items[#items+1] = { sep=true } end
         end
-        if pane.swappable then
+        if pane.swappable and pane._split then
             items[#items+1] = { text="⇔  Swap with sibling", fn=function()
-                if pane._split then pane._split:swapSlots() end
+                pane._split:swapSlots()
             end }
         end
         if pane.splittable then
@@ -430,20 +430,20 @@ function Mux._showContextMenu(pane, globalX, globalY)
     end
 
     -- Settings / Properties (mirrors infoBtn: showSettingsInMenu → Settings, else → Properties)
-    if not pane.noContextMenu then
+    if pane.contextMenu then
         if pane.showSettingsInMenu then
             if #items > 0 then items[#items+1] = { sep=true } end
             items[#items+1] = { text="⚙  Settings", fn=function() Mux.settings.toggle() end }
-        elseif not pane.noClose then
+        elseif pane.propertiesButton then
             if #items > 0 then items[#items+1] = { sep=true } end
             items[#items+1] = { text="≡  Properties", fn=function() Mux.showPaneProperties(pane) end }
         end
     end
 
-    -- Add Content (opens library dialog)
-    if not pane.noContent then
+    -- Content Library (opens library dialog) — hidden while tabs own the content slot.
+    if pane._contentEnabled and pane:_contentEnabled() then
         if #items > 0 then items[#items+1] = { sep=true } end
-        items[#items+1] = { text="◈  Content Library…", fn=function()
+        items[#items+1] = { text="▥  Content Library…", fn=function()
             Mux._showContentLibrary(pane)
         end }
     end
@@ -456,7 +456,7 @@ end
 -- Content library dialog — scrollable list of all registered non-internal content.
 -- Called by contentBtn in the titlebar and by the context menu "Content Library…" item.
 function Mux._showContentLibrary(pane)
-    if pane.noContent then return end
+    if not pane.contentable then return end
     local contentNames = Mux._listContent and Mux._listContent() or {}
     if #contentNames == 0 then
         Mux._echo("\n<yellow>[Muxlet]<reset> No content types registered.\n")
@@ -471,7 +471,7 @@ function Mux._showContentLibrary(pane)
     local dlg = Mux.createDialog({
         title = "Content Library",
         width = dlgW, height = dlgH,
-        noContextMenu = true, noTabs = true,
+        contextMenu = false,
     })
     if dlg.contentBg then dlg.contentBg:echo(""); dlg.contentBg:hide() end
 
@@ -562,28 +562,6 @@ function Mux._showContentLibrary(pane)
     end)
 end
 
--- Tab bar right-click menu: shown when user right-clicks the tab bar background.
--- Provides tab management actions (add/enable/disable) without touching the pane titlebar.
-function Mux._showTabBarMenu(host, globalX, globalY)
-    local menu  = Mux._contextMenu
-    local theme = Mux.activeTheme()
-    menu.itemHeight = theme.contextMenuItemHeight or 28
-    menu.menuWidth  = theme.contextMenuWidth      or 188
-
-    local items = {}
-    if not host.locked then
-        if host._tabsEnabled then
-            items[#items+1] = { text="⊞  Add Tab", fn=function() host:addTab() end }
-            items[#items+1] = { sep=true }
-            items[#items+1] = { text="⊟  Disable Tabs", fn=function() host:disableTabs() end }
-        else
-            items[#items+1] = { text="⊞  Enable Tabs", fn=function() host:enableTabs() end }
-        end
-    end
-    if #items > 0 then
-        Mux._showItemMenu(globalX, globalY, items)
-    end
-end
 
 -- Centred rename dialog with a CommandLine text field, OK/Cancel, and a dimming backdrop.
 -- opts: { currentName, title, onConfirm(name) }

@@ -931,7 +931,7 @@ local function insShowPathBrowser(st)
 
     local dlg = Mux.createDialog({
         title="GMCP Path Browser", width=dlgW, height=dlgH,
-        noContextMenu=true, noTabs=true,
+        contextMenu=false,
     })
     if dlg.contentBg then dlg.contentBg:echo(""); dlg.contentBg:hide() end
 

@@ -11,6 +11,7 @@
   {"name": "pane_set"},
   {"name": "manager"},
   {"name": "dialog"},
+  {"name": "widgets"},
   {"name": "welcome"},
   {"name": "workspace"},
   {"name": "content_builtins"},

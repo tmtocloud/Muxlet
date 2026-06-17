@@ -23,7 +23,7 @@ if sub == "help" then
   <white>Session<reset>
   mux start                    — enable mux (restores last session, or 'default')
   mux stop                     — disable mux, restore normal Mudlet console
-  mux reset                    — re-apply the default workspace (discard session state)
+  mux reset                    — re-apply the reset workspace (see mux.reset_workspace setting)
   mux status                   — show status overview
 
   <white>Pane Actions (focused pane)<reset>
@@ -39,6 +39,8 @@ if sub == "help" then
   mux pane lock                — lock focused pane
   mux pane unlock              — unlock focused pane
   mux pane new [name]          — create a new floating pane
+  mux pane width <1-99>        — set width to % of screen width
+  mux pane height <1-99>       — set height to % of screen height
   mux pane properties          — open Properties dialog for focused pane
 
   <white>Tab Actions (active tab in focused pane)<reset>
@@ -161,6 +163,20 @@ elseif sub == "pane" then
     elseif paneAction == "new" then
         local name = words[3] and table.concat(words, " ", 3) or "Pane"
         Mux.newFloatingPane({ name = name })
+    elseif paneAction == "width" then
+        local pct = tonumber(words[3])
+        if not pct then
+            Mux._echo("\n<red>[Muxlet]<reset> Usage: mux pane width <1-99>\n")
+        else
+            Mux.resizePaneToWidth(Mux._focusedPane, pct)
+        end
+    elseif paneAction == "height" then
+        local pct = tonumber(words[3])
+        if not pct then
+            Mux._echo("\n<red>[Muxlet]<reset> Usage: mux pane height <1-99>\n")
+        else
+            Mux.resizePaneToHeight(Mux._focusedPane, pct)
+        end
     elseif paneAction == "properties" or paneAction == "props" then
         local fp = Mux._focusedPane
         if fp then
@@ -169,7 +185,7 @@ elseif sub == "pane" then
             Mux._echo("\n<red>[Muxlet]<reset> No focused pane.\n")
         end
     else
-        Mux._echo("\n<cyan>[Muxlet]<reset> Pane commands: split | zoom | swap | close | float | embed | titlebar | rename | lock | unlock | new | properties\n")
+        Mux._echo("\n<cyan>[Muxlet]<reset> Pane commands: split | zoom | swap | close | float | embed | titlebar | rename | lock | unlock | new | width | height | properties\n")
     end
 
 -- ── mux tab ───────────────────────────────────────────────────────────────────
@@ -281,8 +297,18 @@ elseif sub == "stop" then
 
 -- ── mux reset ────────────────────────────────────────────────────────────────
 elseif sub == "reset" then
-    Mux.applyWorkspace("default")
-    Mux._echo("\n<yellow>[Muxlet]<reset> Reset to default workspace.\n")
+    local target = Mux.settings.get("mux", "reset_workspace") or "default"
+    if not Mux._workspaces[target] then
+        Mux._echo(string.format(
+            "\n<red>[Muxlet]<reset> Reset workspace '<cyan>%s<reset>' is not registered.\n"
+            .. "  Use <cyan>mux workspace list<reset> to see available workspaces,\n"
+            .. "  then <cyan>mux settings set mux.reset_workspace <name><reset> to update.\n",
+            target))
+    else
+        Mux.applyWorkspace(target)
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> Reset to workspace '<cyan>%s<reset>'.\n", target))
+    end
 
 -- ── unknown ──────────────────────────────────────────────────────────────────
 else

@@ -40,9 +40,6 @@ function Mux.applyTheme(name)
     end
     for _, p in pairs(Mux._panes)  do if p.applyTheme then p:applyTheme() end end
     for _, s in pairs(Mux._splits) do if s.applyTheme then s:applyTheme() end end
-    if Mux.debug then
-        Mux._echo(string.format("\n<green>[Muxlet]<reset> Theme: %s\n", name))
-    end
 end
 
 Mux._log("mux_theme loaded")

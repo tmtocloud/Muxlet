@@ -1,9 +1,9 @@
 -- Muxlet — Dialog API
 --
 -- Mux.createDialog(opts) is the recommended way to build floating popup windows
--- in Muxlet.  A dialog is a permanentFloat MuxPane: it hovers above all embedded
+-- in Muxlet.  A dialog is an overlay MuxPane: it hovers above all embedded
 -- workspace panes, cannot be dragged into a split, and carries the theme's system-
--- accent border so users immediately recognise it as a transient system overlay.
+-- accent border so users immediately recognise it as a transient overlay.
 --
 -- ── Why use this instead of Adjustable.Container or raw Geyser widgets? ────────
 --
@@ -68,12 +68,6 @@
 --
 --   Default (no extra opts)   — moveable, fixed size.  The user drags the titlebar
 --                               to reposition but cannot resize.  Right for most popups.
---
---   opts.locked = true        — fully locked.  Neither movement nor resizing is
---                               possible.  The × close button still works if
---                               opts.closeable is not false.  Right for modal-style
---                               confirmations where accidental repositioning would
---                               confuse the user.
 --
 --   opts.resizable = true     — moveable and resizable.  Right for content that
 --                               can reflow (e.g. a scrollable log viewer).
@@ -154,11 +148,49 @@ Mux.dialogCss = {
             color: rgba(255,160,155,255);
         }
     ]],
+
+    -- Hover-state CSS for setOnEnter/setOnLeave (QLabel::hover doesn't fire in Mudlet).
+    buttonHover = [[
+        background-color: rgba(52,60,95,245);
+        color: white;
+        border: 1px solid rgba(105,158,255,210);
+        border-radius: 5px;
+        font-size: 12px; font-weight: bold;
+        qproperty-alignment: AlignCenter;
+    ]],
+    buttonDangerHover = [[
+        background-color: rgba(82,22,22,245);
+        color: rgba(255,160,155,255);
+        border: 1px solid rgba(200,70,68,220);
+        border-radius: 5px;
+        font-size: 12px; font-weight: bold;
+        qproperty-alignment: AlignCenter;
+    ]],
+    buttonPrimaryHover = [[
+        background-color: rgba(26,82,46,255);
+        color: rgba(178,255,200,255);
+        border: 1px solid rgba(65,210,108,235);
+        border-radius: 5px;
+        font-size: 12px; font-weight: bold;
+        qproperty-alignment: AlignCenter;
+    ]],
 }
+
+-- ── Mux.wireDialogButton ─────────────────────────────────────────────────────
+
+--- Wires hover-highlight on a dialog button via setOnEnter/setOnLeave.
+-- Only the stylesheet changes on hover — button content is never altered.
+-- @param btn        Geyser.Label  the button widget
+-- @param normalCss  string        CSS for idle state (e.g. Mux.dialogCss.button)
+-- @param hoverCss   string        CSS for hovered state (e.g. Mux.dialogCss.buttonHover)
+function Mux.wireDialogButton(btn, normalCss, hoverCss)
+    btn:setOnEnter(function() btn:setStyleSheet(hoverCss) end)
+    btn:setOnLeave(function() btn:setStyleSheet(normalCss) end)
+end
 
 -- ── Mux.createDialog ─────────────────────────────────────────────────────────
 
---- Creates and returns a permanentFloat MuxPane for use as a dialog popup.
+--- Creates and returns an overlay MuxPane for use as a dialog popup.
 --
 -- @param  opts.title     string   titlebar label (default: "Dialog")
 -- @param  opts.width     number   pixel width    (default: 440)
@@ -166,7 +198,6 @@ Mux.dialogCss = {
 -- @param  opts.x         number   left edge px   (default: centered)
 -- @param  opts.y         number   top  edge px   (default: centered)
 -- @param  opts.resizable boolean  resize handles (default: false)
--- @param  opts.locked    boolean  block drag movement (default: false)
 -- @param  opts.id        string   custom pane id (default: auto "dialog_N")
 -- @return MuxPane  add widgets to pane.content; dismiss with pane:close()
 function Mux.createDialog(opts)
@@ -182,19 +213,20 @@ function Mux.createDialog(opts)
         name             = opts.title or "Dialog",
         x = x, y = y, width = w, height = h,
         parent           = Geyser,
-        permanentFloat   = true,
+        overlay   = true,
         zoomable         = false,
         splittable       = false,
         swappable        = false,
-        noResize         = opts.resizable and false or true,
-        noTitlebarToggle = opts.noTitlebarToggle ~= false,
-        noRename         = opts.noRename ~= false,
-        noContent        = opts.noContent ~= false,
-        noTabs           = opts.noTabs ~= false,
-        noContextMenu    = opts.noContextMenu ~= false,
+        resizable        = opts.resizable or false,
+        titlebarHideable = opts.titlebarHideable or false,
+        renamable        = opts.renamable or false,
+        contentable      = opts.contentable or false,
+        tabsLocked       = opts.tabsLocked or false,
+        contextMenu      = opts.contextMenu or false,
         closeable        = opts.closeable ~= false,
+        convertible      = opts.convertible or false,
+        minimizable      = opts.minimizable or false,
     })
-    if opts.locked then pane.locked = true end
     pane.floatX = x
     pane.floatY = y
     pane.floatW = w

@@ -42,38 +42,11 @@ Mux.settings._file      = Mux._persistentDir .. "/settings.json"
 Mux._settings_ui = Mux._settings_ui or {
     window     = nil,
     visible    = false,
-    rows       = {},
-    drawEpoch  = 0,
     currentTab = nil,
-    dropdown   = nil,
-    tooltip    = nil,
 }
 local settingsUi = Mux._settings_ui
 
-local rowH      = 56
-local rowHWide  = 64
-local widgetW   = 130
-local widgetH   = 26
-local padL      = 10
-local padR      = 6
-local resetW    = 20
 local footerPad = 16
-
--- ALL echo() calls must use explicit <span style='color:...'> — Mudlet QLabels do
--- not reliably apply CSS color: to HTML content, so text falls back to Qt's palette
--- default (which can be white, making text invisible on light backgrounds).
-local cssOdd, cssEven, cssName
-local cssToggleOn, cssToggleOff
-local cssWidgetBtn, cssStepperBtn, cssStepperVal
-local cssTextInput, cssApplyBtn
-local cssDropdownPanel, cssDropdownOpt
-local cssResetIcon
-local cssHelpIcon
--- Plain color strings used directly in HTML echo() spans.
-local labelFgColor        -- setting name labels
-local toggleOnFgColor     -- toggle TRUE state
-local toggleOffFgColor    -- toggle FALSE state
-local widgetFgColor       -- dropdown, stepper, apply-btn text
 
 function Mux.settings.save()
     local ok, err = pcall(function()
@@ -332,316 +305,117 @@ local function contentScreenPos(ns)
 end
 
 local function closeDropdown()
-    if settingsUi.dropdown then
-        settingsUi.dropdown:hide()
-        settingsUi.dropdown = nil
-    end
-end
-
-local function showTooltip(text, absX, absY)
-    if not settingsUi.tooltip then
-        settingsUi.tooltip = Geyser.Label:new({
-            name = "mux_set_tooltip", x = 0, y = 0, width = 300, height = 40,
-        })
-    end
-    local w = math.max(200, math.min(450, #text * 6 + 24))
-    settingsUi.tooltip:resize(w, 36)
-    settingsUi.tooltip:move(absX + 20, absY - 10)
-    settingsUi.tooltip:setStyleSheet([[
-        background-color: rgb(30,32,46);
-        color: rgba(210,215,230,0.95);
-        font-size: 10px;
-        border: 1px solid rgba(100,160,255,0.35);
-        border-radius: 4px;
-        padding: 4px 8px;
-    ]])
-    settingsUi.tooltip:echo(text)
-    settingsUi.tooltip:show()
-    settingsUi.tooltip:raise()
-end
-
-local function hideTooltip()
-    if settingsUi.tooltip then settingsUi.tooltip:hide() end
-end
-
-local function applyValue(ns, key, value)
-    local ok, err = Mux.settings.set(ns, key, value)
-    if ok then
-        Mux._echo(string.format("\n<green>[mux settings]<reset> <cyan>%s.%s<reset> = <yellow>%s<reset>\n",
-            ns, key, tostring(Mux.settings.get(ns, key))))
-    else
-        Mux._echo(string.format("\n<red>[mux settings]<reset> %s.%s: %s\n",
-            ns, key, err or "invalid"))
-    end
-    return ok
-end
-
-local function widgetType(cfg)
-    if cfg.choices then return "dropdown" end
-    if type(cfg.default) == "boolean" then return "toggle" end
-    if type(cfg.default) == "number"
-        and cfg.min ~= nil and cfg.max ~= nil
-        and (cfg.max - cfg.min) <= 100
-    then return "stepper" end
-    return "textentry"
-end
-
-local function isWideRow(cfg)
-    return widgetType(cfg) == "textentry" and type(cfg.default) == "string"
-end
-
-local function calcWidgetWidth(cfg, contentW)
-    if isWideRow(cfg) then return contentW - padL * 2 - resetW - padR end
-    return widgetW
-end
-
-local function makeToggle(parent, wx, wy, uid, ns, key, ww)
-    local cssOn  = cssToggleOn
-    local cssOff = cssToggleOff
-    local w = Geyser.Label:new({ name=uid.."_tog", x=wx, y=wy, width=ww, height=widgetH }, parent)
-    local function refresh()
-        local v  = Mux.settings.get(ns, key)
-        local tc = v and toggleOnFgColor or toggleOffFgColor
-        w:setStyleSheet(v and cssOn or cssOff)
-        w:echo(string.format("<center><span style='color:%s;font-size:10px;font-weight:bold;'>%s</span></center>",
-            tc or "#d8d8f0", v and "TRUE" or "FALSE"))
-    end
-    refresh()
-    w:setClickCallback(function()
-        closeDropdown()
-        applyValue(ns, key, not Mux.settings.get(ns, key))
-        refresh()
-    end)
-    return refresh
-end
-
-local function makeDropdown(parent, wx, wy, uid, ns, key, choices, ww, rowY)
-    local btn = Geyser.Label:new({ name=uid.."_dd_btn", x=wx, y=wy, width=ww, height=widgetH }, parent)
-    btn:setStyleSheet(cssWidgetBtn)
-
-    local function refresh()
-        local v    = tostring(Mux.settings.get(ns, key) or "")
-        local disp = #v > 16 and v:sub(1,15) .. "…" or v
-        local tc   = widgetFgColor or "#d8d8f0"
-        btn:echo(string.format("<center><span style='color:%s;font-size:10px;'>%s ▾</span></center>", tc, disp))
-    end
-    refresh()
-
-    local ovName  = uid .. "_dd_ov"
-    local overlay = nil
-
-    local function destroyOverlay()
-        if overlay then
-            overlay:hide()
-            for ci = 1, #choices do
-                local n = ovName .. "_o" .. ci
-                if Geyser.windowList[n] then Geyser.windowList[n]:hide() end
-            end
-            overlay = nil
+    local win = settingsUi.window
+    if not win then return end
+    for _, tab in ipairs(win._tabs or {}) do
+        if tab._settingsForm then tab._settingsForm.closeDropdown() end
+        for _, subTab in ipairs(tab._tabs or {}) do
+            if subTab._settingsForm then subTab._settingsForm.closeDropdown() end
         end
-        if settingsUi.dropdown == overlay then settingsUi.dropdown = nil end
-    end
-
-    local function openOverlay()
-        local cx, cy = contentScreenPos(ns)
-        local absBtnX = cx + wx
-        local absBtnY = cy + rowY + wy + widgetH
-        overlay = Geyser.Label:new({
-            name=ovName, x=absBtnX, y=absBtnY, width=ww, height=#choices * widgetH,
-        }, Geyser)
-        overlay:setStyleSheet(cssDropdownPanel)
-        overlay:show(); overlay:raise()
-        for ci, choice in ipairs(choices) do
-            local opt = Geyser.Label:new({
-                name=ovName.."_o"..ci, x=0, y=(ci-1)*widgetH, width=ww, height=widgetH,
-            }, overlay)
-            opt:setStyleSheet(cssDropdownOpt)
-            local otc = widgetFgColor or "#d8d8f0"
-            opt:echo(string.format("<span style='color:%s;font-size:10px;'>  %s</span>", otc, tostring(choice)))
-            opt:show(); opt:raise()
-            local captured = choice
-            opt:setClickCallback(function()
-                applyValue(ns, key, captured); refresh()
-                destroyOverlay(); settingsUi.dropdown = nil
-            end)
-        end
-        settingsUi.dropdown = overlay
-    end
-
-    btn:setClickCallback(function()
-        if settingsUi.dropdown then
-            local was = (settingsUi.dropdown == overlay)
-            closeDropdown(); destroyOverlay()
-            if was then return end
-        end
-        openOverlay()
-    end)
-    return refresh
-end
-
-local function makeStepper(parent, wx, wy, uid, ns, key, cfg, ww)
-    local cssBtn = cssStepperBtn
-    local cssVal = cssStepperVal
-    local bw = 26
-    local vw = ww - bw * 2 - 4
-    local minus = Geyser.Label:new({name=uid.."_sm", x=wx,           y=wy, width=bw, height=widgetH}, parent)
-    local vl    = Geyser.Label:new({name=uid.."_sv", x=wx+bw+2,     y=wy, width=vw, height=widgetH}, parent)
-    local plus  = Geyser.Label:new({name=uid.."_sp", x=wx+bw+2+vw+2, y=wy, width=bw, height=widgetH}, parent)
-    local sc = widgetFgColor or "#d8d8f0"
-    minus:setStyleSheet(cssBtn)
-    minus:echo(string.format("<center><span style='color:%s;font-size:13px;font-weight:bold;'>−</span></center>", sc))
-    vl:setStyleSheet(cssVal)
-    plus:setStyleSheet(cssBtn)
-    plus:echo(string.format("<center><span style='color:%s;font-size:13px;font-weight:bold;'>+</span></center>", sc))
-    local function refresh()
-        vl:echo(string.format("<center><span style='color:%s;font-size:11px;font-weight:bold;'>%s</span></center>",
-            sc, tostring(Mux.settings.get(ns, key))))
-    end
-    refresh()
-    minus:setClickCallback(function()
-        closeDropdown()
-        applyValue(ns, key, math.max(cfg.min, (Mux.settings.get(ns, key) or cfg.min) - 1))
-        refresh()
-    end)
-    plus:setClickCallback(function()
-        closeDropdown()
-        applyValue(ns, key, math.min(cfg.max, (Mux.settings.get(ns, key) or cfg.min) + 1))
-        refresh()
-    end)
-    return refresh
-end
-
-local function makeTextEntry(parent, wx, wy, uid, ns, key, cfg, ww)
-    local applyW = 46
-    local gap    = 3
-    local inputW = ww - applyW - gap
-    local input = Geyser.CommandLine:new({ name=uid.."_input", x=wx, y=wy, width=inputW, height=widgetH }, parent)
-    input:setStyleSheet(cssTextInput)
-    input:print(tostring(Mux.settings.get(ns, key) or ""))
-    local applyBtn = Geyser.Label:new({ name=uid.."_apply", x=wx+inputW+gap, y=wy, width=applyW, height=widgetH }, parent)
-    applyBtn:setStyleSheet(cssApplyBtn)
-    applyBtn:echo(string.format("<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
-        widgetFgColor or "#d8d8f0"))
-    local function commit()
-        closeDropdown()
-        local text = input:getText()
-        if text == nil or text == "" then return end
-        local ok = applyValue(ns, key, text)
-        if ok then input:print(tostring(Mux.settings.get(ns, key) or "")) end
-    end
-    input:setAction(commit)
-    applyBtn:setClickCallback(commit)
-    return function()
-        input:print(tostring(Mux.settings.get(ns, key) or ""))
     end
 end
 
--- Reset-to-default icon: subtle bordered button, glows amber on hover.
--- Plain text echo so CSS font-size / text-align apply directly.
-local function makeResetIcon(parent, rx, ry, uid, ns, key, refreshFn, contentY)
-    local icon = Geyser.Label:new({ name=uid.."_reset", x=rx, y=ry, width=resetW, height=widgetH }, parent)
-    icon:setStyleSheet(cssResetIcon)
-    icon:echo("<center><span style='color:rgba(140,145,165,0.55);font-size:11px;'>↺</span></center>")
-    icon:setOnEnter(function()
-        local cx, cy = contentScreenPos(ns)
-        showTooltip("Reset to default", cx + rx + resetW + 4, cy + (contentY or 0) + ry)
-    end)
-    icon:setOnLeave(function() hideTooltip() end)
-    icon:setClickCallback(function()
-        closeDropdown()
-        local ok, err = Mux.settings.clear(ns, key)
-        if ok then
-            Mux._echo(string.format("\n<green>[mux settings]<reset> <cyan>%s.%s<reset> reset to default: <yellow>%s<reset>\n",
-                ns, key, tostring(Mux.settings.get(ns, key))))
-            if refreshFn then refreshFn() end
-        else
-            Mux._echo(string.format("\n<red>[mux settings]<reset> %s\n", err or "error"))
-        end
-    end)
-end
+local function hideTooltip() end  -- Qt native tooltips auto-dismiss; kept for call-site compat
 
-local function buildRows(ns, contentLbl)
-    local contentW = contentLbl:get_width()
-    if contentW < 50 then contentW = 400 end
+-- Builds a widget spec array from a settings namespace registration.
+local function buildNsSpecs(ns)
+    local reg = Mux.settings._registry[ns]
+    if not reg then return {} end
 
     local order = Mux.settings._order[ns] or {}
     if #order == 0 then
-        for k in pairs(Mux.settings._registry[ns] or {}) do table.insert(order, k) end
+        for k in pairs(reg) do order[#order+1] = k end
         table.sort(order)
     end
 
-    local epoch = settingsUi.drawEpoch
-
-    local y = 2
-    for i, settingKey in ipairs(order) do
-        local cfg = Mux.settings._registry[ns] and Mux.settings._registry[ns][settingKey]
+    local specs = {}
+    for _, key in ipairs(order) do
+        local cfg = reg[key]
         if cfg then
-            local uid  = string.format("ms_%d_%s_%s", epoch, ns, settingKey):gsub("[^%w_]", "_")
-            local wt   = widgetType(cfg)
-            local wide = isWideRow(cfg)
-            local ww   = calcWidgetWidth(cfg, contentW)
-            local rh   = wide and rowHWide or rowH
+            local spec = {
+                label        = key,
+                desc         = cfg.description,
+                _settingsNs  = ns,
+                _settingsKey = key,
+                readFn  = function() return Mux.settings.get(ns, key) end,
+                writeFn = function(v)
+                    local ok, err = Mux.settings.set(ns, key, v)
+                    if not ok then
+                        Mux._warn("settings.set: %s.%s: %s", ns, key, err or "invalid")
+                    end
+                end,
+            }
 
-            local row = Geyser.Label:new({ name=uid.."_row", x=0, y=y, width=contentW, height=rh }, contentLbl)
-            row:setStyleSheet((i % 2 == 1) and cssOdd or cssEven)
-            table.insert(settingsUi.rows, row)
-
-            local wyWidget     = math.floor((rh - widgetH) / 2)
-            local desc         = cfg.description or settingKey
-            local resetX       = contentW - resetW - padR
-            local refreshFn    = nil
-            local capturedRowY = y
-
-            if wide then
-                local hi = Geyser.Label:new({name=uid.."_help", x=padL, y=6, width=16, height=16}, row)
-                hi:setStyleSheet(cssHelpIcon)
-                -- Explicit span color so Qt respects it regardless of default rendering mode.
-                local hiColor = (Mux.activeTheme().settingsUi or {}).helpIconFg or "rgba(100,160,255,0.85)"
-                hi:echo(string.format("<center><span style='color:%s;font-size:11px;font-weight:bold;'>i</span></center>", hiColor))
-                hi:setOnEnter(function()
-                    local cx, cy = contentScreenPos(ns)
-                    showTooltip(desc, cx + padL + 16 + 4, cy + capturedRowY + 6)
-                end)
-                hi:setOnLeave(function() hideTooltip() end)
-
-                local nl = Geyser.Label:new({name=uid.."_n", x=padL+20, y=4, width=contentW-padL-60, height=20}, row)
-                nl:setStyleSheet(cssName)
-                nl:echo(string.format("<span style='color:%s;font-size:11px;font-weight:bold;'>%s</span>",
-                    labelFgColor, settingKey))
-
-                refreshFn = makeTextEntry(row, padL, 32, uid, ns, settingKey, cfg, ww)
-                makeResetIcon(row, resetX, 4, uid, ns, settingKey, refreshFn, capturedRowY)
-            else
-                local wx     = contentW - widgetW - resetW - padR - 10
-                local labelW = wx - padL - 24
-                local hiY    = math.floor((rh - 16) / 2)
-
-                local hi = Geyser.Label:new({name=uid.."_help", x=padL, y=hiY, width=16, height=16}, row)
-                hi:setStyleSheet(cssHelpIcon)
-                local hiColor = (Mux.activeTheme().settingsUi or {}).helpIconFg or "rgba(100,160,255,0.85)"
-                hi:echo(string.format("<center><span style='color:%s;font-size:11px;font-weight:bold;'>i</span></center>", hiColor))
-                hi:setOnEnter(function()
-                    local cx, cy = contentScreenPos(ns)
-                    showTooltip(desc, cx + padL + 16 + 4, cy + capturedRowY + hiY)
-                end)
-                hi:setOnLeave(function() hideTooltip() end)
-
-                local nl = Geyser.Label:new({name=uid.."_n", x=padL+20, y=math.floor((rh-20)/2), width=labelW, height=20}, row)
-                nl:setStyleSheet(cssName)
-                nl:echo(string.format("<span style='color:%s;font-size:11px;font-weight:bold;'>%s</span>",
-                    labelFgColor, settingKey))
-
-                if     wt == "toggle"   then refreshFn = makeToggle(row, wx, wyWidget, uid, ns, settingKey, widgetW)
-                elseif wt == "dropdown" then refreshFn = makeDropdown(row, wx, wyWidget, uid, ns, settingKey, cfg.choices, widgetW, capturedRowY)
-                elseif wt == "stepper"  then refreshFn = makeStepper(row, wx, wyWidget, uid, ns, settingKey, cfg, widgetW)
-                else                         refreshFn = makeTextEntry(row, wx, wyWidget, uid, ns, settingKey, cfg, widgetW)
+            if cfg.choices then
+                spec.type    = "array"
+                spec.display = "dropdown"
+                spec.options = {}
+                for _, c in ipairs(cfg.choices) do
+                    spec.options[#spec.options+1] = { value = c, label = tostring(c) }
                 end
-                makeResetIcon(row, resetX, wyWidget, uid, ns, settingKey, refreshFn, capturedRowY)
+            elseif type(cfg.default) == "boolean" then
+                spec.type = "bool"
+            elseif type(cfg.default) == "number"
+                   and cfg.min ~= nil and cfg.max ~= nil
+                   and (cfg.max - cfg.min) <= 100 then
+                spec.type    = "number"
+                spec.display = "stepper"
+                spec.step    = 1
+                spec.min     = cfg.min
+                spec.max     = cfg.max
+            else
+                spec.type = "string"
             end
-            y = y + rh
+
+            specs[#specs+1] = spec
         end
     end
-    return y
+    return specs
+end
+
+local settingsFormOpts = {
+    rowHeight     = 56,
+    textRowHeight = 64,
+    widgetWidth   = 130,
+    widgetHeight  = 26,
+}
+
+local function buildRows(ns, contentLbl)
+    local cw = contentLbl:get_width()
+    if cw < 50 then cw = 400 end
+
+    local specs = buildNsSpecs(ns)
+    if #specs == 0 then return nil, 2 end
+
+    local formHandle
+    local safeNs = ns:gsub("[^%w_]", "_")
+    local formOpts = {
+        width         = cw,
+        prefix        = "mxs_" .. safeNs,
+        rowHeight     = settingsFormOpts.rowHeight,
+        textRowHeight = settingsFormOpts.textRowHeight,
+        widgetWidth   = settingsFormOpts.widgetWidth,
+        widgetHeight  = settingsFormOpts.widgetHeight,
+        showReset     = true,
+        onReset       = function(i, spec)
+            local ok, err = Mux.settings.clear(spec._settingsNs, spec._settingsKey)
+            if ok then
+                Mux._echo(string.format(
+                    "\n<green>[mux settings]<reset> <cyan>%s.%s<reset> reset to default: <yellow>%s<reset>\n",
+                    spec._settingsNs, spec._settingsKey,
+                    tostring(Mux.settings.get(spec._settingsNs, spec._settingsKey))))
+                if formHandle then formHandle.refresh(i) end
+            else
+                Mux._echo(string.format("\n<red>[mux settings]<reset> %s\n", err or "error"))
+            end
+        end,
+        getContentScreenPos = function()
+            return contentScreenPos(ns)
+        end,
+    }
+
+    formHandle = Mux.ui.buildForm(contentLbl, specs, formOpts)
+    return formHandle, formHandle.totalHeight + 2
 end
 
 -- Builds the tab hierarchy from _tabPaths and the registered namespaces.
@@ -707,7 +481,13 @@ function Mux.settings.showTab(ns)
     end
 end
 
+local function measureNsHeight(ns)
+    local specs = buildNsSpecs(ns)
+    return Mux.ui.formHeight(specs, settingsFormOpts) + 2
+end
+
 -- Builds a ScrollBox + form rows inside a leaf settings tab.
+-- The contentLbl is sized to the actual row content; ScrollBox handles overflow scrolling.
 local function buildSettingsContent(targetTab, ns, bgCol)
     targetTab.contentBg:hide()
     local safeName = ns:gsub("[^%w_]", "_")
@@ -719,91 +499,216 @@ local function buildSettingsContent(targetTab, ns, bgCol)
     if cw < 50 then cw = 400 end
     local contentLbl = Geyser.Label:new({
         name = "mux_set_cl_" .. safeName,
-        x = 0, y = 0, width = cw - 8, height = 500,
+        x = 0, y = 0, width = cw - 8, height = 100,
     }, scrollBox)
     contentLbl:setStyleSheet(string.format("background:%s; border:none;", bgCol))
-    settingsUi.rows = settingsUi.rows or {}
-    local totalH = buildRows(ns, contentLbl)
-    local viewH  = scrollBox:get_height()
-    local fitH   = math.max(viewH > 0 and viewH or 200, totalH + footerPad)
-    resizeWindow("mux_set_cl_" .. safeName, cw - 8, fitH)
+    local formHandle, totalH = buildRows(ns, contentLbl)
+    targetTab._settingsForm = formHandle
+    resizeWindow("mux_set_cl_" .. safeName, cw - 8, math.max(totalH or 1, 1))
+end
+
+local function buildMainPaneContent(targetTab, bgColor)
+    targetTab.contentBg:hide()
+    local mainPane
+    if Mux._panes then
+        for _, p in pairs(Mux._panes) do
+            if p.mainConsoleHost then mainPane = p; break end
+        end
+    end
+    local scrollBox = Geyser.ScrollBox:new({
+        name = "mux_set_sb_mainpane",
+        x = 0, y = 0, width = "100%", height = "100%",
+    }, targetTab.content)
+    local cw = targetTab.content:get_width()
+    if cw < 50 then cw = 400 end
+    local contentLbl = Geyser.Label:new({
+        name = "mux_set_cl_mainpane",
+        x = 0, y = 0, width = cw - 8, height = 100,
+    }, scrollBox)
+    contentLbl:setStyleSheet(string.format("background:%s; border:none;", bgColor))
+
+    if not mainPane then
+        contentLbl:echo("<center><i>No main pane found. Load a workspace first.</i></center>")
+        return
+    end
+
+    local rows = {}
+
+    if mainPane.titlebarHideable then
+        rows[#rows+1] = {
+            label      = "Titlebar",
+            desc       = "Show or hide the titlebar strip",
+            type       = "toggle",
+            trueLabel  = "Visible",
+            falseLabel = "Hidden",
+            readFn     = function() return mainPane.titlebarVisible end,
+            writeFn    = function(v) mainPane:setTitlebarVisible(v) end,
+        }
+    end
+
+    rows[#rows+1] = {
+        label      = "Settings",
+        desc       = "Show the ⚙ button in the titlebar. If hidden, access Main properties here in Settings",
+        type       = "toggle",
+        trueLabel  = "Visible",
+        falseLabel = "Hidden",
+        readFn     = function() return mainPane.showSettingsInMenu ~= false end,
+        writeFn    = function(v)
+            mainPane.showSettingsInMenu = v
+            mainPane.propertiesButton   = v
+            mainPane:_applyTitlebarVisibility()
+        end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Splittable",
+        desc       = "Allow this pane to be split horizontally or vertically",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return mainPane.splittable end,
+        writeFn    = function(v)
+            mainPane.splittable = v
+            mainPane:_applyTitlebarVisibility()
+        end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Swappable",
+        desc       = "Allow this pane to swap position with its sibling within a split",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return mainPane.swappable end,
+        writeFn    = function(v)
+            mainPane.swappable = v
+            mainPane:_applyTitlebarVisibility()
+        end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Zoomable",
+        desc       = "Allow this pane to temporarily zoom to fill the window",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return mainPane.zoomable end,
+        writeFn    = function(v)
+            mainPane.zoomable = v
+            mainPane:_applyTitlebarVisibility()
+        end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Resizable",
+        desc       = "Show drag handles to resize this pane's split slot",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return mainPane.resizable ~= false end,
+        writeFn    = function(v)
+            mainPane.resizable = v
+            if not v then mainPane:_hideCornerHandles() end
+            if mainPane._split then mainPane._split:_updateHandleResizability() end
+        end,
+    }
+
+    rows[#rows+1] = {
+        label   = "Width %",
+        desc    = "Width as a percentage of screen width (applies when in a horizontal split)",
+        type    = "text",
+        readFn  = function()
+            local sw = getMainWindowSize()
+            if mainPane._split and mainPane._split.direction == "h" then
+                local r = (mainPane._slotSide == "a") and mainPane._split.ratio or (1 - mainPane._split.ratio)
+                return tostring(math.floor(r * 100))
+            end
+            return ""
+        end,
+        writeFn = function(v)
+            local pct = tonumber(v:match("%d+"))
+            if pct then Mux.resizePaneToWidth(mainPane, pct) end
+        end,
+    }
+
+    rows[#rows+1] = {
+        label   = "Height %",
+        desc    = "Height as a percentage of screen height (applies when in a vertical split)",
+        type    = "text",
+        readFn  = function()
+            local _, sh = getMainWindowSize()
+            if mainPane._split and mainPane._split.direction == "v" then
+                local r = (mainPane._slotSide == "a") and mainPane._split.ratio or (1 - mainPane._split.ratio)
+                return tostring(math.floor(r * 100))
+            end
+            return ""
+        end,
+        writeFn = function(v)
+            local pct = tonumber(v:match("%d+"))
+            if pct then Mux.resizePaneToHeight(mainPane, pct) end
+        end,
+    }
+
+    local formOpts = {
+        width         = cw - 8,
+        prefix        = "mux_main_prop",
+        rowHeight     = settingsFormOpts.rowHeight,
+        textRowHeight = settingsFormOpts.textRowHeight,
+        widgetWidth   = settingsFormOpts.widgetWidth,
+        widgetHeight  = settingsFormOpts.widgetHeight,
+        getContentScreenPos = function()
+            local win = settingsUi.window
+            if not win then return 0, 0 end
+            local theme = Mux.activeTheme()
+            local tabBarH = theme.tabBarHeight or 22
+            local bi = 2
+            return (win.floatX or 0) + bi,
+                   (win.floatY or 0) + bi + (theme.titlebarHeight or 22) + 2 * tabBarH
+        end,
+    }
+    local formHandle, totalH = Mux.ui.buildForm(contentLbl, rows, formOpts)
+    targetTab._mainPropForm = formHandle
+    resizeWindow("mux_set_cl_mainpane", cw - 8, math.max(totalH or 1, 1))
 end
 
 local function buildWindow()
     local sw, sh = getMainWindowSize()
     local w = math.floor(sw * 0.34)
-    local h = math.floor(sh * 0.72)
-    local x = math.floor((sw - w) / 2)
-    local y = math.floor((sh - h) / 2)
+
+    -- Pre-compute required height before creating any widgets.
+    -- Chrome = titlebar + 2×borderInset + N×tabBarHeight + footerPad
+    -- N=1 for direct leaf tabs, N=2 for tabs with sub-tabs.
+    local theme_pre  = Mux.activeTheme()
+    local titleH_pre = theme_pre.titlebarHeight or 22
+    local tabH_pre   = theme_pre.tabBarHeight   or 22
+    local bi         = 2   -- borderInset (must match pane.lua constant)
+    local hierarchy  = tabHierarchy()
+    local maxNeeded  = 200
+    for _, entry in ipairs(hierarchy) do
+        local levels = (entry.children and #entry.children > 0) and 2 or 1
+        local chrome = 2*bi + titleH_pre + levels*tabH_pre + footerPad
+        if entry.ns then
+            local needed = measureNsHeight(entry.ns) + chrome
+            if needed > maxNeeded then maxNeeded = needed end
+        end
+        for _, child in ipairs(entry.children or {}) do
+            local needed = measureNsHeight(child.ns) + chrome
+            if needed > maxNeeded then maxNeeded = needed end
+        end
+    end
+    local maxH = math.floor(sh * 0.80)
+    local h    = math.max(200, math.min(maxH, maxNeeded))
+    local x    = math.floor((sw - w) / 2)
+    local y    = math.floor((sh - h) / 2)
 
     local pane = Mux.createDialog({
         title    = string.format("⚙  Settings  v%s", Mux._version),
         x=x, y=y, width=w, height=h,
-        noTabs   = false,
+        minimizable = true,
     })
-    local theme = Mux.activeTheme()
-    local sui   = theme.settingsUi or {}
-
-    local bgColor         = sui.bg              or "rgb(18, 18, 26)"
-    local rowOddColor     = sui.rowOdd          or "rgb(16, 16, 24)"
-    local rowEvenColor    = sui.rowEven         or "rgb(34, 34, 50)"
-    local textColor       = sui.textColor       or "rgba(215, 215, 230, 0.92)"
-    local rowDivider      = sui.rowDivider      or "rgba(255, 255, 255, 0.12)"
-
-    local widgetBg      = sui.widgetBg          or "rgb(38,38,58)"
-    local widgetFg      = sui.widgetFg          or "#d8d8f0"
-    local widgetBorder  = sui.widgetBorder      or "rgba(255,255,255,0.22)"
-    local widgetHoverBg = sui.widgetHoverBg     or "rgb(55,55,80)"
-    local inputBg       = sui.inputBg           or "rgb(12,12,18)"
-    local inputFg       = sui.inputFg           or "#c8c8d0"
-    local inputBorder   = sui.inputBorder       or "rgba(255,255,255,0.46)"
-    local togOnBg  = sui.toggleOnBg      or "rgb(30,70,40)"
-    local togOnFg  = sui.toggleOnFg      or "#88ee88"
-    local togOnBd  = sui.toggleOnBorder  or "rgba(80,180,80,0.5)"
-    local togOnHov = sui.toggleOnHoverBg or "rgb(40,90,50)"
-    local togOffBg  = sui.toggleOffBg      or "rgb(65,30,30)"
-    local togOffFg  = sui.toggleOffFg      or "rgba(220,120,120,0.9)"
-    local togOffBd  = sui.toggleOffBorder  or "rgba(180,80,80,0.4)"
-    local togOffHov = sui.toggleOffHoverBg or "rgb(85,40,40)"
-
-    cssToggleOn  = string.format("QLabel{background:%s;color:%s;font-size:10px;font-weight:bold;border:1px solid %s;border-radius:3px;}QLabel::hover{background:%s;}", togOnBg,  togOnFg,  togOnBd,  togOnHov)
-    cssToggleOff = string.format("QLabel{background:%s;color:%s;font-size:10px;font-weight:bold;border:1px solid %s;border-radius:3px;}QLabel::hover{background:%s;}", togOffBg, togOffFg, togOffBd, togOffHov)
-    cssWidgetBtn = string.format("QLabel{background:%s;color:%s;font-size:10px;border:1px solid %s;border-radius:3px;}QLabel::hover{background:%s;border-color:%s;}", widgetBg, widgetFg, widgetBorder, widgetHoverBg, widgetBorder)
-    cssStepperBtn = string.format("QLabel{background:%s;color:%s;font-size:13px;font-weight:bold;border:1px solid %s;border-radius:2px;}QLabel::hover{background:%s;}", widgetBg, widgetFg, widgetBorder, widgetHoverBg)
-    cssStepperVal = string.format("background:transparent;color:%s;font-size:11px;font-weight:bold;text-align:center;", widgetFg)
-    cssTextInput  = string.format("background-color:%s;color:%s;font-size:12px;border:1px solid %s;border-radius:3px;padding-left:6px;padding-right:4px;", inputBg, inputFg, inputBorder)
-    cssApplyBtn   = string.format("QLabel{background-color:%s;border:1px solid %s;border-radius:3px;color:%s;font-size:9px;font-weight:bold;}QLabel::hover{background-color:%s;border-color:rgba(120,180,255,200);color:%s;}", widgetBg, widgetBorder, widgetFg, widgetHoverBg, widgetFg)
-    cssDropdownPanel = string.format("background:%s; border:1px solid %s; border-radius:3px;", widgetBg, widgetBorder)
-    cssDropdownOpt   = string.format("QLabel{background:%s;color:%s;font-size:10px;border:none;border-bottom:1px solid %s;}QLabel::hover{background:%s;color:%s;}", inputBg, widgetFg, widgetBorder, widgetHoverBg, widgetFg)
-    cssResetIcon  = "QLabel{background:transparent;color:rgba(140,145,165,0.48);font-size:11px;text-align:center;border:1px solid rgba(140,145,165,0.26);border-radius:3px;}QLabel::hover{color:rgba(225,178,100,0.95);border-color:rgba(225,178,100,0.55);background:rgba(225,178,100,0.10);}"
-
-    labelFgColor = textColor
-    local helpFg = sui.helpIconFg     or "rgba(100,160,255,0.85)"
-    local helpBg = sui.helpIconBg     or "rgba(60,80,120,0.25)"
-    local helpBd = sui.helpIconBorder or "rgba(100,140,200,0.35)"
-    cssHelpIcon = string.format([[
-        QLabel{
-            background: %s;
-            color: %s;
-            font-size: 11px;
-            font-weight: bold;
-            border: 1px solid %s;
-            border-radius: 3px;
-        }
-        QLabel::hover{
-            color: rgba(180,210,255,1.0);
-            border-color: rgba(150,200,255,0.7);
-            background: rgba(60,80,120,0.5);
-        }
-    ]], helpBg, helpFg, helpBd)
-
-    toggleOnFgColor  = togOnFg
-    toggleOffFgColor = togOffFg
-    widgetFgColor    = widgetFg
-
-    cssOdd  = string.format("background:%s; border:none; border-bottom:1px solid %s;", rowOddColor,  rowDivider)
-    cssEven = string.format("background:%s; border:none; border-bottom:1px solid %s;", rowEvenColor, rowDivider)
-    cssName = string.format("background:transparent; color:%s; font-size:11px; font-weight:bold;", textColor)
+    local theme   = Mux.activeTheme()
+    local ui      = theme.ui or theme.settingsUi or {}
+    local bgColor = ui.bg or "rgb(18, 18, 26)"
 
     pane.floatX = x; pane.floatY = y
     pane.floatW = w; pane.floatH = h
@@ -811,33 +716,74 @@ local function buildWindow()
         closeDropdown(); hideTooltip()
         settingsUi.visible = false
         settingsUi.window  = nil
-        settingsUi.rows    = {}
     end
     settingsUi.window = pane
-    settingsUi.rows   = {}
 
-    -- Lock the pane so the real tab system hides the + button and disables drag.
-    -- closeable = true (set at construction) keeps the X button visible.
-    pane:lock()
+    -- Intercept close button: warn if the main pane's ⚙ button or titlebar is hidden,
+    -- which would leave no UI path back to Settings.
+    pane.closeBtn:setClickCallback(function(event)
+        if event.button ~= "LeftButton" then return end
+        local mainP
+        if Mux._panes then
+            for _, p in pairs(Mux._panes) do
+                if p.mainConsoleHost then mainP = p; break end
+            end
+        end
+        local reasons = {}
+        if mainP then
+            if not mainP.titlebarVisible           then reasons[#reasons+1] = "hidden titlebar" end
+            if mainP.showSettingsInMenu == false   then reasons[#reasons+1] = "Settings button hidden" end
+        end
+        if #reasons > 0 then
+            local reasonStr = table.concat(reasons, " and ")
+            Mux._showPropsCloseConfirm(
+                "The main pane has a <b>" .. reasonStr .. "</b>.<br/>"
+             .. "To reopen Settings use: <tt style='color:#8ab4ff;'>mux settings</tt>",
+                function() pane:close() end)
+        else
+            pane:close()
+        end
+    end)
+
+    pane.highlightable = false
+    pane.tabsLocked    = true
+    if pane.titlebar then pane.titlebar:setCursor(pane:_titlebarCursor()) end
+    pane:_applyTitlebarVisibility()
     pane:enableTabs({ noDefaultTab = true })
 
-    -- Build tabs from the hierarchy derived from registered tab paths.
-    local hierarchy = tabHierarchy()
+    -- Build tabs from the hierarchy (already computed above for height pre-sizing).
     for _, entry in ipairs(hierarchy) do
         local tab = pane:addTab(entry.label)
-        tab.locked        = true
-        tab.noContextMenu = true
+        tab.renamable   = false
+        tab.closeable   = false
+        tab.movable     = false
+        tab.contentable = false
+        tab.contextMenu = false
         tab._settingsNs   = entry.ns  -- nil for package-level grouper tabs
 
         if entry.children and #entry.children > 0 then
             -- Package tab: enable sub-tabs for each child namespace.
+            tab.tabsLocked = true
             tab:enableTabs({ noDefaultTab = true })
             for _, child in ipairs(entry.children) do
                 local subTab = tab:addTab(child.label)
-                subTab.locked        = true
-                subTab.noContextMenu = true
+                subTab.renamable   = false
+                subTab.closeable   = false
+                subTab.movable     = false
+                subTab.contentable = false
+                subTab.contextMenu = false
                 subTab._settingsNs   = child.ns
                 buildSettingsContent(subTab, child.ns, bgColor)
+            end
+            -- Muxlet package: append a Main sub-tab for main pane properties.
+            if entry.label == "Muxlet" then
+                local mainTab = tab:addTab("Main")
+                mainTab.renamable   = false
+                mainTab.closeable   = false
+                mainTab.movable     = false
+                mainTab.contentable = false
+                mainTab.contextMenu = false
+                buildMainPaneContent(mainTab, bgColor)
             end
         elseif entry.ns then
             -- Leaf tab: settings content goes directly here.
@@ -849,6 +795,7 @@ local function buildWindow()
     if pane._tabs and #pane._tabs > 0 then
         settingsUi.currentTab = pane._tabs[1]._settingsNs
     end
+
     settingsUi.window:raise()
 end
 
@@ -885,7 +832,7 @@ function Mux.settings.toggle()
 end
 
 Mux.settings.register("mux", "theme", {
-    tab         = "Muxlet",
+    tab         = "Muxlet/General",
     description = "Active color theme",
     default     = "dark",
     choices     = {"dark", "light"},
@@ -913,6 +860,21 @@ Mux.settings.register("mux", "auto_start", {
     default     = false,
 })
 
+Mux.settings.register("mux", "reset_workspace", {
+    description = "Workspace applied by 'mux reset' — must be a registered workspace name",
+    default     = "default",
+})
+
+Mux.settings.register("mux", "confirmPaneClose", {
+    description = "Show a confirmation dialog before closing a pane",
+    default     = true,
+})
+
+Mux.settings.register("mux", "confirmTabClose", {
+    description = "Show a confirmation dialog before closing a tab",
+    default     = true,
+})
+
 -- Tracks whether the first-run welcome dialog has been dismissed.
 -- Downstream packages (e.g. fed2-tools) set this to true in their muxletReady
 -- handler to suppress the popup — no separate "disabled" flag is needed.
@@ -928,7 +890,6 @@ Mux.settings.onChange("mux", "theme", function(value)
         local wasVisible = settingsUi.visible
         local savedTab   = settingsUi.currentTab
         closeDropdown(); hideTooltip()
-        settingsUi.rows = {}
         settingsUi.window:close()
         -- onClose nulled window/visible
         if wasVisible then
@@ -947,7 +908,7 @@ Mux.settings.onChange("mux", "theme", function(value)
 end)
 
 Mux.settings.register("mux", "compact_titlebar", {
-    tab         = "Muxlet",
+    tab         = "Muxlet/General",
     description = "Hide all titlebar buttons — use right-click menu instead",
     default     = false,
 })

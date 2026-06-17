@@ -73,21 +73,11 @@ local function showSingletonBlocked(contentName, def, existing)
         Mux._warn("'%s' is a singleton already active in '%s'", contentName, targetName)
         return
     end
-    local d = Mux.createDialog({ title = "Already open", width = 360, height = 120 })
-    local msg = Geyser.Label:new({
-        name = d._gid .. "_sg_msg", x = "5%", y = 10, width = "90%", height = 52,
-    }, d.content)
-    msg:setStyleSheet(Mux.dialogCss.subtext)
-    msg:echo(string.format(
-        "<b>%s</b> is already open in <b>%s</b>.<br>Only one instance can be active at a time.",
-        def.name or contentName, targetName
-    ))
-    local btn = Geyser.Label:new({
-        name = d._gid .. "_sg_ok", x = "35%", y = 70, width = "30%", height = 32,
-    }, d.content)
-    btn:setStyleSheet(Mux.dialogCss.button)
-    btn:echo("<center>OK</center>")
-    btn:setClickCallback(function() d:close() end)
+    Mux._pendingSingleton = { contentName = def.name or contentName, targetName = targetName }
+    local d = Mux.createDialog({
+        title = "Already Open", width = 360, minimizable = false, contextMenu = false,
+    })
+    Mux._applyContent(d, "mux_singleton_blocked")
     d:show()
     d:raise()
 end
@@ -115,6 +105,11 @@ function Mux._applyContent(target, contentName)
     local def = Mux._content[contentName]
     if not def then
         Mux._warn("_applyContent: unknown content '%s'", contentName)
+        return
+    end
+
+    -- Block non-internal content on targets where contentable is false.
+    if target.contentable == false and not def.internal then
         return
     end
 
@@ -149,12 +144,33 @@ function Mux._applyContent(target, contentName)
     if not ok then
         Mux._err("content '%s' apply error: %s", contentName, tostring(err))
     end
+
+    -- Auto-fit: if apply set _autoFitHeight and the pane is floating, resize to fit content.
+    if ok and target.floating and target._autoFitHeight and target.outer then
+        local theme  = Mux.activeTheme and Mux.activeTheme() or {}
+        local chrome = (theme.titlebarHeight or 22) + 4
+        local sw, sh = getMainWindowSize()
+        local newH   = math.min(target._autoFitHeight + chrome, math.floor(sh * 0.85))
+        local newW   = math.min(target._autoFitWidth or target.floatW or 380, math.floor(sw * 0.85))
+        local newX   = math.floor((sw - newW) / 2)
+        local newY   = math.floor((sh - newH) / 2)
+        target.floatX, target.floatY = newX, newY
+        target.floatW, target.floatH = newW, newH
+        target._autoFitHeight = nil
+        target._autoFitWidth  = nil
+        target.outer:move(newX, newY)
+        target.outer:resize(newW, newH)
+        tempTimer(0, function()
+            if target.outer then target.outer:reposition() end
+        end)
+    end
+
     Mux._scheduleAutoSave()
 end
 
 --- Return an alphabetically sorted list of user-visible registered content names.
 -- Content registered with internal=true is excluded; it is used by Muxlet
--- system UI and should not appear in the "Add Content" context menu.
+-- system UI and should not appear in the Content Library context menu.
 function Mux._listContent()
     local names = {}
     for name, def in pairs(Mux._content) do
@@ -163,5 +179,34 @@ function Mux._listContent()
     table.sort(names)
     return names
 end
+
+Mux.registerContent("mux_singleton_blocked", {
+    internal = true,
+    apply = function(target)
+        if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
+        local p = Mux._pendingSingleton
+        Mux._pendingSingleton = nil
+        if not p then return end
+        local cw = target.content:get_width()
+        if cw < 50 then cw = (target.floatW or 360) - 4 end
+        local msg = Geyser.Label:new({
+            name=target._gid.."_msg", x=10, y=10, width=cw-20, height=50,
+        }, target.content)
+        msg:setStyleSheet(Mux.dialogCss.subtext)
+        msg:echo(string.format(
+            "<b>%s</b> is already open in <b>%s</b>.<br>Only one instance can be active at a time.",
+            p.contentName, p.targetName))
+        local btnW = 120
+        local btn = Geyser.Label:new({
+            name=target._gid.."_ok", x=math.floor((cw - btnW) / 2), y=68, width=btnW, height=32,
+        }, target.content)
+        btn:setStyleSheet(Mux.dialogCss.button)
+        btn:echo("<center>OK</center>")
+        Mux.wireDialogButton(btn, Mux.dialogCss.button, Mux.dialogCss.buttonHover)
+        btn:setClickCallback(function() target:close() end)
+        target._autoFitHeight = 110
+    end,
+    remove = function(_) end,
+})
 
 Mux._log("content loaded")

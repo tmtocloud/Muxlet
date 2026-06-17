@@ -316,8 +316,8 @@ Mux.registerTheme("dark", {
         QScrollBar:horizontal { height: 0px; border: none; background: transparent; }
     ]],
 
-    -- ── Settings window palette ────────────────────────────────────────────────
-    settingsUi = {
+    -- ── Widget palette (shared by settings, properties, and Mux.ui.buildForm) ──
+    ui = {
         textColor        = "rgba(215, 215, 230, 0.92)",
         bg               = "rgb(18, 18, 26)",
         rowOdd           = "rgb(16, 16, 24)",
@@ -331,7 +331,6 @@ Mux.registerTheme("dark", {
         tabHoverText     = "rgba(215, 218, 232, 0.95)",
         descTextColor    = "rgba(120, 130, 170, 0.85)",
         rowDivider       = "rgba(255, 255, 255, 0.12)",
-        -- Widget colors (dropdowns, steppers, text inputs, apply button)
         widgetBg         = "rgb(38, 38, 58)",
         widgetFg         = "#d8d8f0",
         widgetBorder     = "rgba(255, 255, 255, 0.22)",
@@ -339,18 +338,15 @@ Mux.registerTheme("dark", {
         inputBg          = "rgb(12, 12, 18)",
         inputFg          = "#c8c8d0",
         inputBorder      = "rgba(255, 255, 255, 0.46)",
-        -- Toggle widget
-        toggleOnBg       = "rgb(30, 70, 40)",
-        toggleOnFg       = "#88ee88",
-        toggleOnBorder   = "rgba(80, 180, 80, 0.5)",
-        toggleOnHoverBg  = "rgb(40, 90, 50)",
-        toggleOffBg      = "rgb(65, 30, 30)",
-        toggleOffFg      = "rgba(220, 120, 120, 0.9)",
-        toggleOffBorder  = "rgba(180, 80, 80, 0.4)",
-        toggleOffHoverBg = "rgb(85, 40, 40)",
-        -- Help icon (the "i" badge on each setting row)
-        helpIconFg     = "rgba(100, 160, 255, 0.85)",
-        helpIconBg     = "rgba(60, 80, 120, 0.25)",
-        helpIconBorder = "rgba(100, 140, 200, 0.35)",
+        helpIconFg       = "rgba(100, 160, 255, 0.85)",
+        helpIconBg       = "rgba(60, 80, 120, 0.25)",
+        helpIconBorder   = "rgba(100, 140, 200, 0.35)",
+        helpIconHoverBg  = "rgba(80, 110, 185, 0.85)",
+        -- Named style slots used by Mux.ui widgets (checkbox, cycler, etc.)
+        styles = {
+            on   = { bg = "rgb(30, 70, 40)",  fg = "#88ee88",               border = "rgba(80, 180, 80, 0.5)",   hover = "rgb(40, 90, 50)"  },
+            off  = { bg = "rgb(65, 30, 30)",  fg = "rgba(220, 120, 120, 0.9)", border = "rgba(180, 80, 80, 0.4)",  hover = "rgb(85, 40, 40)"  },
+            warn = { bg = "rgb(58, 50, 18)",  fg = "rgba(220, 190, 80, 0.9)", border = "rgba(200, 170, 60, 0.5)", hover = "rgb(78, 68, 24)"  },
+        },
     },
 })

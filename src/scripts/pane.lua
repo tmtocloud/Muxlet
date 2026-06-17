@@ -36,30 +36,31 @@ function MuxPane:init(opts)
     self.name             = opts.name or self.id
     self.floating         = false
     self.minimized        = false
-    self.locked           = false
     self._overflowMode    = false
 
-    -- permanentFloat: always floating; never interacts with any PaneSet or split.
+    -- overlay: always floating; never interacts with any PaneSet or split.
     -- Drag-to-embed, double-click-to-embed, and Alt+A are all no-ops.
-    -- Used for system overlays (settings window) that must survive workspace changes.
-    self.permanentFloat   = opts.permanentFloat or opts.permanent_float or false
+    -- Used for system overlays (settings window, dialogs) that must survive workspace changes.
+    self.overlay          = opts.overlay or false
 
-    -- noResize: corner resize handles are never built; size is fixed after creation.
-    self.noResize         = opts.noResize or opts.no_resize or false
-    -- noTitlebarToggle: titlebar is permanently visible; hide/toggle is blocked.
-    self.noTitlebarToggle = opts.noTitlebarToggle or opts.no_titlebar_toggle or false
-    -- noRename: name cannot be changed via UI or the rename prompt.
-    self.noRename         = opts.noRename or opts.no_rename or false
-    -- noContent: "Add Content" submenu is suppressed in the context menu.
-    self.noContent        = opts.noContent or opts.no_content or opts.noPresets or opts.no_presets or false
-    -- noTabs: "Enable Tabs" is suppressed; enableTabs() is a no-op.
-    self.noTabs           = opts.noTabs or opts.no_tabs or false
-    -- closeable: close button is shown and close() works even when locked.
-    self.closeable        = opts.closeable or false
-    -- noContextMenu: right-click context menu on the titlebar is suppressed.
-    self.noContextMenu    = opts.noContextMenu or opts.no_context_menu or false
+    -- resizable: when false, corner resize handles are never built; pane size is fixed.
+    self.resizable        = opts.resizable ~= false
+    -- titlebarHideable: when false, the titlebar is permanently visible; hide/toggle is blocked.
+    self.titlebarHideable = opts.titlebarHideable ~= false
+    -- renamable: when false, name cannot be changed via UI or the rename prompt.
+    self.renamable        = opts.renamable ~= false
+    -- contentable: Content Library button and menu item are available.
+    self.contentable      = opts.contentable ~= false
+    -- tabsLocked: when true, the tab bar is frozen (no add/close); set by the user.
+    self.tabsLocked       = opts.tabsLocked or false
+    -- closeable: close button is shown and close() works.
+    self.closeable        = opts.closeable ~= false
+    -- contextMenu: when false, right-click context menu on the titlebar is suppressed.
+    self.contextMenu      = opts.contextMenu ~= false
+    -- propertiesButton: when false, the Properties (≡) button and context menu item are hidden.
+    self.propertiesButton = opts.propertiesButton ~= false
     -- zoomable: a zoom button is shown in the titlebar; clicking it expands
-    -- this pane to fill the entire screen, above embedded panes and locked
+    -- this pane to fill the entire screen, above embedded panes and overlay
     -- floaters but below free floating panes.
     self.zoomable         = opts.zoomable ~= false
     self._zoomed          = false
@@ -67,18 +68,18 @@ function MuxPane:init(opts)
     self.splittable       = opts.splittable ~= false
     self.swappable        = opts.swappable  ~= false
 
-    if opts.show_titlebar ~= nil then
-        self.titlebarVisible = opts.show_titlebar
+    if opts.showTitlebar ~= nil then
+        self.titlebarVisible = opts.showTitlebar
     else
         local def = Mux.settings and Mux.settings.get("mux", "default_titlebar")
         self.titlebarVisible = (def ~= false)
     end
 
     -- Saved pixel geometry used when the pane is floating.
-    self.floatX = opts.floatX or opts.float_x or 100
-    self.floatY = opts.floatY or opts.float_y or 100
-    self.floatW = opts.floatW or opts.float_w or 400
-    self.floatH = opts.floatH or opts.float_h or 300
+    self.floatX = opts.floatX or 100
+    self.floatY = opts.floatY or 100
+    self.floatW = opts.floatW or 400
+    self.floatH = opts.floatH or 300
 
     -- Back-references to the MuxSplit slot that owns this pane when embedded.
     self._slot     = nil   -- Geyser.Container (slot inside the split)
@@ -116,7 +117,7 @@ function MuxPane:init(opts)
     self.frame:setStyleSheet(theme.paneOuterCss or "")
     self.frame:setClickCallback(function(event)
         if Mux._movingTab then Mux._cancelTabMove(); return end
-        if not self.locked and Mux.setFocus then Mux.setFocus(self) end
+        if Mux.setFocus then Mux.setFocus(self) end
     end)
 
     local hdrH = self.titlebarVisible and tbH or rvH
@@ -147,26 +148,28 @@ function MuxPane:init(opts)
     self.contentBg:setStyleSheet(theme.contentCss or "")
     self.contentBg:setClickCallback(function(event)
         if Mux._movingTab then Mux._cancelTabMove(); return end
-        if not self.locked and Mux.setFocus then Mux.setFocus(self) end
+        if Mux.setFocus then Mux.setFocus(self) end
     end)
 
     -- Composable behavioural flags. All of these can be passed directly, or set
     -- automatically by mainConsoleHost (see below).
 
-    -- noClose: close button is suppressed and close() is a no-op.
-    self.noClose          = opts.noClose or opts.no_close or false
-    -- noFloat: float() / _detachToFloat() silently return; pane is always embedded.
-    self.noFloat          = opts.noFloat or opts.no_float or false
+    -- convertible: when false, float() / _detachToFloat() silently return; pane stays in its initial state.
+    self.convertible      = opts.convertible ~= false
+    -- minimizable: when false, the minimize (–) button is hidden regardless of float state.
+    self.minimizable      = opts.minimizable ~= false
+    -- movable: when false, a floating pane cannot be repositioned by dragging its titlebar.
+    self.movable          = opts.movable ~= false
     -- transparentFrame: frame CSS is transparent + click-through, exposing the Qt
     -- surface behind Geyser (e.g. HUD overlays). contentBg is hidden.
-    self.transparentFrame = opts.transparentFrame or opts.transparent_frame or false
+    self.transparentFrame = opts.transparentFrame or false
     -- consoleBorders: pane manages setBorderSizes so the Mudlet native console is
     -- visible in the content area. contentBg is hidden; onReposition auto-wired.
-    self.consoleBorders   = opts.consoleBorders or opts.console_borders or false
-    -- noInsertTarget: excluded from drag-to-split insertion zone detection.
-    self.noInsertTarget   = opts.noInsertTarget or opts.no_insert_target or false
+    self.consoleBorders   = opts.consoleBorders or false
+    -- insertable: when false, excluded from drag-to-split insertion zone detection.
+    self.insertable         = opts.insertable ~= false
     -- showSettingsInMenu: context menu shows "Settings" instead of Properties/Close.
-    self.showSettingsInMenu = opts.showSettingsInMenu or opts.show_settings_in_menu or false
+    self.showSettingsInMenu = opts.showSettingsInMenu or false
     -- onReposition: optional callback fired whenever the pane's geometry changes due
     -- to an external event (split rebalance, window resize, workspace restore, zoom).
     self.onReposition     = opts.onReposition
@@ -175,15 +178,13 @@ function MuxPane:init(opts)
     -- console. Setting it true auto-applies all the composable flags above, so existing
     -- workspace JSON and call sites need no changes. The field is kept as metadata for
     -- workspace serialisation and focus-fallback identification.
-    self.mainConsoleHost = opts.mainConsoleHost or opts.main_console_host or false
+    self.mainConsoleHost = opts.mainConsoleHost or false
     if self.mainConsoleHost then
-        self.noClose          = true
-        self.noFloat          = true
+        self.closeable        = false
+        self.convertible      = false
         self.consoleBorders   = true
-        self.noInsertTarget   = true
         self.showSettingsInMenu = true
-        self.noContent        = true
-        self.noTabs           = true
+        self.contentable      = false
     end
 
     if self.consoleBorders then
@@ -215,7 +216,16 @@ function MuxPane:init(opts)
     self:_buildCornerHandles(theme)
     self:_updatePlaceholder()
 
+    -- Chain _checkOverflow into every pane's onReposition so button overflow
+    -- is re-evaluated whenever a split handle is dragged or the window resizes.
+    local prevOnRepos = self.onReposition
+    self.onReposition = function(p)
+        if prevOnRepos then prevOnRepos(p) end
+        if p.titlebar then p:_checkOverflow() end
+    end
+
     Mux._panes[self.id] = self
+    if Mux._updateMainHighlightable then Mux._updateMainHighlightable() end
     Mux._log("MuxPane created: %s", self.id)
 end
 
@@ -250,15 +260,15 @@ function MuxPane:_buildTitlebar(theme)
     self.titlebar:setClickCallback(function(event)
         if event.button == "RightButton" then
             local compact = Mux.settings.get and Mux.settings.get("mux", "compact_titlebar")
-            if (self._overflowMode or compact) and not self.noContextMenu then
+            if (self._overflowMode or compact) and self.contextMenu then
                 Mux._showContextMenu(self, event.globalX or 0, event.globalY or 0)
             end
             return
         end
         if event.button ~= "LeftButton" then return end
-        if not self.locked and Mux.setFocus then Mux.setFocus(self) end
-        if self.locked then return end
-        if self.noFloat then return end
+        if Mux.setFocus then Mux.setFocus(self) end
+        if not self.convertible and not self.floating then return end
+        if not self.movable then return end  -- block non-movable regardless of float state
         drag.active = true
         drag.startX = event.globalX
         drag.startY = event.globalY
@@ -286,6 +296,7 @@ function MuxPane:_buildTitlebar(theme)
         self.floatX = newX
         self.floatY = newY
 
+        if not self.convertible then return end
         local gx, gy = event.globalX, event.globalY
 
         -- Ghost slot hover: highlight whichever slot the cursor is over.
@@ -315,7 +326,7 @@ function MuxPane:_buildTitlebar(theme)
         if not newHoverGhost then
             local insertPane, insertEdge = nil, nil
             for _, tp in pairs(Mux._panes) do
-                if not tp.floating and not tp.noInsertTarget and tp ~= self then
+                if not tp.floating and tp.insertable and tp ~= self then
                     local tx = tp:absX()
                     local ty = tp:absY()
                     local tw = tp:width()
@@ -357,7 +368,7 @@ function MuxPane:_buildTitlebar(theme)
     self.titlebar:setReleaseCallback(function(event)
         if event.button ~= "LeftButton" then return end
         drag.active = false
-        self.titlebar:setCursor("OpenHand")
+        self.titlebar:setCursor(self:_titlebarCursor())
 
         if drag.lastHoverGhostKey then
             local prev = Mux._ghostSlots[drag.lastHoverGhostKey]
@@ -365,7 +376,7 @@ function MuxPane:_buildTitlebar(theme)
         end
         Mux._hideInsertionGhost()
 
-        if not self.floating or self.permanentFloat then
+        if not self.floating or not self.convertible then
             drag.lastHoverGhostKey = nil
             drag.insertTarget      = nil
             return
@@ -407,8 +418,7 @@ function MuxPane:_buildTitlebar(theme)
     -- Double-click embeds a floating pane into the nearest ghost slot.
     -- For embedded panes, double-click just sets focus.
     self.titlebar:setDoubleClickCallback(function(event)
-        if self.noFloat        then return end
-        if self.permanentFloat then return end
+        if not self.convertible then return end
         if not self.floating then
             if Mux.setFocus then Mux.setFocus(self) end
             return
@@ -508,7 +518,7 @@ function MuxPane:_buildTitlebar(theme)
         closeBtnEcho(false)
     end)
     self.closeBtn:setClickCallback(function(event)
-        if event.button == "LeftButton" then self:close() end
+        if event.button == "LeftButton" then self:_confirmClose() end
     end)
 
     -- minBtn: x="-42" = btnSize(18) + gap(2) + close_offset(20) + margin(2)
@@ -685,11 +695,11 @@ function MuxPane:_buildTitlebar(theme)
     self.contentBtn:setStyleSheet(theme.btnCss or "")
     local function contentBtnEcho(hovered)
         local tc = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
-        self.contentBtn:echo(string.format("<center><font color='%s'>◈</font></center>", tc))
+        self.contentBtn:echo(string.format("<center><font color='%s'>▥</font></center>", tc))
     end
     self._contentBtnEcho = contentBtnEcho
     contentBtnEcho(false)
-    self.contentBtn:setToolTip("Add Content")
+    self.contentBtn:setToolTip("Content Library")
     self.contentBtn:setOnEnter(function()
         self.contentBtn:setStyleSheet(Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss)
         contentBtnEcho(true)
@@ -702,7 +712,7 @@ function MuxPane:_buildTitlebar(theme)
         if event.button ~= "LeftButton" then return end
         Mux._showContentLibrary(self)
     end)
-    if self.noContent then self.contentBtn:hide() end
+    if not self.contentable then self.contentBtn:hide() end
 
     -- reveal strip: shown when titlebar is hidden; right-click only via Alt+[ or mux titlebar
     -- to prevent accidental re-show.
@@ -728,7 +738,7 @@ function MuxPane:_buildTitlebar(theme)
 end
 
 function MuxPane:setTitlebarVisible(visible)
-    if not visible and self.noTitlebarToggle then return end
+    if not visible and not self.titlebarHideable then return end
     self.titlebarVisible = visible
     self:_applyTitlebarVisibility()
 end
@@ -761,15 +771,15 @@ function MuxPane:_checkOverflow()
 
     -- Right-side: close=22, min=22(floating), zoom=28, swap=26, content=70 (btn+52px gap), splitH+V=44
     local rightW = 22
-    if self.floating and not self.noFloat then rightW = rightW + 22 end
-    if self.zoomable                      then rightW = rightW + 28 end
-    if self.swappable and self._split and not self.floating and not self.locked then rightW = rightW + 26 end
-    if self.splittable and not self.floating and not self.locked then rightW = rightW + 44 end
-    if not self.noContent                 then rightW = rightW + 70 end
+    if self.floating and self.minimizable then rightW = rightW + 22 end
+    if self.zoomable and (self._split or self._zoomed) then rightW = rightW + 28 end
+    if self.swappable and self._split and not self.floating then rightW = rightW + 26 end
+    if self.splittable and not self.floating then rightW = rightW + 44 end
+    if self:_contentEnabled()              then rightW = rightW + 70 end
 
     -- Left-side: 8px start + nbsp(8) + text + gap(4) + infoBtn(22 when visible)
-    local showInfo = self.infoBtn and not self.noContextMenu
-        and (self.showSettingsInMenu or not self.noClose)
+    local showInfo = self.infoBtn and self.contextMenu
+        and (self.showSettingsInMenu or self.propertiesButton)
     local leftW = 16 + math.ceil(#self.name * charW) + 4 + (showInfo and 22 or 0)
 
     local newOverflow = compact or (headerW < leftW + rightW + 10)
@@ -778,9 +788,10 @@ function MuxPane:_checkOverflow()
     self._overflowMode = newOverflow
 
     if newOverflow then
+        -- Secondary action buttons collapse into the right-click context menu.
+        -- closeBtn and minBtn are primary window controls; they stay visible so
+        -- panes without a context menu (dialogs, settings) always have a close target.
         if self.infoBtn    then self.infoBtn:hide()    end
-        if self.closeBtn   then self.closeBtn:hide()   end
-        if self.minBtn     then self.minBtn:hide()     end
         if self.zoomBtn    then self.zoomBtn:hide()    end
         if self.swapBtn    then self.swapBtn:hide()    end
         if self.splitHBtn  then self.splitHBtn:hide()  end
@@ -791,27 +802,25 @@ function MuxPane:_checkOverflow()
         if self.infoBtn then
             if showInfo then self.infoBtn:show() else self.infoBtn:hide() end
         end
-        if self.noClose or (self.locked and not self.closeable) then
+        if not self.closeable then
             self.closeBtn:hide()
         else
             self.closeBtn:show()
         end
-        if self.floating and not self.noFloat then self.minBtn:show() else self.minBtn:hide() end
-        if self.zoomable then self.zoomBtn:show() else self.zoomBtn:hide() end
-        if self.splittable and not self.floating and not self.locked then
+        if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
+        if self.zoomable and (self._split or self._zoomed) then self.zoomBtn:show() else self.zoomBtn:hide() end
+        if self.splittable and not self.floating then
             self.splitVBtn:show(); self.splitHBtn:show()
         else
             self.splitVBtn:hide(); self.splitHBtn:hide()
         end
-        if self.swappable and not self.floating and not self.locked and self._split then
+        if self.swappable and not self.floating and self._split then
             self.swapBtn:show()
         else
             self.swapBtn:hide()
         end
-        if not self.noContent and self.contentBtn then
-            self.contentBtn:show()
-        elseif self.contentBtn then
-            self.contentBtn:hide()
+        if self.contentBtn then
+            if self:_contentEnabled() then self.contentBtn:show() else self.contentBtn:hide() end
         end
     end
 end
@@ -829,31 +838,29 @@ function MuxPane:_applyTitlebarVisibility()
         if self._syncConnScreenGeometry then self:_syncConnScreenGeometry() end
         self.titlebar:show()
         if self.infoBtn then
-            local showInfo = not self.noContextMenu
-                and (self.showSettingsInMenu or not self.noClose)
+            local showInfo = self.contextMenu
+                and (self.showSettingsInMenu or self.propertiesButton)
             if showInfo then self.infoBtn:show() else self.infoBtn:hide() end
         end
-        if self.noClose or (self.locked and not self.closeable) then
+        if not self.closeable then
             self.closeBtn:hide()
         else
             self.closeBtn:show()
         end
-        if self.floating and not self.noFloat then self.minBtn:show() else self.minBtn:hide() end
-        if self.zoomable then self.zoomBtn:show() else self.zoomBtn:hide() end
-        if self.splittable and not self.floating and not self.locked then
+        if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
+        if self.zoomable and (self._split or self._zoomed) then self.zoomBtn:show() else self.zoomBtn:hide() end
+        if self.splittable and not self.floating then
             self.splitVBtn:show(); self.splitHBtn:show()
         else
             self.splitVBtn:hide(); self.splitHBtn:hide()
         end
-        if self.swappable and not self.floating and not self.locked and self._split then
+        if self.swappable and not self.floating and self._split then
             self.swapBtn:show()
         else
             self.swapBtn:hide()
         end
-        if not self.noContent and self.contentBtn then
-            self.contentBtn:show()
-        elseif self.contentBtn then
-            self.contentBtn:hide()
+        if self.contentBtn then
+            if self:_contentEnabled() then self.contentBtn:show() else self.contentBtn:hide() end
         end
         self:_checkOverflow()
         self.reveal:hide()
@@ -895,6 +902,10 @@ function MuxPane:toggleMinimize()
         elseif self._split and self._savedMinimizeRatio then
             self._split:_setRatio(self._savedMinimizeRatio)
             self._savedMinimizeRatio = nil
+            -- Restore resizability that was locked during collapse.
+            self.resizable = self._preMinimizeResizable ~= nil and self._preMinimizeResizable or true
+            self._preMinimizeResizable = nil
+            self._split:_updateHandleResizability()
         end
         if self.onMinimize then self.onMinimize(self, false) end
     else
@@ -906,17 +917,23 @@ function MuxPane:toggleMinimize()
             self.outer:resize(self.floatW, minH)
             self.outer:reposition()
         elseif self._split then
+            -- Horizontal splits collapse along the titlebar axis; not supported.
+            if self._split.direction ~= "v" then
+                self.minimized = false
+                return
+            end
             local split    = self._split
             local handlePx = theme.handleSize or 3
-            local boxSize  = (split.direction == "v")
-                and split.box:get_height()
-                or  split.box:get_width()
-            local minPx  = theme.titlebarHeight + borderInset * 2
-            local dyn    = boxSize - handlePx
-            local minR   = (dyn > 0) and Mux._clamp(minPx / dyn, 0.01, 0.25) or 0.05
-            self._savedMinimizeRatio = split.ratio
+            local boxH     = split.box:get_height()
+            local minPx    = theme.titlebarHeight + borderInset * 2
+            local dyn      = boxH - handlePx
+            local minR     = (dyn > 0) and Mux._clamp(minPx / dyn, 0.01, 0.25) or 0.05
+            self._savedMinimizeRatio   = split.ratio
+            self._preMinimizeResizable = self.resizable
+            self.resizable             = false
             local newR = (self._slotSide == "a") and minR or (1 - minR)
             split:_setRatio(Mux._clamp(newR, 0.01, 0.99))
+            split:_updateHandleResizability()
         end
         -- Hide content after resize so nothing bleeds through the collapsed strip.
         if self.content then self.content:hide() end
@@ -932,6 +949,18 @@ function MuxPane:setName(text)
     end
     self:_updateInfoBtnPos()
     self:_updatePlaceholder()
+end
+
+-- Returns true when the pane-level Content Library button and menu item should
+-- be available. Hidden whenever tabs own the content slot:
+--   • tabs enabled (content goes into individual tabs)
+--   • tabs disabled but tab bar still has tabs being dragged out
+-- Only restored when the bar has fully collapsed (no tabs, tabs disabled).
+function MuxPane:_contentEnabled()
+    if not self.contentable then return false end
+    if self._tabsEnabled then return false end
+    if self._tabs and #self._tabs > 0 then return false end
+    return true
 end
 
 -- Placeholder shown on contentBg until real content is attached.
@@ -962,8 +991,8 @@ function MuxPane:_updatePlaceholder()
         .. "<span style='font-size:9px;color:rgba(90,98,138,0.5);'>"
         .. "≡ Properties or use mux pane properties"
         .. "</span>"
-        .. (not self.noContent
-            and "<br/><span style='color:rgba(100,165,255,0.4);font-size:9px;'>◈ Add Content via titlebar</span>"
+        .. (self.contentable
+            and "<br/><span style='color:rgba(100,165,255,0.4);font-size:9px;'>▥ Content Library via titlebar</span>"
             or  "")
         .. "</div>",
         ds, self.name, is, self.id, cs, self.id)
@@ -972,7 +1001,8 @@ end
 
 function MuxPane:float()
     if self.floating then return end
-    if self.noFloat   then return end
+    if not self.convertible then return end
+    if not self.movable then return end
     self.floatX = self.outer:get_x()
     self.floatY = self.outer:get_y()
     self.floatW = self.outer:get_width()
@@ -982,16 +1012,27 @@ end
 
 function MuxPane:_detachToFloat()
     if self.floating then return end
-    if self.noFloat  then return end
+    if not self.convertible and not self.overlay then return end
+    -- If minimized-in-split, restore before floating so sibling ratio isn't stuck.
+    if self.minimized and self._split and self._savedMinimizeRatio then
+        self._split:_setRatio(self._savedMinimizeRatio)
+        self._savedMinimizeRatio  = nil
+        self.resizable            = self._preMinimizeResizable ~= nil and self._preMinimizeResizable or true
+        self._preMinimizeResizable = nil
+        self._split:_updateHandleResizability()
+    end
+    self.minimized = false
+    if self.content then self.content:show() end
     self.floating = true
+    if self.titlebar then self.titlebar:setCursor(self:_titlebarCursor()) end
     self.outer:changeContainer(Geyser)
     self.outer:move(self.floatX, self.floatY)
     self.outer:resize(self.floatW, self.floatH)
     self.outer:reposition()
     self:raise()
     self.frame:setStyleSheet(self:_baseFrameCss())
-    self:_showCornerHandles()
-    if self.titlebarVisible and not self.noFloat then
+    if self.resizable then self:_showCornerHandles() else self:_hideCornerHandles() end
+    if self.titlebarVisible and self.minimizable then
         self.minBtn:show()
     end
     if self.splitVBtn then self.splitVBtn:hide() end
@@ -1001,18 +1042,17 @@ function MuxPane:_detachToFloat()
     -- explicitly dismissed (×) or the pane is closed; they never auto-vanish.
     if self._split then
         Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSet)
-        -- Re-raise after ghost creation so the float stays above its own ghost.
-        self:raise()
+        -- Raise ALL floating panes so none are obscured by the new ghost.
+        Mux.raiseFloatingPanes()
     end
-    if not self.permanentFloat then Mux._lastFocusedPane = self end
+    if not self.overlay then Mux._lastFocusedPane = self end
     if self.onFloat then self.onFloat(self) end
-    if not self.permanentFloat then Mux._scheduleAutoSave() end
+    if not self.overlay then Mux._scheduleAutoSave() end
     Mux._log("MuxPane floated: %s (%.0f,%.0f %.0fx%.0f)",
         self.id, self.floatX, self.floatY, self.floatW, self.floatH)
 end
 
 function MuxPane:embed(slot)
-    if self.permanentFloat then return end
     if not self.floating then return end
     local target = slot or self._slot
     if not target then
@@ -1025,32 +1065,38 @@ function MuxPane:embed(slot)
         self._split.box:show()
     end
     self.floating = false
+    if self.titlebar then self.titlebar:setCursor(self:_titlebarCursor()) end
     self.outer:changeContainer(target)
     self.outer:move("0%", "0%")
     self.outer:resize("100%", "100%")
     self.outer:reposition()
     self.frame:setStyleSheet(self:_baseFrameCss())
     self:_hideCornerHandles()
-    self.minBtn:hide()
     if self.titlebarVisible then
-        if self.splittable and not self.locked then
+        -- _minBtnVisible checks self._split.direction which may not be set yet at
+        -- embed() time (split.place() runs after embed()); _checkOverflow fixes it up.
+        if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
+        if self.splittable then
             if self.splitVBtn then self.splitVBtn:show() end
             if self.splitHBtn then self.splitHBtn:show() end
         end
-        if self.swappable and not self.locked and self._split then
+        if self.swappable and self._split then
             if self.swapBtn then self.swapBtn:show() end
         end
+    else
+        self.minBtn:hide()
     end
     tempTimer(0, function() if self.titlebar then self:_checkOverflow() end end)
     if self.onEmbed then self.onEmbed(self) end
     self:_updateZoomBtn()
+    if self._split then self._split:_updateHandleResizability() end
     Mux._scheduleAutoSave()
     Mux._log("MuxPane embedded: %s", self.id)
     Mux.raiseFloatingPanes()
 end
 
 -- Zoom this pane to fill the full screen, floating above embedded panes and
--- immobilized floaters (locked/permanentFloat) but below free floating panes.
+-- overlay floaters but below free floating panes.
 -- Calling again while zoomed restores the pane to its previous state.
 function MuxPane:zoom()
     if not self.zoomable then return end
@@ -1111,8 +1157,8 @@ function MuxPane:_unzoom()
         self.outer:move(state.floatX, state.floatY)
         self.outer:resize(state.floatW, state.floatH)
         self.outer:reposition()
-        self:_showCornerHandles()
-        if self.titlebarVisible and not self.noFloat then
+        if self.resizable then self:_showCornerHandles() else self:_hideCornerHandles() end
+        if self.titlebarVisible and self.minimizable then
             self.minBtn:show()
         end
     else
@@ -1134,11 +1180,11 @@ function MuxPane:_unzoom()
             self._paneSet.outer:show()
         end
         if self.titlebarVisible then
-            if self.splittable and not self.locked then
+            if self.splittable then
                 if self.splitVBtn then self.splitVBtn:show() end
                 if self.splitHBtn then self.splitHBtn:show() end
             end
-            if self.swappable and not self.locked and self._split then
+            if self.swappable and self._split then
                 if self.swapBtn then self.swapBtn:show() end
             end
         end
@@ -1158,6 +1204,15 @@ function MuxPane:_updateZoomBtn()
         self.zoomBtn:show()
     else
         self.zoomBtn:hide()
+    end
+end
+
+function MuxPane:_updateSwapBtn()
+    if not self.swapBtn then return end
+    if self.swappable and not self.floating and self._split then
+        self.swapBtn:show()
+    else
+        self.swapBtn:hide()
     end
 end
 
@@ -1198,51 +1253,84 @@ function MuxPane:hide()
     self.outer:hide()
 end
 
-function MuxPane:lock()
-    self.locked = true
-    if self.titlebar   then self.titlebar:setCursor("Arrow") end
-    -- _setAddTabBtnVisible is defined in tabs.lua (loaded after pane.lua).
-    if self._addTabBtn then self:_setAddTabBtnVisible(false) end
-    if self.closeBtn and not self.closeable then self.closeBtn:hide() end
-    if self.splitVBtn then self.splitVBtn:hide() end
-    if self.splitHBtn then self.splitHBtn:hide() end
-    if self.swapBtn   then self.swapBtn:hide()   end
-    self:_setFrameCss(self:_baseFrameCss())
-    Mux._log("MuxPane locked: %s", self.id)
+-- Returns the cursor name the titlebar should display based on current drag capability.
+-- Whether the minimize button should be visible for this pane right now.
+-- Horizontal-split embedded collapse is not supported (titlebar would be squashed),
+-- so minBtn only shows when floating or in a vertical (top/bottom) split.
+function MuxPane:_minBtnVisible()
+    if not self.minimizable then return false end
+    if self.floating then return true end
+    return self._split ~= nil and self._split.direction == "v"
 end
 
-function MuxPane:unlock()
-    self.locked = false
-    if self.titlebar   then self.titlebar:setCursor("OpenHand") end
-    if self._addTabBtn and self._tabsEnabled then self:_setAddTabBtnVisible(true) end
-    if self.closeBtn and not self.noClose and self.titlebarVisible then
-        self.closeBtn:show()
+function MuxPane:_titlebarCursor()
+    if self.floating then
+        return (self.movable ~= false) and "OpenHand" or "Arrow"
+    else
+        return (self.convertible ~= false and self.movable ~= false) and "OpenHand" or "Arrow"
     end
-    if self.titlebarVisible and not self.floating then
-        if self.splittable then
-            if self.splitVBtn then self.splitVBtn:show() end
-            if self.splitHBtn then self.splitHBtn:show() end
-        end
-        if self.swappable and self.swapBtn and self._split then self.swapBtn:show() end
+end
+
+function MuxPane:_confirmClose()
+    if not self.closeable then return end
+    if self.overlay then self:close(); return end  -- dialogs: no confirm needed
+    local doConfirm = Mux.settings.get("mux", "confirmPaneClose")
+    if doConfirm == nil then doConfirm = true end
+    if not doConfirm then
+        self:close()
+        return
     end
-    if Mux._focusedPane == self then
-        self:_setFrameCss(self:_focusedFrameCss())
-    end
-    Mux._log("MuxPane unlocked: %s", self.id)
+    local sw    = getMainWindowSize()
+    local cw    = 340
+    local pane  = self
+    local confirmD = Mux.createDialog({
+        title         = "Close Pane?",
+        x             = math.floor((sw - cw) / 2),
+        y             = 0,
+        width         = cw, height = 140,
+        closeable     = false,
+        minimizable   = false,
+        contextMenu   = false,
+    })
+    Mux._pendingPaneClose = { paneName = self.name, onProceed = function() pane:close() end }
+    Mux._applyContent(confirmD, "mux_pane_close_confirm")
+    confirmD:show()
+    confirmD:raise()
 end
 
 function MuxPane:close()
-    if self.locked and not self.closeable then
-        return
+    if self._propertiesDialogs then
+        for _, dlg in pairs(self._propertiesDialogs) do
+            pcall(function() dlg:close() end)
+        end
+        self._propertiesDialogs = nil
     end
     Mux._closeContextMenu()
     if self.onClose then self.onClose(self) end
 
-    -- Clear singleton content tracking if this pane held singleton content.
+    -- Call remove callback so content can tear down event handlers and widgets.
     if self._activeContent and Mux._content then
         local def = Mux._content[self._activeContent]
-        if def and def.singleton and def._activeTargetRef == self then
-            def._activeTargetRef = nil
+        if def then
+            if def.singleton and def._activeTargetRef == self then
+                def._activeTargetRef = nil
+            end
+            if type(def.remove) == "function" then pcall(def.remove, self) end
+        end
+        self._activeContent = nil
+    end
+    -- Clean up content on any tabs this pane owns.
+    if self._tabs then
+        for _, tab in ipairs(self._tabs) do
+            if tab._activeContent and Mux._content then
+                local def = Mux._content[tab._activeContent]
+                if def then
+                    if def.singleton and def._activeTargetRef == tab then
+                        def._activeTargetRef = nil
+                    end
+                    if type(def.remove) == "function" then pcall(def.remove, tab) end
+                end
+            end
         end
     end
 
@@ -1279,13 +1367,22 @@ function MuxPane:close()
     Mux._panes[self.id] = nil
     if self._gid then Mux._tabHosts[self._gid] = nil end
     Mux._freeId(self.id)
+    if Mux._updateMainHighlightable then Mux._updateMainHighlightable() end
+    -- When only one embedded pane remains, clear its focus border.
+    local remaining = orderedPanes()
+    if #remaining == 1 then
+        local sole = remaining[1]
+        if sole._setFrameCss and sole._baseFrameCss then
+            sole:_setFrameCss(sole:_baseFrameCss())
+        end
+    end
     Mux._scheduleAutoSave()
     Mux._log("MuxPane closed: %s", self.id)
 end
 
 function MuxPane:applyTheme()
     local theme = Mux.activeTheme()
-    if Mux._focusedPane == self and not self.locked then
+    if Mux._focusedPane == self and self.highlightable ~= false then
         self.frame:setStyleSheet(self:_focusedFrameCss())
     else
         self.frame:setStyleSheet(self:_baseFrameCss())
@@ -1361,7 +1458,7 @@ function MuxPane:_tryEmbedAt(gx, gy)
 
                 if self._slot then
                     self:embed()
-                else
+                elseif not ps.root then
                     self._slot     = ps.outer
                     self._split    = nil
                     self._slotSide = nil
@@ -1380,7 +1477,7 @@ end
 --   dx = -1 → move left edge    dx = 1 → move right edge   dx = 0 → no x change
 --   dy = -1 → move top edge     dy = 1 → move bottom edge  dy = 0 → no y change
 function MuxPane:_buildCornerHandles(theme)
-    if self.noResize then return end
+    if not self.resizable then return end
     local ch       = (theme.cornerHandleSize or 10)
     local css      = theme.cornerHandleCss      or ""
     local hoverCss = theme.cornerHandleHoverCss or css
@@ -1476,6 +1573,7 @@ function MuxPane:_buildCornerHandles(theme)
             pane.outer:move(newX, newY)
             pane.outer:resize(newW, newH)
             pane.outer:reposition()
+            pane:_checkOverflow()
         end)
 
         lbl:setReleaseCallback(function(event)
@@ -1504,7 +1602,7 @@ function MuxPane:_setFrameCss(css)
 end
 
 -- Unfocused frame CSS. transparentFrame panes pass clicks through to the native
--- console underneath. permanentFloat carries the accent border.
+-- console underneath. overlay carries the accent border.
 function MuxPane:_baseFrameCss()
     if self.transparentFrame or self.consoleBorders then
         return [[
@@ -1514,16 +1612,16 @@ function MuxPane:_baseFrameCss()
         ]]
     end
     local theme = Mux.activeTheme()
-    if self.permanentFloat then
+    if self.overlay then
         return (theme.paneOuterCss or "") .. "\n" .. (theme.floatingExtraCss or "")
     end
     return (theme.paneOuterCss or "")
 end
 
--- Focused-highlight frame CSS. permanentFloat panes never take the focus border.
+-- Focused-highlight frame CSS. overlay panes never take the focus border.
 -- With only one embedded pane, focus is implicit — no border highlight needed.
 function MuxPane:_focusedFrameCss()
-    if self.permanentFloat then return self:_baseFrameCss() end
+    if self.overlay then return self:_baseFrameCss() end
     local paneCount = 0
     for _, p in pairs(Mux._panes) do
         if not p.floating then
@@ -1547,5 +1645,38 @@ function MuxPane:absX()   return self.outer:get_x()      end
 function MuxPane:absY()   return self.outer:get_y()      end
 function MuxPane:width()  return self.outer:get_width()  end
 function MuxPane:height() return self.outer:get_height() end
+
+Mux.registerContent("mux_pane_close_confirm", {
+    internal = true,
+    apply = function(target)
+        if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
+        local p = Mux._pendingPaneClose
+        Mux._pendingPaneClose = nil
+        if not p then return end
+        local cw = target.content:get_width()
+        if cw < 50 then cw = (target.floatW or 340) - 4 end
+        local body = Geyser.Label:new({
+            name=target._gid.."_body", x=10, y=10, width=cw-20, height=36,
+        }, target.content)
+        body:setStyleSheet(Mux.dialogCss.body)
+        body:rawEcho(string.format("Close pane <b>%s</b>?", p.paneName))
+        local btnProceed = Geyser.Label:new({
+            name=target._gid.."_proceed", x=20, y=54, width=135, height=34,
+        }, target.content)
+        btnProceed:setStyleSheet(Mux.dialogCss.buttonDanger)
+        btnProceed:rawEcho("<center>Proceed</center>")
+        Mux.wireDialogButton(btnProceed, Mux.dialogCss.buttonDanger, Mux.dialogCss.buttonDangerHover)
+        btnProceed:setClickCallback(function() target:close(); p.onProceed() end)
+        local btnCancel = Geyser.Label:new({
+            name=target._gid.."_cancel", x=185, y=54, width=135, height=34,
+        }, target.content)
+        btnCancel:setStyleSheet(Mux.dialogCss.buttonPrimary)
+        btnCancel:rawEcho("<center>Cancel</center>")
+        Mux.wireDialogButton(btnCancel, Mux.dialogCss.buttonPrimary, Mux.dialogCss.buttonPrimaryHover)
+        btnCancel:setClickCallback(function() target:close() end)
+        target._autoFitHeight = 98
+    end,
+    remove = function(_) end,
+})
 
 Mux._log("mux_pane loaded")

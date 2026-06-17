@@ -8,211 +8,54 @@
 --
 -- Requires: content.lua (Mux.registerContent, Mux._applyContent) loaded first.
 
-local propsUi      = { window = nil }
-local pendingRows  = nil   -- rows passed to the registered apply function
-local _propsEpoch  = 0     -- incremented each open to avoid widget name collisions on ID reuse
-local _pendingPrefix = nil -- set before _applyContent so apply() uses a unique prefix
+local propsUi        = {}
+local pendingRows    = nil   -- rows passed to the registered apply function
+local _propsEpoch    = 0     -- incremented each open to avoid widget name collisions on ID reuse
+local _pendingPrefix = nil   -- set before _applyContent so apply() uses a unique prefix
+local _pendingPropsConfirm = nil  -- {message, onProceed} for the close-confirm dialog
 
--- ── CSS (re-derived from active theme on each open) ───────────────────────────
+-- Forward declarations needed because paneRows/tabRows reference these before their definitions.
+local refreshPaneProperties
+local refreshTabProperties
 
-local function makeCss()
-    local theme = Mux.activeTheme()
-    local sui   = theme.settingsUi or {}
-
-    local rowOdd   = sui.rowOdd          or "rgb(16,16,24)"
-    local rowEven  = sui.rowEven         or "rgb(34,34,50)"
-    local divider  = sui.rowDivider      or "rgba(255,255,255,0.12)"
-    local text     = sui.textColor       or "rgba(215,215,230,0.92)"
-    local widgetBg = sui.widgetBg        or "rgb(38,38,58)"
-    local widgetFg = sui.widgetFg        or "#d8d8f0"
-    local widgetBd = sui.widgetBorder    or "rgba(255,255,255,0.22)"
-    local widgetHv = sui.widgetHoverBg   or "rgb(55,55,80)"
-    local inputBg  = sui.inputBg         or "rgb(12,12,18)"
-    local inputFg  = sui.inputFg         or "#c8c8d0"
-    local inputBd  = sui.inputBorder     or "rgba(255,255,255,0.46)"
-    local tOnBg    = sui.toggleOnBg       or "rgb(30,70,40)"
-    local tOnFg    = sui.toggleOnFg       or "#88ee88"
-    local tOnBd    = sui.toggleOnBorder   or "rgba(80,180,80,0.5)"
-    local tOnHv    = sui.toggleOnHoverBg  or "rgb(40,90,50)"
-    local tOffBg   = sui.toggleOffBg      or "rgb(65,30,30)"
-    local tOffFg   = sui.toggleOffFg      or "rgba(220,120,120,0.9)"
-    local tOffBd   = sui.toggleOffBorder  or "rgba(180,80,80,0.4)"
-    local tOffHv   = sui.toggleOffHoverBg or "rgb(85,40,40)"
-    local descText = sui.descTextColor    or "rgba(120,130,170,0.85)"
-    local hiIconFg = sui.helpIconFg       or "rgba(120,160,255,0.85)"
-    local hiIconBg = sui.helpIconBg       or "rgba(55,75,120,0.55)"
-    local hiIconBd = sui.helpIconBorder   or "rgba(80,115,200,0.35)"
-
-    return {
-        bg       = sui.bg or "rgb(18,18,26)",
-        odd      = string.format("background:%s;border:none;border-bottom:1px solid %s;", rowOdd,  divider),
-        even     = string.format("background:%s;border:none;border-bottom:1px solid %s;", rowEven, divider),
-        rowLabel = string.format("background:transparent;color:%s;font-size:11px;font-weight:bold;", text),
-        rowDesc  = string.format("background:transparent;color:%s;font-size:10px;", descText),
-        helpIcon = string.format(
-            "QLabel{background:%s;color:%s;font-size:10px;font-weight:bold;border-radius:3px;border:1px solid %s;}"
-            .. "QLabel::hover{background:%s;color:%s;}",
-            hiIconBg, hiIconFg, hiIconBd, hiIconBg, hiIconFg),
-        togOnFg  = tOnFg,
-        togOffFg = tOffFg,
-        widgetFg = widgetFg,
-        toggleOn  = string.format(
-            "QLabel{background:%s;color:%s;font-size:10px;font-weight:bold;border:1px solid %s;border-radius:3px;}"
-            .. "QLabel::hover{background:%s;}",
-            tOnBg, tOnFg, tOnBd, tOnHv),
-        toggleOff = string.format(
-            "QLabel{background:%s;color:%s;font-size:10px;font-weight:bold;border:1px solid %s;border-radius:3px;}"
-            .. "QLabel::hover{background:%s;}",
-            tOffBg, tOffFg, tOffBd, tOffHv),
-        textInput = string.format(
-            "background-color:%s;color:%s;font-size:12px;border:1px solid %s;border-radius:3px;"
-            .. "padding-left:6px;padding-right:4px;",
-            inputBg, inputFg, inputBd),
-        applyBtn = string.format(
-            "QLabel{background-color:%s;border:1px solid %s;border-radius:3px;color:%s;font-size:9px;"
-            .. "font-weight:bold;}QLabel::hover{background-color:%s;border-color:rgba(120,180,255,200);color:%s;}",
-            widgetBg, widgetBd, widgetFg, widgetHv, widgetFg),
-    }
-end
-
--- ── Layout constants ──────────────────────────────────────────────────────────
-
-local rowHToggle = 42
-local rowHText   = 64
-local padL       = 10
-local padR       = 6
-local widgetW    = 110
-local widgetH    = 24
-local applyW     = 42
-local inputGap   = 3
-
-local function rowHeight(propType)
-    return propType == "text" and rowHText or rowHToggle
-end
-
--- ── Widget builders ───────────────────────────────────────────────────────────
-
-local function addToggle(parent, x, y, uid, css, readFn, writeFn, trueLabel, falseLabel)
-    trueLabel  = trueLabel  or "TRUE"
-    falseLabel = falseLabel or "FALSE"
-    local w = Geyser.Label:new({ name=uid.."_t", x=x, y=y, width=widgetW, height=widgetH }, parent)
-    local function refresh()
-        local v = readFn()
-        w:setStyleSheet(v and css.toggleOn or css.toggleOff)
-        w:echo(string.format(
-            "<center><span style='color:%s;font-size:10px;font-weight:bold;'>%s</span></center>",
-            v and css.togOnFg or css.togOffFg, v and trueLabel or falseLabel))
-    end
-    refresh()
-    w:setClickCallback(function() writeFn(not readFn()); refresh() end)
-end
-
-local function addTextInput(parent, x, y, uid, css, readFn, writeFn, availW)
-    local inputW = availW - applyW - inputGap
-    local input  = Geyser.CommandLine:new({ name=uid.."_i", x=x, y=y, width=inputW, height=widgetH }, parent)
-    input:setStyleSheet(css.textInput)
-    input:print(tostring(readFn() or ""))
-    local btn = Geyser.Label:new({ name=uid.."_a", x=x+inputW+inputGap, y=y, width=applyW, height=widgetH }, parent)
-    btn:setStyleSheet(css.applyBtn)
-    btn:echo(string.format(
-        "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
-        css.widgetFg))
-    local function commit()
-        local text = input:getText()
-        if not text or text == "" then return end
-        writeFn(text)
-        input:print(tostring(readFn() or ""))
-    end
-    input:setAction(commit)
-    btn:setClickCallback(commit)
-end
-
--- ── Row builder ───────────────────────────────────────────────────────────────
--- Each entry: { label, desc, type="toggle"|"text", readFn, writeFn }
--- Returns total height of all rows built.
-
-local function buildRows(contentLbl, contentW, rows, css, prefix)
-    local yPos    = 0
-    local nameW   = contentW - padL - widgetW - 8 - padR
-    local widgetX = contentW - widgetW - padR
-    local inputAvail = contentW - padL - padR
-
-    for idx, prop in ipairs(rows) do
-        local isText = (prop.type == "text")
-        local thisH  = rowHeight(prop.type)
-        local uid    = prefix .. "_p" .. idx
-
-        local rowLbl = Geyser.Label:new({
-            name=uid.."_row", x=0, y=yPos, width=contentW, height=thisH,
-        }, contentLbl)
-        rowLbl:setStyleSheet(idx % 2 == 1 and css.odd or css.even)
-
-        if isText then
-            local nameLbl = Geyser.Label:new({
-                name=uid.."_n", x=padL, y=6, width=inputAvail, height=14,
-            }, rowLbl)
-            nameLbl:setStyleSheet(css.rowLabel)
-            nameLbl:rawEcho(prop.label)
-            if prop.desc and prop.desc ~= "" then
-                local descLbl = Geyser.Label:new({
-                    name=uid.."_d", x=padL, y=21, width=inputAvail, height=13,
-                }, rowLbl)
-                descLbl:setStyleSheet(css.rowDesc)
-                descLbl:rawEcho(prop.desc)
-            end
-            addTextInput(rowLbl, padL, 36, uid, css, prop.readFn, prop.writeFn, inputAvail)
-        else
-            local hasDesc = prop.desc and prop.desc ~= ""
-            local nameX   = hasDesc and padL + 22 or padL
-            local nameW2  = hasDesc and nameW - 22 or nameW
-            local vCenter = math.floor((rowHToggle - 20) / 2)
-            local nameLbl = Geyser.Label:new({
-                name=uid.."_n", x=nameX, y=vCenter, width=nameW2, height=20,
-            }, rowLbl)
-            nameLbl:setStyleSheet(css.rowLabel)
-            nameLbl:rawEcho(prop.label)
-            if hasDesc then
-                local hi = Geyser.Label:new({
-                    name=uid.."_hi", x=padL, y=vCenter+2, width=16, height=16, fillBg=1,
-                }, rowLbl)
-                hi:setStyleSheet(css.helpIcon)
-                hi:rawEcho("<center>i</center>")
-                hi:setToolTip(prop.desc, 6)
-            end
-            addToggle(rowLbl, widgetX, math.floor((rowHToggle - widgetH) / 2), uid, css,
-                prop.readFn, prop.writeFn, prop.trueLabel, prop.falseLabel)
-        end
-
-        yPos = yPos + thisH
-    end
-    return yPos
-end
 
 -- ── Property definitions ──────────────────────────────────────────────────────
 
 local function paneRows(pane)
-    local rows = {
-        {
-            label   = "Name",
-            desc    = "Display name shown in the titlebar",
-            type    = "text",
-            readFn  = function() return pane.name end,
-            writeFn = function(v) if v ~= "" then pane:setName(v) end end,
+    local rows = {}
+
+    -- Group 1: Tabs, Locked, Titlebar, Properties Button
+    rows[#rows+1] = {
+        label   = "Tabs",
+        desc    = "Enabled: host multiple views in a tab bar; Locked: tab bar frozen, no add/close",
+        type    = "choiceCycler",
+        options = {
+            { value = false,    label = "Disabled", style = "off"  },
+            { value = true,     label = "Enabled",  style = "on"   },
+            { value = "locked", label = "NoAdd",    style = "warn" },
         },
-        {
-            label      = "Locked",
-            desc       = "Locked: prevents drag, split, resize, and rename",
-            type       = "toggle",
-            trueLabel  = "Locked",
-            falseLabel = "Unlocked",
-            readFn     = function() return pane.locked end,
-            writeFn    = function(v) if v then pane:lock() else pane:unlock() end end,
-        },
+        readFn  = function()
+            if pane.tabsLocked then return "locked" end
+            return pane._tabsEnabled and true or false
+        end,
+        writeFn = function(v)
+            if v == true then
+                pane.tabsLocked = false
+                if not pane._tabsEnabled then pane:enableTabs() end
+                if pane._addTabBtn then pane:_setAddTabBtnVisible(true) end
+            elseif v == false then
+                pane.tabsLocked = false
+                if pane._tabsEnabled then pane:disableTabs() end
+            elseif v == "locked" then
+                pane.tabsLocked = true
+                if pane._addTabBtn then pane:_setAddTabBtnVisible(false) end
+            end
+        end,
     }
-    if not pane.noTitlebarToggle then
+    if pane.titlebarHideable then
         rows[#rows+1] = {
             label      = "Titlebar",
-            desc       = "Visible: shows titlebar strip. Hidden: collapses to thin reveal strip",
+            desc       = "Visible: shows the titlebar strip. Hidden: collapses to a thin reveal strip",
             type       = "toggle",
             trueLabel  = "Visible",
             falseLabel = "Hidden",
@@ -221,8 +64,50 @@ local function paneRows(pane)
         }
     end
     rows[#rows+1] = {
+        label      = "Properties Button",
+        desc       = "Show the ≡ button in the titlebar. If hidden, use 'mux pane properties' to reopen",
+        type       = "toggle",
+        trueLabel  = "Visible",
+        falseLabel = "Hidden",
+        readFn     = function() return pane.propertiesButton end,
+        writeFn    = function(v)
+            pane.propertiesButton = v
+            pane:_applyTitlebarVisibility()
+        end,
+    }
+    rows[#rows+1] = {
+        label      = "Highlightable",
+        desc       = "Show a focus border when this pane is active",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.highlightable ~= false end,
+        writeFn    = function(v)
+            pane.highlightable = v
+            if v and Mux._focusedPane == pane and pane._setFrameCss and pane._focusedFrameCss then
+                pane:_setFrameCss(pane:_focusedFrameCss())
+            elseif not v and pane._setFrameCss and pane._baseFrameCss then
+                pane:_setFrameCss(pane:_baseFrameCss())
+            end
+        end,
+    }
+
+    -- Group 2: Behavior toggles
+    rows[#rows+1] = {
+        label      = "Minimizable",
+        desc       = "Show the minimize button. Floating: collapses to titlebar strip. Embedded: collapses the pane's split slot",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.minimizable end,
+        writeFn    = function(v)
+            pane.minimizable = v
+            pane:_applyTitlebarVisibility()
+        end,
+    }
+    rows[#rows+1] = {
         label      = "Closeable",
-        desc       = "Yes: show close button even when the pane is locked",
+        desc       = "Show the close button and allow this pane to be closed",
         type       = "toggle",
         trueLabel  = "Yes",
         falseLabel = "No",
@@ -232,41 +117,281 @@ local function paneRows(pane)
             pane:_applyTitlebarVisibility()
         end,
     }
-    if not pane.noTabs and not pane.permanentFloat then
+    rows[#rows+1] = {
+        label      = "Splittable",
+        desc       = "Allow this pane to be split horizontally or vertically by drag or command",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.splittable end,
+        writeFn    = function(v)
+            pane.splittable = v
+            pane:_applyTitlebarVisibility()
+        end,
+    }
+    rows[#rows+1] = {
+        label      = "Swappable",
+        desc       = "Allow this pane to swap position with its sibling within a split",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.swappable end,
+        writeFn    = function(v)
+            pane.swappable = v
+            pane:_applyTitlebarVisibility()
+        end,
+    }
+    rows[#rows+1] = {
+        label      = "Zoomable",
+        desc       = "Allow this pane to temporarily zoom to fill the window",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.zoomable end,
+        writeFn    = function(v)
+            pane.zoomable = v
+            pane:_applyTitlebarVisibility()
+        end,
+    }
+    rows[#rows+1] = {
+        label      = "Convertible",
+        desc       = "Allow switching between embedded (in split) and floating. Also requires Movable to drag-float from the titlebar",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.convertible end,
+        writeFn    = function(v)
+            pane.convertible = v
+            pane:_applyTitlebarVisibility()
+            if pane.titlebar then pane.titlebar:setCursor(pane:_titlebarCursor()) end
+        end,
+    }
+    rows[#rows+1] = {
+        label      = "Movable",
+        desc       = "Floating: drag titlebar to reposition. Embedded: required together with Convertible to drag-float",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.movable end,
+        writeFn    = function(v)
+            pane.movable = v
+            if pane.titlebar then pane.titlebar:setCursor(pane:_titlebarCursor()) end
+        end,
+    }
+    rows[#rows+1] = {
+        label      = "Contentable",
+        desc       = "Show the Content Library button and allow content to be assigned to this pane",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.contentable end,
+        writeFn    = function(v)
+            pane.contentable = v
+            pane:_applyTitlebarVisibility()
+        end,
+    }
+
+    -- Group 3: Resizable, then Renamable + optional Name input together
+    rows[#rows+1] = {
+        label      = "Resizable",
+        desc       = "Show corner and edge drag handles for resizing (applies to floating panes)",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.resizable end,
+        writeFn    = function(v)
+            pane.resizable = v
+            if v then
+                if pane._cornerHandles and pane.floating then pane:_showCornerHandles() end
+            else
+                pane:_hideCornerHandles()
+            end
+            if pane._split then pane._split:_updateHandleResizability() end
+        end,
+    }
+    rows[#rows+1] = {
+        label      = "Renamable",
+        desc       = "Allow renaming via command or double-click. When enabled, a Name field appears below",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.renamable ~= false end,
+        writeFn    = function(v)
+            pane.renamable = v
+            refreshPaneProperties(pane)
+        end,
+    }
+    if pane.renamable ~= false then
         rows[#rows+1] = {
-            label      = "Tabs",
-            desc       = "Enabled: tab bar lets you host multiple views in one pane",
-            type       = "toggle",
-            trueLabel  = "Enabled",
-            falseLabel = "Disabled",
-            readFn     = function() return pane._tabsEnabled or false end,
-            writeFn    = function(v)
-                if v then pane:enableTabs() else pane:disableTabs() end
+            label   = "Name",
+            desc    = "Display name shown in the titlebar",
+            type    = "text",
+            readFn  = function() return pane.name end,
+            writeFn = function(v)
+                if v ~= "" then pane:setName(v) end
             end,
         }
     end
+
+    -- Connection Awareness
+    rows[#rows+1] = {
+        label      = "Connection Awareness",
+        desc       = "Cover this pane (including tab bar) with a disconnected/connecting screen. Suppresses per-tab awareness while active",
+        type       = "toggle",
+        trueLabel  = "On",
+        falseLabel = "Off",
+        readFn     = function() return pane._connectionAware or false end,
+        writeFn    = function(v) pane:setConnectionAware(v) end,
+    }
+
+    -- Group 4: Size inputs
+    rows[#rows+1] = {
+        label   = "Width %",
+        desc    = "Set width as a percentage of screen width (1–99). Applies to floating panes or horizontal splits",
+        type    = "text",
+        readFn  = function()
+            local sw = getMainWindowSize()
+            if pane.floating then
+                return tostring(math.floor(pane.floatW / sw * 100))
+            elseif pane._split and pane._split.direction == "h" then
+                local r = (pane._slotSide == "a") and pane._split.ratio or (1 - pane._split.ratio)
+                return tostring(math.floor(r * 100))
+            end
+            return ""
+        end,
+        writeFn = function(v)
+            local pct = tonumber(v:match("%d+"))
+            if pct then Mux.resizePaneToWidth(pane, pct) end
+        end,
+    }
+    rows[#rows+1] = {
+        label   = "Height %",
+        desc    = "Set height as a percentage of screen height (1–99). Applies to floating panes or vertical splits",
+        type    = "text",
+        readFn  = function()
+            local _, sh = getMainWindowSize()
+            if pane.floating then
+                return tostring(math.floor(pane.floatH / sh * 100))
+            elseif pane._split and pane._split.direction == "v" then
+                local r = (pane._slotSide == "a") and pane._split.ratio or (1 - pane._split.ratio)
+                return tostring(math.floor(r * 100))
+            end
+            return ""
+        end,
+        writeFn = function(v)
+            local pct = tonumber(v:match("%d+"))
+            if pct then Mux.resizePaneToHeight(pane, pct) end
+        end,
+    }
     return rows
 end
 
 local function tabRows(host, tab)
-    return {
-        {
+    local rows = {}
+
+    rows[#rows+1] = {
+        label   = "Tabs",
+        desc    = "Enabled: host nested tabs inside this tab; NoAdd: tab bar shown but no new tabs can be added",
+        type    = "choiceCycler",
+        options = {
+            { value = false,    label = "Disabled", style = "off"  },
+            { value = true,     label = "Enabled",  style = "on"   },
+            { value = "locked", label = "NoAdd",    style = "warn" },
+        },
+        readFn  = function()
+            if tab.tabsLocked then return "locked" end
+            return tab._tabsEnabled and true or false
+        end,
+        writeFn = function(v)
+            if v == true then
+                tab.tabsLocked = false
+                if not tab._tabsEnabled then tab:enableTabs() end
+                if tab._addTabBtn then tab:_setAddTabBtnVisible(true) end
+            elseif v == false then
+                tab.tabsLocked = false
+                if tab._tabsEnabled then tab:disableTabs() end
+            elseif v == "locked" then
+                tab.tabsLocked = true
+                if tab._addTabBtn then tab:_setAddTabBtnVisible(false) end
+            end
+        end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Properties",
+        desc       = "Show or hide the Properties item in this tab's right-click menu",
+        type       = "toggle",
+        trueLabel  = "Visible",
+        falseLabel = "Hidden",
+        readFn     = function() return tab.propertiesButton ~= false end,
+        writeFn    = function(v) tab.propertiesButton = v end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Closeable",
+        desc       = "Allow this tab to be closed",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return tab.closeable ~= false end,
+        writeFn    = function(v) tab.closeable = v end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Movable",
+        desc       = "Allow this tab to be dragged to reorder or moved to another pane",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return tab.movable ~= false end,
+        writeFn    = function(v) tab.movable = v end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Contentable",
+        desc       = "Allow content from the Content Library to be applied to this tab",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return tab.contentable ~= false end,
+        writeFn    = function(v) tab.contentable = v end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Renamable",
+        desc       = "Allow this tab to be renamed",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return tab.renamable ~= false end,
+        writeFn    = function(v)
+            tab.renamable = v
+            refreshTabProperties(host, tab)
+        end,
+    }
+
+    if tab.renamable ~= false then
+        rows[#rows+1] = {
             label   = "Name",
             desc    = "Display name shown on the tab label",
             type    = "text",
             readFn  = function() return tab.name end,
             writeFn = function(v) if v ~= "" then host:renameTab(tab.id, v) end end,
-        },
-        {
-            label      = "Locked",
-            desc       = "Locked: prevents renaming and closing this tab",
-            type       = "toggle",
-            trueLabel  = "Locked",
-            falseLabel = "Unlocked",
-            readFn     = function() return tab.locked end,
-            writeFn    = function(v) tab.locked = v end,
-        },
+        }
+    end
+
+    -- Connection Awareness
+    rows[#rows+1] = {
+        label      = "Connection Awareness",
+        desc       = "Cover this tab's content with a disconnected/connecting screen. Has no effect if the parent pane has Connection Awareness enabled",
+        type       = "toggle",
+        trueLabel  = "On",
+        falseLabel = "Off",
+        readFn     = function() return tab._connectionAware or false end,
+        writeFn    = function(v) host:setTabConnectionAware(tab.id, v) end,
     }
+
+    return rows
 end
 
 -- ── Content type registration ─────────────────────────────────────────────────
@@ -274,9 +399,8 @@ end
 -- with the content lifecycle (singleton tracking, remove callbacks).
 
 Mux.registerContent("mux_properties", {
-    name      = "Properties",
-    singleton = true,
-    internal  = true,
+    name     = "Properties",
+    internal = true,
     apply = function(target)
         if target.contentBg then
             target.contentBg:echo("")
@@ -285,21 +409,23 @@ Mux.registerContent("mux_properties", {
         local rows = pendingRows
         if not rows or #rows == 0 then return end
 
-        local css      = makeCss()
-        local contentH = 0
-        for _, row in ipairs(rows) do contentH = contentH + rowHeight(row.type) end
-
+        local contentH = Mux.ui.formHeight(rows)
         local cw = target.content:get_width()
         if cw < 50 then cw = 376 end
 
         local prefix     = _pendingPrefix or ("mux_prop_" .. target.id)
         _pendingPrefix   = nil
+
+        local theme    = Mux.activeTheme() or {}
+        local uiTheme  = theme.ui or theme.settingsUi or {}
+        local bg       = uiTheme.bg or "rgb(18,18,26)"
+
         local contentLbl = Geyser.Label:new({
             name=prefix.."_cl", x=0, y=0, width=cw, height=contentH,
         }, target.content)
-        contentLbl:setStyleSheet("background:" .. css.bg .. "; border:none;")
+        contentLbl:setStyleSheet("background:" .. bg .. "; border:none;")
 
-        buildRows(contentLbl, cw, rows, css, prefix)
+        target._propsFormHandle = Mux.ui.buildForm(contentLbl, rows, { width = cw, prefix = prefix })
         -- Force geometry pass so content paints immediately instead of on first drag.
         tempTimer(0, function()
             if target.outer then target.outer:reposition() end
@@ -315,75 +441,64 @@ Mux.registerContent("mux_properties", {
 
 -- targetPane (optional): when provided and titlebar is hidden, the close button
 -- shows a confirmation dialog warning that Properties can't be reopened from the UI.
-local function openPropsDialog(title, rows, targetPane)
-    if propsUi.window then
-        propsUi.window:close()
-        propsUi.window = nil
-    end
+-- posX/posY (optional): reopen at a specific position instead of screen-center.
+local function openPropsDialog(title, rows, targetPane, posX, posY)
     _propsEpoch    = _propsEpoch + 1
     _pendingPrefix = "mux_prop_e" .. _propsEpoch
 
     local sw, sh  = getMainWindowSize()
     local dialogW = 380
 
-    local contentH = 0
-    for _, row in ipairs(rows) do contentH = contentH + rowHeight(row.type) end
+    local contentH = Mux.ui.formHeight(rows)
 
     -- chrome: titlebar (22) + outer border top+bottom (4)
     local dialogH = contentH + 26
-    local px = math.floor((sw - dialogW) / 2)
-    local py = math.floor((sh - dialogH) / 2)
+    local px = posX or math.floor((sw - dialogW) / 2)
+    local py = posY or math.floor((sh - dialogH) / 2)
 
     local d = Mux.createDialog({
         title         = title,
         x=px, y=py, width=dialogW, height=dialogH,
-        noContextMenu = true,
-        noTabs        = true,
+        contextMenu   = false,
     })
-    propsUi.window = d
-    d.onClose = function() propsUi.window = nil end
 
-    -- Intercept close button when watching for the locked+hidden-titlebar trap.
+    -- Track on the target so close() / removeTab() can clean us up.
+    if targetPane then
+        targetPane._propertiesDialogs = targetPane._propertiesDialogs or {}
+        targetPane._propertiesDialogs[d.id] = d
+    end
+
+    d.onClose = function()
+        if targetPane and targetPane._propertiesDialogs then
+            targetPane._propertiesDialogs[d.id] = nil
+        end
+    end
+
+    -- Intercept close button: warn when closing would leave no UI path back to Properties.
+    -- Pane: triggered by hidden titlebar or hidden Properties button.
+    -- Tab: triggered by hidden Properties item in right-click menu.
     if targetPane then
         d.closeBtn:setClickCallback(function(event)
             if event.button ~= "LeftButton" then return end
-            if not targetPane.titlebarVisible then
-                -- Warn: closing properties will leave no UI way to reopen it.
-                local confirmD = Mux.createDialog({
-                    title  = "Confirm Close",
-                    width  = 420, height = 160,
-                })
-                if confirmD.contentBg then
-                    confirmD.contentBg:echo("")
-                    confirmD.contentBg:hide()
+            local message
+            if targetPane.titlebarVisible ~= nil then
+                -- Pane target
+                local reasons = {}
+                if not targetPane.titlebarVisible  then reasons[#reasons+1] = "hidden titlebar" end
+                if not targetPane.propertiesButton then reasons[#reasons+1] = "Properties button hidden" end
+                if #reasons > 0 then
+                    local reasonStr = table.concat(reasons, " and ")
+                    message = "This pane has a <b>" .. reasonStr .. "</b>.<br/>"
+                           .. "To reopen Properties use: "
+                           .. "<tt style='color:#8ab4ff;'>mux pane properties</tt>"
                 end
-                local body = Geyser.Label:new({
-                    name=confirmD._gid.."_body", x=10, y=8, width=400, height=60,
-                }, confirmD.content)
-                body:setStyleSheet(Mux.dialogCss.body)
-                body:rawEcho("This pane has a <b>hidden titlebar</b>.<br/>"
-                    .. "The only way to reopen Properties will be a console command:<br/>"
-                    .. "<tt style='color:#8ab4ff;'>mux pane properties</tt>")
-                local btnKeep = Geyser.Label:new({
-                    name=confirmD._gid.."_keep", x=20, y=90, width=180, height=34,
-                }, confirmD.content)
-                btnKeep:setStyleSheet(Mux.dialogCss.button)
-                btnKeep:rawEcho("<center>Cancel</center>")
-                btnKeep:setClickCallback(function() confirmD:close() end)
-                local btnClose = Geyser.Label:new({
-                    name=confirmD._gid.."_close", x=220, y=90, width=180, height=34,
-                }, confirmD.content)
-                btnClose:setStyleSheet(Mux.dialogCss.buttonDanger)
-                btnClose:rawEcho("<center>OK</center>")
-                btnClose:setClickCallback(function()
-                    confirmD:close()
-                    d:close()
-                end)
-                confirmD:show()
-                confirmD:raise()
-                tempTimer(0, function()
-                    if confirmD.outer then confirmD.outer:reposition() end
-                end)
+            elseif targetPane.propertiesButton == false then
+                -- Tab target
+                message = "This tab's <b>Properties is hidden</b> from its right-click menu.<br/>"
+                       .. "There is no other UI path to reopen this dialog."
+            end
+            if message then
+                Mux._showPropsCloseConfirm(message, function() d:close() end)
             else
                 d:close()
             end
@@ -397,19 +512,106 @@ end
 
 -- ── Public API ────────────────────────────────────────────────────────────────
 
+-- Close any existing properties dialogs for a target (used when structural row
+-- changes mean the dialog must be rebuilt, e.g. Renamable or Tab Locked toggle).
+local function closeExistingPropsDialogs(target)
+    if not target._propertiesDialogs then return end
+    local toClose = {}
+    for _, dlg in pairs(target._propertiesDialogs) do toClose[#toClose+1] = dlg end
+    for _, dlg in ipairs(toClose) do pcall(function() dlg:close() end) end
+end
+
 function Mux.showPaneProperties(pane)
-    openPropsDialog(
-        string.format("Properties: %s", pane.name),
-        paneRows(pane),
-        pane
-    )
+    -- Raise existing dialog rather than opening a duplicate.
+    if pane._propertiesDialogs then
+        for _, dlg in pairs(pane._propertiesDialogs) do
+            if dlg.show  then dlg:show()  end
+            if dlg.raise then dlg:raise() end
+            return
+        end
+    end
+    openPropsDialog(string.format("Properties: %s", pane.name), paneRows(pane), pane)
 end
 
 function Mux.showTabProperties(host, tab)
-    openPropsDialog(
-        string.format("Tab: %s", tab.name),
-        tabRows(host, tab)
-    )
+    -- Raise existing dialog rather than opening a duplicate.
+    if tab._propertiesDialogs then
+        for _, dlg in pairs(tab._propertiesDialogs) do
+            if dlg.show  then dlg:show()  end
+            if dlg.raise then dlg:raise() end
+            return
+        end
+    end
+    openPropsDialog(string.format("Tab: %s", tab.name), tabRows(host, tab), tab)
 end
+
+-- Internal refresh: close existing dialogs for the target then reopen at the same position.
+-- Used by writeFns that cause structural row changes (Renamable, Tab Locked).
+local function _captureDialogPos(target)
+    if not target._propertiesDialogs then return nil, nil end
+    for _, dlg in pairs(target._propertiesDialogs) do
+        if dlg.outer then return dlg.outer:get_x(), dlg.outer:get_y() end
+    end
+    return nil, nil
+end
+
+refreshPaneProperties = function(pane)
+    local px, py = _captureDialogPos(pane)
+    closeExistingPropsDialogs(pane)
+    openPropsDialog(string.format("Properties: %s", pane.name), paneRows(pane), pane, px, py)
+end
+
+refreshTabProperties = function(host, tab)
+    local px, py = _captureDialogPos(tab)
+    closeExistingPropsDialogs(tab)
+    openPropsDialog(string.format("Tab: %s", tab.name), tabRows(host, tab), tab, px, py)
+end
+
+function Mux._showPropsCloseConfirm(message, onProceed)
+    local confirmD = Mux.createDialog({
+        title       = "Confirm Close",
+        width       = 380, height = 140,
+        closeable   = false,
+        minimizable = false,
+        contextMenu = false,
+    })
+    _pendingPropsConfirm = { message = message, onProceed = onProceed }
+    Mux._applyContent(confirmD, "mux_props_close_confirm")
+    confirmD:show()
+    confirmD:raise()
+end
+
+Mux.registerContent("mux_props_close_confirm", {
+    internal = true,
+    apply = function(target)
+        if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
+        local p = _pendingPropsConfirm
+        _pendingPropsConfirm = nil
+        if not p then return end
+        local cw = target.content:get_width()
+        if cw < 50 then cw = (target.floatW or 380) - 4 end
+        local body = Geyser.Label:new({
+            name=target._gid.."_body", x=10, y=10, width=cw-20, height=68,
+        }, target.content)
+        body:setStyleSheet(Mux.dialogCss.body)
+        body:rawEcho(p.message)
+        local btnProceed = Geyser.Label:new({
+            name=target._gid.."_proceed", x=20, y=86, width=155, height=34,
+        }, target.content)
+        btnProceed:setStyleSheet(Mux.dialogCss.buttonDanger)
+        btnProceed:rawEcho("<center>Proceed</center>")
+        Mux.wireDialogButton(btnProceed, Mux.dialogCss.buttonDanger, Mux.dialogCss.buttonDangerHover)
+        btnProceed:setClickCallback(function() target:close(); p.onProceed() end)
+        local btnCancel = Geyser.Label:new({
+            name=target._gid.."_cancel", x=205, y=86, width=155, height=34,
+        }, target.content)
+        btnCancel:setStyleSheet(Mux.dialogCss.buttonPrimary)
+        btnCancel:rawEcho("<center>Cancel</center>")
+        Mux.wireDialogButton(btnCancel, Mux.dialogCss.buttonPrimary, Mux.dialogCss.buttonPrimaryHover)
+        btnCancel:setClickCallback(function() target:close() end)
+        target._autoFitHeight = 130
+    end,
+    remove = function(_) end,
+})
 
 Mux._log("mux_properties loaded")
