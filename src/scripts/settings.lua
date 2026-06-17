@@ -765,6 +765,14 @@ local function buildWindow()
             -- Package tab: enable sub-tabs for each child namespace.
             tab.tabsLocked = true
             tab:enableTabs({ noDefaultTab = true })
+            -- Give the sub-tab bar a visually distinct look so users can tell
+            -- which parent tab owns the sub-tabs they're currently browsing.
+            if tab._tabBar then
+                local theme = Mux.activeTheme()
+                tab._tabBar:setStyleSheet(
+                    theme.subTabBarCss or
+                    "background-color:rgba(10,12,22,230);border-top:1px solid rgba(255,255,255,0.07);")
+            end
             for _, child in ipairs(entry.children) do
                 local subTab = tab:addTab(child.label)
                 subTab.renamable   = false

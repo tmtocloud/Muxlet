@@ -551,6 +551,11 @@ function Mux._clearWorkspace()
     Mux._paneSets = {}
     Mux._connAware = {}
     if Mux._settings_ui then Mux._settings_ui.window = savedSet end
+    -- Panes are gone; release singleton locks so the next workspace can apply the
+    -- same content without hitting the "already open" block.
+    for _, def in pairs(Mux._content or {}) do
+        if def.singleton then def._activeTargetRef = nil end
+    end
     Mux._focusedPane = nil
     -- Reset user-facing ID pools so new workspaces start numbering from 1.
     -- _internalSeq is intentionally NOT reset to keep Geyser widget names unique.
