@@ -292,27 +292,46 @@ end
 -- Hides or shows the add-tab button AND resizes the HBox to reclaim the space.
 function MuxPane:_setAddTabBtnVisible(visible)
     if not self._addTabBtn or not self._tabBarBox then return end
-    local theme  = Mux.activeTheme()
-    local addW   = theme.tabAddBtnWidth or 24
-    local indent = self._tabBarIndent or 0
+    if self._isSubTabHost then
+        -- Sub-tab bars manage their own HBox width via _resizeSubTabBar;
+        -- just show or hide the button without touching the HBox geometry.
+        if visible then self._addTabBtn:show() else self._addTabBtn:hide() end
+        return
+    end
+    local theme = Mux.activeTheme()
+    local addW  = theme.tabAddBtnWidth or 24
     if visible then
         self._addTabBtn:show()
-        self._tabBarBox:resize(Mux._fromEdgePx(addW + indent), nil)
+        self._tabBarBox:resize(Mux._fromEdgePx(addW), nil)
     else
         self._addTabBtn:hide()
-        self._tabBarBox:resize(Mux._fromEdgePx(indent), nil)
+        -- "-0px" = parent_width - 0: fills the full tab bar.
+        self._tabBarBox:resize(Mux._fromEdgePx(0), nil)
     end
     self._tabBarBox:organize()
+end
+
+-- Resize the HBox for a sub-tab host to be exactly numTabs×subTabWidth pixels
+-- wide and then re-organize so each tab gets a fixed pixel width.  Sub-tab
+-- dividers land at absolute pixel positions unrelated to the parent bar's
+-- percentage-based dividers, so they never form a visual grid.
+function MuxPane:_resizeSubTabBar()
+    if not self._isSubTabHost or not self._tabBarBox then return end
+    local theme = Mux.activeTheme()
+    local tabW  = theme.subTabWidth or 80
+    local n     = #(self._tabs or {})
+    if n > 0 then
+        self._tabBarBox:resize(Mux._toPx(n * tabW), nil)
+        self._tabBarBox:organize()
+    end
 end
 
 -- host may be a MuxPane or a tab object acting as a sub-tab host.
 -- Both have .content and ._gid; sub-tab hosts also have ._isSubTabHost = true.
 local function buildTabInfrastructure(host)
-    local theme  = Mux.activeTheme()
-    local tabH   = theme.tabBarHeight   or 22
-    local addW   = theme.tabAddBtnWidth or 24
-    local indent = host._isSubTabHost and (theme.subTabBarIndent or 12) or 0
-    host._tabBarIndent = indent
+    local theme = Mux.activeTheme()
+    local tabH  = theme.tabBarHeight   or 22
+    local addW  = theme.tabAddBtnWidth or 24
 
     host._tabBar = Geyser.Label:new({
         name = host._gid .. "_tab_bar",
@@ -327,7 +346,7 @@ local function buildTabInfrastructure(host)
 
     host._tabBarBox = Geyser.HBox:new({
         name = host._gid .. "_tab_hbox",
-        x = Mux._toPx(indent), y = "0px", width = Mux._fromEdgePx(addW + indent), height = "100%",
+        x = "0px", y = "0px", width = Mux._fromEdgePx(addW), height = "100%",
     }, host._tabBar)
 
     host._addTabBtn = Geyser.Label:new({
@@ -457,7 +476,7 @@ function MuxPane:addTab(name, pos)
     }, self._tabBarBox)
     label:setStyleSheet(theme.tabInactiveCss or "")
     self:_echoTabLabel(label, name, false, false, theme)
-    self._tabBarBox:organize()
+    if not self._isSubTabHost then self._tabBarBox:organize() end
 
     local tab = {
         id = tabId, name = name, pane = self,
@@ -471,6 +490,7 @@ function MuxPane:addTab(name, pos)
     setmetatable(tab, { __index = MuxPane })
     table.insert(self._tabs, pos, tab)
     if pos < #self._tabs then self:_syncHBoxOrder() end
+    if self._isSubTabHost then self:_resizeSubTabBar() end
     self:_wireTabLabel(tab)
     if not self._activeTabId then self:_activateTabObj(tab) end
     -- New tab content widgets must not appear above floating panes / dialogs.
@@ -496,7 +516,7 @@ function MuxPane:removeTab(tabId)
     end
     self._tabBarBox:remove(tab.label)
     tab.label:hide()
-    self._tabBarBox:organize()
+    if not self._isSubTabHost then self._tabBarBox:organize() end
     if not (self._activeTabId == tabId) then tab.content:hide() end
     if tab._connScreen then tab._connScreen:hide() end
     if tab._connectionAware then
@@ -520,6 +540,7 @@ function MuxPane:removeTab(tabId)
         tab._propertiesDialogs = nil
     end
     table.remove(self._tabs, idx)
+    if self._isSubTabHost then self:_resizeSubTabBar() end
     Mux._freeId(tabId)
     if isLast and not self._tabsEnabled then
         -- Only collapse the tab bar when tabs have been fully disabled;
@@ -816,8 +837,9 @@ function MuxPane:_receiveTab(tab, fromPane, insertPos)
 
     fromPane._tabBarBox:remove(tab.label)
     tab.label:hide()
-    fromPane._tabBarBox:organize()
+    if not fromPane._isSubTabHost then fromPane._tabBarBox:organize() end
     table.remove(fromPane._tabs, srcIdx)
+    if fromPane._isSubTabHost then fromPane:_resizeSubTabBar() end
 
     if fromPane._activeTabId == tab.id then
         fromPane._activeTabId = nil
@@ -849,7 +871,7 @@ function MuxPane:_receiveTab(tab, fromPane, insertPos)
     insertPos = insertPos or (#self._tabs + 1)
     table.insert(self._tabs, insertPos, tab)
     self:_syncHBoxOrder()
-    self._tabBarBox:organize()
+    if self._isSubTabHost then self:_resizeSubTabBar() else self._tabBarBox:organize() end
 
     self:_wireTabLabel(tab)
     self:_activateTabObj(tab)
