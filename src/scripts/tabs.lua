@@ -292,15 +292,15 @@ end
 -- Hides or shows the add-tab button AND resizes the HBox to reclaim the space.
 function MuxPane:_setAddTabBtnVisible(visible)
     if not self._addTabBtn or not self._tabBarBox then return end
-    local theme = Mux.activeTheme()
-    local addW  = theme.tabAddBtnWidth or 24
+    local theme  = Mux.activeTheme()
+    local addW   = theme.tabAddBtnWidth or 24
+    local indent = self._tabBarIndent or 0
     if visible then
         self._addTabBtn:show()
-        self._tabBarBox:resize(Mux._fromEdgePx(addW), nil)
+        self._tabBarBox:resize(Mux._fromEdgePx(addW + indent), nil)
     else
         self._addTabBtn:hide()
-        -- "-0px" = parent_width - 0: fills the full tab bar.
-        self._tabBarBox:resize(Mux._fromEdgePx(0), nil)
+        self._tabBarBox:resize(Mux._fromEdgePx(indent), nil)
     end
     self._tabBarBox:organize()
 end
@@ -308,9 +308,11 @@ end
 -- host may be a MuxPane or a tab object acting as a sub-tab host.
 -- Both have .content and ._gid; sub-tab hosts also have ._isSubTabHost = true.
 local function buildTabInfrastructure(host)
-    local theme = Mux.activeTheme()
-    local tabH  = theme.tabBarHeight   or 22
-    local addW  = theme.tabAddBtnWidth or 24
+    local theme  = Mux.activeTheme()
+    local tabH   = theme.tabBarHeight   or 22
+    local addW   = theme.tabAddBtnWidth or 24
+    local indent = host._isSubTabHost and (theme.subTabBarIndent or 12) or 0
+    host._tabBarIndent = indent
 
     host._tabBar = Geyser.Label:new({
         name = host._gid .. "_tab_bar",
@@ -325,7 +327,7 @@ local function buildTabInfrastructure(host)
 
     host._tabBarBox = Geyser.HBox:new({
         name = host._gid .. "_tab_hbox",
-        x = "0px", y = "0px", width = Mux._fromEdgePx(addW), height = "100%",
+        x = Mux._toPx(indent), y = "0px", width = Mux._fromEdgePx(addW + indent), height = "100%",
     }, host._tabBar)
 
     host._addTabBtn = Geyser.Label:new({

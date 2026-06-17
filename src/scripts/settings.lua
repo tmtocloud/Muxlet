@@ -440,6 +440,17 @@ local function tabHierarchy()
         end
     end
 
+    -- When a top-level entry has both a direct ns AND sub-path children, promote
+    -- the direct ns to a first "General" child so all content flows through the
+    -- sub-tab system. Downstream packages can register with a simple top-level path
+    -- (e.g. "Fed2-Tools") even when sibling namespaces use sub-paths (e.g. "Fed2-Tools/Map").
+    for _, info in pairs(tops) do
+        if info.ns and info.children and #info.children > 0 then
+            table.insert(info.children, 1, {label = "General", ns = info.ns})
+            info.ns = nil
+        end
+    end
+
     local result = {}
     for label, info in pairs(tops) do
         table.insert(result, {label = label, ns = info.ns, children = info.children})
@@ -796,6 +807,16 @@ local function buildWindow()
         elseif entry.ns then
             -- Leaf tab: settings content goes directly here.
             buildSettingsContent(tab, entry.ns, bgColor)
+        end
+    end
+
+    -- Geyser's hide() only covers children that existed at the time hide() was called.
+    -- Tab infrastructure (sub-tab bars, viewports, content) is added after the initial
+    -- hide, so non-active top-level tabs may still be visible. Re-hide them now that
+    -- all content is built.
+    for _, topTab in ipairs(pane._tabs or {}) do
+        if topTab.id ~= pane._activeTabId then
+            topTab.content:hide()
         end
     end
 
