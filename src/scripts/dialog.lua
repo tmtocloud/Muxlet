@@ -233,6 +233,14 @@ function Mux.createDialog(opts)
     pane.floatH = h
     pane:_detachToFloat()
     Mux.raiseFloatingPanes()
+    -- Deferred second raise forces Qt to repaint border labels that may have
+    -- been occluded by a pre-existing pane during the initial layout pass.
+    tempTimer(0, function()
+        if pane and pane.outer then
+            pane.outer:reposition()
+            Mux.raiseFloatingPanes()
+        end
+    end)
     Mux._log("Mux.createDialog: '%s' (%dx%d at %d,%d)", pane.name, w, h, x, y)
     return pane
 end

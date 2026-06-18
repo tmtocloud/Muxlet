@@ -14,6 +14,10 @@
 
 Mux._themes           = Mux._themes           or {}
 Mux._activeThemeName  = Mux._activeThemeName  or "dark"
+-- Package CSS that must survive theme changes. Packages append here via
+-- Mux.addProfileCss(); applyTheme() concatenates all entries with the theme's
+-- own scrollbarCss each time it fires.
+Mux._profileCssAddons = Mux._profileCssAddons or {}
 
 function Mux.activeTheme()
     return Mux._themes[Mux._activeThemeName] or Mux._themes["dark"] or {}
@@ -33,13 +37,36 @@ function Mux.applyTheme(name)
     end
     Mux._activeThemeName = name
     local theme = Mux._themes[name]
-    -- Push scrollbar skin to the Qt profile stylesheet so it cascades to all
-    -- QScrollArea widgets (Geyser.ScrollBox has no per-instance setStyleSheet).
-    if theme.scrollbarCss and setProfileStyleSheet then
-        setProfileStyleSheet(theme.scrollbarCss)
+    -- Push scrollbar skin + package addon CSS to the Qt profile stylesheet so
+    -- it cascades to all QScrollArea widgets.  Addons survive theme changes
+    -- because they are re-appended every time applyTheme() runs.
+    if setProfileStyleSheet then
+        local parts = { theme.scrollbarCss or "" }
+        for _, css in ipairs(Mux._profileCssAddons) do
+            parts[#parts + 1] = css
+        end
+        setProfileStyleSheet(table.concat(parts, "\n"))
     end
     for _, p in pairs(Mux._panes)  do if p.applyTheme then p:applyTheme() end end
     for _, s in pairs(Mux._splits) do if s.applyTheme then s:applyTheme() end end
+end
+
+--- Register CSS that must persist across theme changes.
+-- Called by packages that need profile-wide Qt rules (e.g. to hide a native
+-- widget panel).  The CSS is appended to the theme's scrollbarCss on every
+-- applyTheme() call and applied immediately.
+function Mux.addProfileCss(css)
+    assert(type(css) == "string", "addProfileCss: css must be a string")
+    table.insert(Mux._profileCssAddons, css)
+    -- Apply immediately so callers don't need to wait for the next theme switch.
+    if setProfileStyleSheet then
+        local theme = Mux.activeTheme()
+        local parts = { theme.scrollbarCss or "" }
+        for _, c in ipairs(Mux._profileCssAddons) do
+            parts[#parts + 1] = c
+        end
+        setProfileStyleSheet(table.concat(parts, "\n"))
+    end
 end
 
 Mux._log("mux_theme loaded")

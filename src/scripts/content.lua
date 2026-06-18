@@ -9,6 +9,9 @@
 --       singleton   = false,   -- set true to allow only one active instance
 --       apply  = function(target) ... end,   -- REQUIRED
 --       remove = function(target) ... end,   -- optional; called before a new apply
+--                                            -- Widget cleanup is automatic — remove()
+--                                            -- is only needed for non-widget teardown
+--                                            -- (event handlers, timers, state resets).
 --   })
 --
 -- `target` has the same interface whether it is a pane or a tab:
@@ -96,7 +99,8 @@ end
 
 --- Apply the named content to a pane or tab target.
 -- If the target already has different content applied, calls that content's
--- remove() first so it can tear down event handlers, hide widgets, etc.
+-- remove() first (for non-widget teardown: event handlers, timers, state), then
+-- automatically hides all direct children of target.content.
 -- Singleton content is blocked if already active on another pane or tab;
 -- a dialog tells the user where it is currently open.
 -- Tracking uses a direct object reference (def._activeTargetRef) so it works
@@ -133,6 +137,15 @@ function Mux._applyContent(target, contentName)
             end
             if type(old.remove) == "function" then
                 pcall(old.remove, target)
+            end
+        end
+        -- Auto-cleanup: hide every direct child of target.content so content
+        -- authors never need widget-hiding logic in their remove() callbacks.
+        if target.content and target.content.children then
+            for _, child in ipairs(target.content.children) do
+                if type(child.hide) == "function" then
+                    pcall(child.hide, child)
+                end
             end
         end
     end

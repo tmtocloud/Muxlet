@@ -974,13 +974,30 @@ end)
 
 tempTimer(1.5, function()
     if Mux._running then return end
-    if Mux.settings.get("mux", "auto_start") then
-        if not Mux.settings.get("mux", "welcome_shown") then return end
-        if Mux.fullStart then Mux.fullStart() end
+
+    local function _doStartOrHint()
+        if Mux._running then return end
+        if Mux.settings.get("mux", "auto_start") then
+            if not Mux.settings.get("mux", "welcome_shown") then return end
+            if Mux.fullStart then Mux.fullStart() end
+        else
+            Mux._echo(
+                "  <dim_grey>Type <cyan>mux start<reset><dim_grey> to begin"
+                .. "  •  <cyan>mux workspaces<reset> to browse  •  <cyan>mux help<reset> for all commands<reset>\n")
+        end
+    end
+
+    -- If a connection attempt is in progress, defer until the game signals it is
+    -- ready (GMCP negotiated) so the hint does not clutter the login sequence.
+    if Mux._connState == "connecting" then
+        local hId
+        hId = registerAnonymousEventHandler("sysProtocolEnabled", function(_, protocol)
+            if protocol ~= "GMCP" then return end
+            killAnonymousEventHandler(hId)
+            _doStartOrHint()
+        end)
     else
-        Mux._echo(
-            "  <dim_grey>Type <cyan>mux start<reset><dim_grey> to begin"
-            .. "  •  <cyan>mux workspaces<reset> to browse  •  <cyan>mux help<reset> for all commands<reset>\n")
+        _doStartOrHint()
     end
 end)
 
