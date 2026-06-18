@@ -490,39 +490,63 @@ function Mux._showContentLibrary(pane)
 
     local rows = {}
     for i, contentName in ipairs(contentNames) do
-        local def     = Mux._content[contentName]
+        local def      = Mux._content[contentName]
         local dispName = (def and def.name)        or contentName
         local dispDesc = (def and def.description) or ""
         local isEven   = (i % 2 == 0)
         local yOff     = (i - 1) * LIB_ROW_H
 
+        -- Singleton already deployed elsewhere — grey out the entire row.
+        local isLocked = def and def.singleton
+            and def._activeTargetRef
+            and def._activeTargetRef._activeContent == contentName
+
         local rowBg = Geyser.Label:new({
             name=pfx.."r"..i.."bg", x=0, y=yOff, width="100%", height=LIB_ROW_H, fillBg=1,
         }, list)
-        rowBg:setStyleSheet(isEven
-            and "background:rgba(22,25,40,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.05);"
-            or  "background:rgba(16,18,30,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.05);")
+        if isLocked then
+            rowBg:setStyleSheet(isEven
+                and "background:rgba(18,19,28,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.04);"
+                or  "background:rgba(14,15,22,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.04);")
+        else
+            rowBg:setStyleSheet(isEven
+                and "background:rgba(22,25,40,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.05);"
+                or  "background:rgba(16,18,30,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.05);")
+        end
         rows[i] = rowBg
 
         -- ⓘ info icon — hover to see full description
         local icon = Geyser.Label:new({
             name=pfx.."r"..i.."ic", x=10, y=yOff+15, width=22, height=22, fillBg=1,
         }, list)
-        icon:setStyleSheet([[
-            QLabel {
-                background: rgba(35,55,90,0.80);
-                border: 1px solid rgba(55,85,140,0.40);
-                border-radius: 4px;
-                color: #5888c8;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QLabel::hover {
-                background: rgba(48,72,118,0.90);
-                border-color: rgba(80,125,210,0.65);
-                color: #88b8ff;
-            }
-        ]])
+        if isLocked then
+            icon:setStyleSheet([[
+                QLabel {
+                    background: rgba(28,32,44,0.70);
+                    border: 1px solid rgba(50,55,70,0.35);
+                    border-radius: 4px;
+                    color: #4a5568;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+            ]])
+        else
+            icon:setStyleSheet([[
+                QLabel {
+                    background: rgba(35,55,90,0.80);
+                    border: 1px solid rgba(55,85,140,0.40);
+                    border-radius: 4px;
+                    color: #5888c8;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+                QLabel::hover {
+                    background: rgba(48,72,118,0.90);
+                    border-color: rgba(80,125,210,0.65);
+                    color: #88b8ff;
+                }
+            ]])
+        end
         icon:rawEcho("<center>i</center>")
         if dispDesc ~= "" then icon:setToolTip(dispDesc, 6) end
 
@@ -530,29 +554,38 @@ function Mux._showContentLibrary(pane)
         local nameLbl = Geyser.Label:new({
             name=pfx.."r"..i.."nm", x=40, y=yOff+16, width=contentW-128, height=20,
         }, list)
-        nameLbl:setStyleSheet(
-            "background:transparent;color:#c6d2ee;font-size:11px;font-weight:bold;")
+        nameLbl:setStyleSheet(isLocked
+            and "background:transparent;color:#4a5568;font-size:11px;font-weight:bold;"
+            or  "background:transparent;color:#c6d2ee;font-size:11px;font-weight:bold;")
         nameLbl:rawEcho(dispName)
 
-        -- Add button
+        -- Add / Active button
         local addBtn = Geyser.Label:new({
             name=pfx.."r"..i.."ab", x=contentW-82, y=yOff+13, width=72, height=26, fillBg=1,
         }, list)
-        addBtn:setStyleSheet([[
-            QLabel{background:rgba(28,70,44,0.9);color:#73de94;font-size:9px;font-weight:bold;
-                   border:1px solid rgba(45,115,65,0.5);border-radius:4px;}
-            QLabel::hover{background:rgba(38,90,55,0.95);border-color:rgba(60,145,80,0.7);}
-        ]])
-        addBtn:rawEcho("<center>+ Add</center>")
+        if isLocked then
+            addBtn:setStyleSheet([[
+                QLabel{background:rgba(22,24,34,0.80);color:#3a4458;font-size:9px;font-weight:bold;
+                       border:1px solid rgba(40,45,60,0.45);border-radius:4px;}
+            ]])
+            addBtn:rawEcho("<center>Active</center>")
+        else
+            addBtn:setStyleSheet([[
+                QLabel{background:rgba(28,70,44,0.9);color:#73de94;font-size:9px;font-weight:bold;
+                       border:1px solid rgba(45,115,65,0.5);border-radius:4px;}
+                QLabel::hover{background:rgba(38,90,55,0.95);border-color:rgba(60,145,80,0.7);}
+            ]])
+            addBtn:rawEcho("<center>+ Add</center>")
 
-        local capName = contentName
-        local function applyAndClose()
-            Mux._applyContent(pane, capName)
-            dlg:close()
+            local capName = contentName
+            local function applyAndClose()
+                Mux._applyContent(pane, capName)
+                dlg:close()
+            end
+            addBtn:setClickCallback(applyAndClose)
+            nameLbl:setClickCallback(applyAndClose)
+            rowBg:setClickCallback(applyAndClose)
         end
-        addBtn:setClickCallback(applyAndClose)
-        nameLbl:setClickCallback(applyAndClose)
-        rowBg:setClickCallback(applyAndClose)
     end
 
     dlg:show()

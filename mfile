@@ -1,6 +1,6 @@
 {
   "package": "Muxlet",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "author": "tmtocloud",
   "description": "A game-agnostic tiling window manager for Mudlet. Inspired by tmux: panes, splits, themes, workspaces, and a content system for custom widgets.",
   "title": "Muxlet"
