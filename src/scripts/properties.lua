@@ -232,6 +232,19 @@ local function paneRows(pane)
             end,
         }
     end
+    rows[#rows+1] = {
+        label      = "Name Align",
+        desc       = "Where the pane name sits in the titlebar. Left: name then Properties button. Center/Right: Properties button moves to far left",
+        type       = "segmentedControl",
+        widgetWidth = 138,
+        options    = {
+            { value = "left",   label = "Left"   },
+            { value = "center", label = "Center" },
+            { value = "right",  label = "Right"  },
+        },
+        readFn     = function() return pane.nameAlign or "left" end,
+        writeFn    = function(v) pane:setNameAlign(v) end,
+    }
 
     -- Connection Awareness
     rows[#rows+1] = {
@@ -379,6 +392,19 @@ local function tabRows(host, tab)
             writeFn = function(v) if v ~= "" then host:renameTab(tab.id, v) end end,
         }
     end
+    rows[#rows+1] = {
+        label      = "Name Align",
+        desc       = "Text alignment of the tab label",
+        type       = "segmentedControl",
+        widgetWidth = 138,
+        options    = {
+            { value = "left",   label = "Left"   },
+            { value = "center", label = "Center" },
+            { value = "right",  label = "Right"  },
+        },
+        readFn     = function() return tab.nameAlign or "center" end,
+        writeFn    = function(v) host:setTabNameAlign(tab.id, v) end,
+    }
 
     -- Connection Awareness
     rows[#rows+1] = {

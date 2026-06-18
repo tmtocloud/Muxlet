@@ -26,17 +26,24 @@ Mux._tabGapPane         = nil    -- pane whose tabs are currently resized to sho
 -- tab bars without iterating only Mux._panes.
 Mux._tabHosts = Mux._tabHosts or {}
 
-function MuxPane:_echoTabLabel(label, name, isActive, isChosen, theme)
+-- nameAlign is an optional 6th arg ("left", "center", "right"); defaults to "center".
+function MuxPane:_echoTabLabel(label, name, isActive, isChosen, theme, nameAlign)
     local tc
-    if isChosen  then tc = theme.tabMovingTextColor   or "#ffaaaa"
-    elseif isActive then tc = theme.tabActiveTextColor   or "#e1e1f2"
-    else              tc = theme.tabInactiveTextColor or "#afb4cd"
+    if isChosen       then tc = theme.tabMovingTextColor   or "#ffaaaa"
+    elseif isActive   then tc = theme.tabActiveTextColor   or "#e1e1f2"
+    else                   tc = theme.tabInactiveTextColor or "#afb4cd"
     end
-    -- Use <span style='color:...'> instead of <font color='...'> so rgba() values
-    -- are parsed correctly by Qt's CSS engine (Qt ignores rgba in HTML color attr).
-    label:echo(string.format(
-        "<center><span style='color:%s;font-size:11px;font-weight:bold;'>%s</span></center>",
-        tc, name))
+    -- Use <span style='color:...'> so rgba() values parse correctly in Qt.
+    local spanFmt = "<span style='color:%s;font-size:11px;font-weight:bold;'>%s</span>"
+    local span    = string.format(spanFmt, tc, name)
+    local align   = nameAlign or "center"
+    if align == "left" then
+        label:echo(string.format("<span style='margin-left:4px;'>%s</span>", span))
+    elseif align == "right" then
+        label:echo(string.format("<div style='text-align:right;margin-right:4px;'>%s</div>", span))
+    else
+        label:echo(string.format("<center>%s</center>", span))
+    end
 end
 
 function MuxPane._echoTabPlaceholder(contentBg, tabName, paneId, tabId)
@@ -122,7 +129,7 @@ function MuxPane:_clearDragSpace()
     for _, tab in ipairs(self._tabs or {}) do
         if tab.label then
             local isActive = (self._activeTabId == tab.id)
-            self:_echoTabLabel(tab.label, tab.name, isActive, false, theme)
+            self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, tab.nameAlign)
         end
     end
 end
@@ -482,6 +489,7 @@ function MuxPane:addTab(name, pos)
         id = tabId, name = name, pane = self,
         label = label, content = content, contentBg = contentBg,
         renamable = true, closeable = true, movable = true, contentable = true,
+        nameAlign = "center",
         -- _gid provides unique widget name prefixes if this tab later hosts sub-tabs.
         _gid = self._gid .. "_st" .. tabId,
     }
@@ -582,7 +590,7 @@ function MuxPane:_activateTabObj(tab)
         local cur = self:_findTab(self._activeTabId)
         if cur then
             cur.label:setStyleSheet(theme.tabInactiveCss or "")
-            self:_echoTabLabel(cur.label, cur.name, false, false, theme)
+            self:_echoTabLabel(cur.label, cur.name, false, false, theme, cur.nameAlign)
             cur.content:hide()
         end
     end
@@ -597,7 +605,7 @@ function MuxPane:_activateTabObj(tab)
     else
         tab.label:setStyleSheet(theme.tabActiveCss or "")
     end
-    self:_echoTabLabel(tab.label, tab.name, true, false, theme)
+    self:_echoTabLabel(tab.label, tab.name, true, false, theme, tab.nameAlign)
     tab.content:show()
     Mux._scheduleAutoSave()
 end
@@ -610,11 +618,22 @@ function MuxPane:renameTab(tabId, newName)
     local theme    = Mux.activeTheme()
     local isActive = (self._activeTabId == tabId)
     tab.label:setStyleSheet(isActive and (theme.tabActiveCss or "") or (theme.tabInactiveCss or ""))
-    self:_echoTabLabel(tab.label, newName, isActive, false, theme)
+    self:_echoTabLabel(tab.label, newName, isActive, false, theme, tab.nameAlign)
     if tab.contentBg and not tab._activeContent then
         MuxPane._echoTabPlaceholder(tab.contentBg, newName, self.id, tabId)
         tab.contentBg:show()
     end
+    Mux._scheduleAutoSave()
+end
+
+-- Sets the name alignment for a tab and immediately refreshes its label.
+function MuxPane:setTabNameAlign(tabId, align)
+    local tab = self:_findTab(tabId)
+    if not tab then return end
+    tab.nameAlign = align
+    local theme    = Mux.activeTheme()
+    local isActive = (self._activeTabId == tabId)
+    self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, align)
     Mux._scheduleAutoSave()
 end
 
@@ -751,7 +770,7 @@ function MuxPane:_wireTabLabel(tab)
 
         local theme = Mux.activeTheme()
         tab.label:setStyleSheet(theme.tabMovingCss or "")
-        pane:_echoTabLabel(tab.label, tab.name, false, true, theme)
+        pane:_echoTabLabel(tab.label, tab.name, false, true, theme, tab.nameAlign)
 
         for _, p in pairs(Mux._tabHosts) do
             if p._tabsEnabled and p._tabBar then
@@ -801,7 +820,7 @@ function Mux._resetOverlay()
         mt.tab.label:setStyleSheet(isActive
             and (theme.tabActiveCss or "")
             or  (theme.tabInactiveCss or ""))
-        mt.fromPane:_echoTabLabel(mt.tab.label, mt.tab.name, isActive, false, theme)
+        mt.fromPane:_echoTabLabel(mt.tab.label, mt.tab.name, isActive, false, theme, mt.tab.nameAlign)
     end
 end
 
@@ -864,7 +883,7 @@ function MuxPane:_receiveTab(tab, fromPane, insertPos)
         x = "0%", y = "0%", width = "50%", height = "100%", fillBg = 1,
     }, self._tabBarBox)
     newLabel:setStyleSheet(theme.tabInactiveCss or "")
-    self:_echoTabLabel(newLabel, tab.name, false, false, theme)
+    self:_echoTabLabel(newLabel, tab.name, false, false, theme, tab.nameAlign)
     self._tabBarBox:organize()
     tab.label = newLabel
 
@@ -987,7 +1006,7 @@ function MuxPane:_applyTabTheme()
     for _, tab in ipairs(self._tabs) do
         local isActive = (self._activeTabId == tab.id)
         tab.label:setStyleSheet(isActive and (theme.tabActiveCss or "") or (theme.tabInactiveCss or ""))
-        self:_echoTabLabel(tab.label, tab.name, isActive, false, theme)
+        self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, tab.nameAlign)
         if tab.contentBg then tab.contentBg:setStyleSheet(theme.contentCss or "") end
         if self._refreshTabConnScreen then self:_refreshTabConnScreen(tab) end
     end

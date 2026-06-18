@@ -67,6 +67,9 @@ function MuxPane:init(opts)
     self._preZoomState    = nil
     self.splittable       = opts.splittable ~= false
     self.swappable        = opts.swappable  ~= false
+    -- nameAlign: "left" (default), "center", or "right".
+    -- Controls where the pane name text sits in the titlebar and how buttons arrange around it.
+    self.nameAlign        = opts.nameAlign or "left"
 
     if opts.showTitlebar ~= nil then
         self.titlebarVisible = opts.showTitlebar
@@ -244,8 +247,6 @@ function MuxPane:_buildTitlebar(theme)
         fillBg  = 1,
     }, self.header)
     self.titlebar:setStyleSheet(theme.titlebarCss or "")
-    local tbc = theme.titlebarTextColor or theme.btnTextColor or "#aaaabb"
-    self.titlebar:echo(string.format("<span style='color:%s;'>&nbsp;&nbsp;%s</span>", tbc, self.name))
     self.titlebar:setCursor("OpenHand")
 
     -- Per-pane drag state. Local closure means panes never interfere with each other.
@@ -734,6 +735,7 @@ function MuxPane:_buildTitlebar(theme)
     end)
     self.reveal:setClickCallback(function() end)
 
+    self:_refreshTitlebarName()
     self:_applyTitlebarVisibility()
 end
 
@@ -750,39 +752,159 @@ function MuxPane:_infoBtnX()
     return 8 + math.ceil(#self.name * charW) + 4
 end
 
--- Moves infoBtn to its correct position based on current name length.
+-- Moves infoBtn to its correct position based on current name length (left-align only).
 function MuxPane:_updateInfoBtnPos()
     if not self.infoBtn then return end
+    if (self.nameAlign or "left") ~= "left" then return end
     local theme = Mux.activeTheme and Mux.activeTheme() or {}
     self.infoBtn:move(self:_infoBtnX(), theme.btnTopMargin or 2)
 end
 
--- Checks whether visible right-side buttons fit in the current header width.
--- If too narrow: hides all buttons (overflow mode — right-click shows them as a menu).
+-- Returns the HTML string for the titlebar name, styled for the current nameAlign.
+function MuxPane:_nameHtml()
+    local theme = Mux.activeTheme and Mux.activeTheme() or {}
+    local tbc   = theme.titlebarTextColor or theme.btnTextColor or "#aaaabb"
+    local align = self.nameAlign or "left"
+    if align == "center" then
+        return string.format(
+            "<center><span style='color:%s;'>%s</span></center>", tbc, self.name)
+    elseif align == "right" then
+        return string.format(
+            "<div style='text-align:right;'><span style='color:%s;'>%s</span></div>", tbc, self.name)
+    else
+        return string.format(
+            "<span style='color:%s;'>&nbsp;&nbsp;%s</span>", tbc, self.name)
+    end
+end
+
+-- Re-echoes the titlebar label with the current alignment HTML.
+function MuxPane:_refreshTitlebarName()
+    if self.titlebar then self.titlebar:echo(self:_nameHtml()) end
+end
+
+-- Repositions all titlebar buttons and sizes the name label to match nameAlign.
+-- Called at the start of _checkOverflow so it runs on every resize and visibility change.
+function MuxPane:_layoutTitlebarButtons()
+    if not self.titlebar then return end
+    local headerW = self.header:get_width()
+    if headerW < 10 then return end
+
+    local theme  = Mux.activeTheme and Mux.activeTheme() or {}
+    local btnY   = theme.btnTopMargin or 2
+    local btnSz  = theme.btnSize or 18
+    local btnGap = 4
+    local align  = self.nameAlign or "left"
+
+    local function rightAnchor(btn, offset)
+        if btn then btn:move(headerW - offset, btnY) end
+    end
+
+    if align == "right" then
+        rightAnchor(self.closeBtn, 20)
+        local minVis = self:_minBtnVisible()
+        if minVis then rightAnchor(self.minBtn, 42) end
+        local rightBtnEdge = minVis and (headerW - 42) or (headerW - 20)
+
+        -- infoBtn at far left.
+        local leftX   = 2
+        if self.infoBtn then self.infoBtn:move(leftX, btnY); leftX = leftX + btnSz + btnGap end
+
+        -- Action buttons left-to-right after infoBtn (content → splitH → splitV → swap → zoom).
+        local function placeLeft(btn)
+            if btn then btn:move(leftX, btnY); leftX = leftX + btnSz + btnGap end
+        end
+        placeLeft(self.contentBtn)
+        placeLeft(self.splitHBtn)
+        placeLeft(self.splitVBtn)
+        placeLeft(self.swapBtn)
+        placeLeft(self.zoomBtn)
+
+        -- Titlebar label stops before the right button cluster; name text right-aligned within.
+        self.titlebar:move(0, 0)
+        self.titlebar:resize(rightBtnEdge, self.header:get_height())
+    else
+        -- Left and center: action buttons stay at their standard right-anchored offsets.
+        rightAnchor(self.closeBtn,   20)
+        rightAnchor(self.minBtn,     42)
+        rightAnchor(self.zoomBtn,    70)
+        rightAnchor(self.swapBtn,    96)
+        rightAnchor(self.splitHBtn, 120)
+        rightAnchor(self.splitVBtn, 140)
+        rightAnchor(self.contentBtn, 210)
+
+        self.titlebar:move(0, 0)
+        self.titlebar:resize(headerW, self.header:get_height())
+
+        if align == "center" then
+            if self.infoBtn then
+                local theme2 = Mux.activeTheme and Mux.activeTheme() or {}
+                self.infoBtn:move(2, theme2.btnTopMargin or 2)
+            end
+        else
+            self:_updateInfoBtnPos()
+        end
+    end
+end
+
+-- Sets the name alignment and refreshes the titlebar layout.
+function MuxPane:setNameAlign(align)
+    self.nameAlign = align
+    if not self.titlebar then return end
+    self:_layoutTitlebarButtons()
+    self:_refreshTitlebarName()
+    self:_checkOverflow()
+end
+
+-- Checks whether visible buttons fit in the current header width and repositions them.
+-- If too narrow: hides action buttons (overflow mode — right-click shows them as a menu).
 -- If wide enough: restores button visibility without calling _applyTitlebarVisibility().
 function MuxPane:_checkOverflow()
     if not self.titlebarVisible then return end
     local headerW = self.header:get_width()
     if headerW < 10 then return end  -- not yet laid out; skip
 
+    -- Reposition buttons for the current alignment on every resize.
+    self:_layoutTitlebarButtons()
+
     local theme   = Mux.activeTheme and Mux.activeTheme() or {}
     local charW   = theme.titlebarCharWidth or 7
     local compact = Mux.settings.get and Mux.settings.get("mux", "compact_titlebar")
+    local align   = self.nameAlign or "left"
 
-    -- Right-side: close=22, min=22(floating), zoom=28, swap=26, content=70 (btn+52px gap), splitH+V=44
-    local rightW = 22
-    if self.floating and self.minimizable then rightW = rightW + 22 end
-    if self.zoomable and (self._split or self._zoomed) then rightW = rightW + 28 end
-    if self.swappable and self._split and not self.floating then rightW = rightW + 26 end
-    if self.splittable and not self.floating then rightW = rightW + 44 end
-    if self:_contentEnabled()              then rightW = rightW + 70 end
-
-    -- Left-side: 8px start + nbsp(8) + text + gap(4) + infoBtn(22 when visible)
     local showInfo = self.infoBtn and self.contextMenu
         and (self.showSettingsInMenu or self.propertiesButton)
-    local leftW = 16 + math.ceil(#self.name * charW) + 4 + (showInfo and 22 or 0)
+    local infoBtnW = showInfo and 22 or 0
+    local nameW    = math.ceil(#self.name * charW)
 
-    local newOverflow = compact or (headerW < leftW + rightW + 10)
+    -- Always-visible close + min cluster.
+    local closeMinW = 22
+    if self.floating and self.minimizable then closeMinW = closeMinW + 22 end
+
+    local newOverflow
+    if align == "right" then
+        -- Action buttons moved to LEFT; only close+min stay on right.
+        local leftActionW = 0
+        if self.zoomable and (self._split or self._zoomed)          then leftActionW = leftActionW + 22 end
+        if self.swappable and self._split and not self.floating      then leftActionW = leftActionW + 22 end
+        if self.splittable and not self.floating                     then leftActionW = leftActionW + 44 end
+        if self:_contentEnabled()                                    then leftActionW = leftActionW + 22 end
+        local leftW = 6 + infoBtnW + leftActionW
+        newOverflow = compact or (headerW < leftW + nameW + closeMinW + 10)
+    else
+        -- Left and center: action buttons stay right-anchored with their original spacing.
+        local rightW = closeMinW
+        if self.zoomable and (self._split or self._zoomed)          then rightW = rightW + 28 end
+        if self.swappable and self._split and not self.floating      then rightW = rightW + 26 end
+        if self.splittable and not self.floating                     then rightW = rightW + 44 end
+        if self:_contentEnabled()                                    then rightW = rightW + 70 end
+        if align == "center" then
+            local leftW = 6 + infoBtnW
+            newOverflow = compact or (headerW < leftW + nameW + rightW + 10)
+        else  -- left
+            local leftW = 16 + nameW + 4 + infoBtnW
+            newOverflow = compact or (headerW < leftW + rightW + 10)
+        end
+    end
 
     if newOverflow == self._overflowMode then return end
     self._overflowMode = newOverflow
@@ -943,12 +1065,10 @@ end
 
 function MuxPane:setName(text)
     self.name = text
-    if self.titlebar then
-        local tbc = Mux.activeTheme().titlebarTextColor or Mux.activeTheme().btnTextColor or "#aaaabb"
-        self.titlebar:echo(string.format("<span style='color:%s;'>&nbsp;&nbsp;%s</span>", tbc, text))
-    end
+    self:_refreshTitlebarName()
     self:_updateInfoBtnPos()
     self:_updatePlaceholder()
+    self:_checkOverflow()
 end
 
 -- Returns true when the pane-level Content Library button and menu item should

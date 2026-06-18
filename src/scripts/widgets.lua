@@ -153,6 +153,11 @@ local function isWideSpec(spec)
     return t == "string" or t == "text"
 end
 
+-- Per-row widgetWidth override: spec.widgetWidth takes precedence over opts.widgetWidth.
+local function resolveWidgetW(spec, opts)
+    return spec.widgetWidth or opts.widgetWidth or 110
+end
+
 function Mux.ui.specHeight(spec, opts)
     opts = opts or {}
     if isWideSpec(spec) then
@@ -214,10 +219,11 @@ function Mux.ui.buildForm(parent, specs, opts)
         local specDisplay = spec.display
         local isReadOnly  = spec.readOnly
 
-        if specType == "toggle"      then specType = "bool";   specDisplay = specDisplay or "checkbox"
-        elseif specType == "choiceCycler" then specType = "array"; specDisplay = specDisplay or "cycler"
-        elseif specType == "readOnly" then specType = "string"; isReadOnly  = true
-        elseif specType == "text"    then specType = "string"
+        if specType == "toggle"           then specType = "bool";   specDisplay = specDisplay or "checkbox"
+        elseif specType == "choiceCycler"  then specType = "array"; specDisplay = specDisplay or "cycler"
+        elseif specType == "segmentedControl" then specType = "array"; specDisplay = specDisplay or "segmented"
+        elseif specType == "readOnly"      then specType = "string"; isReadOnly  = true
+        elseif specType == "text"          then specType = "string"
         end
 
         -- ── Infer display when not set ────────────────────────────────────────
@@ -233,14 +239,19 @@ function Mux.ui.buildForm(parent, specs, opts)
         local thisH  = isWide and textH or rowH
         local uid    = prefix .. "_w" .. i
 
+        -- Per-row widget width override (e.g. wider segmented controls).
+        local thisWidgetW = resolveWidgetW(spec, opts)
+        local thisWidgetX = formW - thisWidgetW - padR - resetW - resetGap
+
         -- ── Row container ─────────────────────────────────────────────────────
         local row = Geyser.Label:new({
             name=uid.."_row", x=0, y=yPos, width=formW, height=thisH,
         }, parent)
         row:setStyleSheet(i % 2 == 1 and css.odd or css.even)
 
-        local wy     = math.floor((thisH - widgetH) / 2)
-        local hasDesc = spec.desc and spec.desc ~= ""
+        local wy       = math.floor((thisH - widgetH) / 2)
+        local thisNameW = thisWidgetX - padL - 24
+        local hasDesc  = spec.desc and spec.desc ~= ""
 
         -- ── Wide text row ─────────────────────────────────────────────────────
         if isWide then
@@ -287,12 +298,12 @@ function Mux.ui.buildForm(parent, specs, opts)
         -- ── Read-only row ─────────────────────────────────────────────────────
         elseif isReadOnly then
             local vCenter = math.floor((rowH - 20) / 2)
-            local nl = Geyser.Label:new({name=uid.."_n", x=padL, y=vCenter, width=nameW+24, height=20}, row)
+            local nl = Geyser.Label:new({name=uid.."_n", x=padL, y=vCenter, width=thisNameW+24, height=20}, row)
             nl:setStyleSheet(css.rowLabel)
             nl:rawEcho(spec.label)
 
-            local valW = widgetW + resetW + resetGap
-            local vl = Geyser.Label:new({name=uid.."_v", x=widgetX, y=vCenter, width=valW, height=20}, row)
+            local valW = thisWidgetW + resetW + resetGap
+            local vl = Geyser.Label:new({name=uid.."_v", x=thisWidgetX, y=vCenter, width=valW, height=20}, row)
             vl:setStyleSheet(css.rowDesc)
             vl:rawEcho(string.format("<center>%s</center>", tostring(spec.readFn() or "")))
             refreshFns[i] = function()
@@ -303,7 +314,7 @@ function Mux.ui.buildForm(parent, specs, opts)
         else
             local vCenter = math.floor((rowH - 20) / 2)
             local nameX   = hasDesc and padL + 22 or padL
-            local nameW2  = hasDesc and nameW or nameW + 22
+            local nameW2   = hasDesc and thisNameW or thisNameW + 22
 
             local nl = Geyser.Label:new({name=uid.."_n", x=nameX, y=vCenter, width=nameW2, height=20}, row)
             nl:setStyleSheet(css.rowLabel)
@@ -326,7 +337,7 @@ function Mux.ui.buildForm(parent, specs, opts)
                 local falseOpt = { value = false,  label = spec.falseLabel or "FALSE", style = "off" }
                 local choices  = spec.options or { trueOpt, falseOpt }
 
-                local btn = Geyser.Label:new({name=uid.."_cb", x=widgetX, y=wy, width=widgetW, height=widgetH}, row)
+                local btn = Geyser.Label:new({name=uid.."_cb", x=thisWidgetX, y=wy, width=thisWidgetW, height=widgetH}, row)
                 local function refresh()
                     local v   = spec.readFn()
                     local chosen = choices[1]
@@ -353,7 +364,7 @@ function Mux.ui.buildForm(parent, specs, opts)
                     { value = true,  label = "TRUE",  style = "on"  },
                     { value = false, label = "FALSE", style = "off" },
                 }
-                local btn = Geyser.Label:new({name=uid.."_cyc", x=widgetX, y=wy, width=widgetW, height=widgetH}, row)
+                local btn = Geyser.Label:new({name=uid.."_cyc", x=thisWidgetX, y=wy, width=thisWidgetW, height=widgetH}, row)
                 local function refresh()
                     local v      = spec.readFn()
                     local chosen = choices[1]
@@ -385,7 +396,7 @@ function Mux.ui.buildForm(parent, specs, opts)
                 local ovName  = uid .. "_dov"
                 local overlay = nil
 
-                local btn = Geyser.Label:new({name=uid.."_dd", x=widgetX, y=wy, width=widgetW, height=widgetH}, row)
+                local btn = Geyser.Label:new({name=uid.."_dd", x=thisWidgetX, y=wy, width=thisWidgetW, height=widgetH}, row)
                 btn:setStyleSheet(css.widgetBtn)
 
                 local function destroyOverlay()
@@ -418,18 +429,18 @@ function Mux.ui.buildForm(parent, specs, opts)
                 local function openOverlay()
                     if not opts.getContentScreenPos then return end
                     local cx, cy    = opts.getContentScreenPos()
-                    local absBtnX   = cx + widgetX
+                    local absBtnX   = cx + thisWidgetX
                     local absBtnY   = cy + capturedRowY + wy + widgetH
                     overlay = Geyser.Label:new({
                         name=ovName, x=absBtnX, y=absBtnY,
-                        width=widgetW, height=#choices * widgetH,
+                        width=thisWidgetW, height=#choices * widgetH,
                     }, Geyser)
                     overlay:setStyleSheet(css.dropdownPanel)
                     overlay:show(); overlay:raise()
                     for ci, choice in ipairs(choices) do
                         local opt = Geyser.Label:new({
                             name=ovName.."_o"..ci, x=0, y=(ci-1)*widgetH,
-                            width=widgetW, height=widgetH,
+                            width=thisWidgetW, height=widgetH,
                         }, overlay)
                         opt:setStyleSheet(css.dropdownOpt)
                         opt:echo(string.format(
@@ -463,12 +474,12 @@ function Mux.ui.buildForm(parent, specs, opts)
                 local minV = spec.min  or 0
                 local maxV = spec.max  or 100
                 local bw   = stepBtnW
-                local vw   = widgetW - bw * 2 - 4
+                local vw   = thisWidgetW - bw * 2 - 4
                 local sc   = css.widgetFg
 
-                local minus = Geyser.Label:new({name=uid.."_sm", x=widgetX,          y=wy, width=bw, height=widgetH}, row)
-                local vl    = Geyser.Label:new({name=uid.."_sv", x=widgetX+bw+2,     y=wy, width=vw, height=widgetH}, row)
-                local plus  = Geyser.Label:new({name=uid.."_sp", x=widgetX+bw+2+vw+2, y=wy, width=bw, height=widgetH}, row)
+                local minus = Geyser.Label:new({name=uid.."_sm", x=thisWidgetX,              y=wy, width=bw, height=widgetH}, row)
+                local vl    = Geyser.Label:new({name=uid.."_sv", x=thisWidgetX+bw+2,         y=wy, width=vw, height=widgetH}, row)
+                local plus  = Geyser.Label:new({name=uid.."_sp", x=thisWidgetX+bw+2+vw+2,   y=wy, width=bw, height=widgetH}, row)
 
                 minus:setStyleSheet(css.stepperBtn)
                 minus:echo(string.format("<center><span style='color:%s;font-size:13px;font-weight:bold;'>−</span></center>", sc))
@@ -497,12 +508,12 @@ function Mux.ui.buildForm(parent, specs, opts)
 
             -- ── Inline text (number or string without wide layout) ────────────
             elseif specDisplay == "text" then
-                local inW = widgetW - applyW - inputGap
-                local input = Geyser.CommandLine:new({name=uid.."_i", x=widgetX, y=wy, width=inW, height=widgetH}, row)
+                local inW = thisWidgetW - applyW - inputGap
+                local input = Geyser.CommandLine:new({name=uid.."_i", x=thisWidgetX, y=wy, width=inW, height=widgetH}, row)
                 input:setStyleSheet(css.textInput)
                 input:print(tostring(spec.readFn() or ""))
 
-                local aBtn = Geyser.Label:new({name=uid.."_a", x=widgetX+inW+inputGap, y=wy, width=applyW, height=widgetH}, row)
+                local aBtn = Geyser.Label:new({name=uid.."_a", x=thisWidgetX+inW+inputGap, y=wy, width=applyW, height=widgetH}, row)
                 aBtn:setStyleSheet(css.applyBtn)
                 aBtn:echo(string.format(
                     "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
@@ -518,6 +529,74 @@ function Mux.ui.buildForm(parent, specs, opts)
                 input:setAction(commit)
                 aBtn:setClickCallback(commit)
                 refreshFns[i] = function() input:print(tostring(spec.readFn() or "")) end
+
+            -- ── Segmented control (N connected buttons, one highlighted) ──────
+            elseif specDisplay == "segmented" then
+                local choices = spec.options or {}
+                local n       = #choices
+                if n > 0 then
+                local segW    = math.floor(thisWidgetW / n)
+                -- Last segment absorbs rounding remainder.
+                local lastW   = thisWidgetW - segW * (n - 1)
+                local ui      = (Mux.activeTheme and Mux.activeTheme() or {}).ui or {}
+                local wBg     = ui.widgetBg    or "rgb(38,38,58)"
+                local wFg     = ui.widgetFg    or "#d8d8f0"
+                local wBd     = ui.widgetBorder or "rgba(255,255,255,0.22)"
+                local wHv     = ui.widgetHoverBg or "rgb(55,55,80)"
+                local selBg   = (ui.styles and ui.styles.on and ui.styles.on.bg) or "rgb(30,70,40)"
+                local selFg   = (ui.styles and ui.styles.on and ui.styles.on.fg) or "#88ee88"
+                local selBd   = (ui.styles and ui.styles.on and ui.styles.on.border) or "rgba(80,180,80,0.5)"
+                local selHv   = (ui.styles and ui.styles.on and ui.styles.on.hover) or "rgb(40,90,50)"
+
+                local function segCss(isSelected, pos)
+                    local r = pos == 1 and "border-radius:3px 0 0 3px;"
+                           or pos == n and "border-radius:0 3px 3px 0;"
+                           or              "border-radius:0;"
+                    if isSelected then
+                        return string.format(
+                            "QLabel{background:%s;color:%s;font-size:10px;font-weight:bold;border:1px solid %s;%s}"
+                            .. "QLabel::hover{background:%s;}",
+                            selBg, selFg, selBd, r, selHv)
+                    else
+                        return string.format(
+                            "QLabel{background:%s;color:%s;font-size:10px;border:1px solid %s;%s}"
+                            .. "QLabel::hover{background:%s;}",
+                            wBg, wFg, wBd, r, wHv)
+                    end
+                end
+
+                local segs = {}
+                for ci, choice in ipairs(choices) do
+                    local sx = thisWidgetX + (ci - 1) * segW
+                    local sw = (ci == n) and lastW or segW
+                    local seg = Geyser.Label:new({
+                        name=uid.."_sg"..ci, x=sx, y=wy, width=sw, height=widgetH, fillBg=1,
+                    }, row)
+                    segs[ci] = { widget = seg, choice = choice, pos = ci }
+                end
+
+                local function refresh()
+                    local v = spec.readFn()
+                    for _, s in ipairs(segs) do
+                        local isSel = (s.choice.value == v)
+                        s.widget:setStyleSheet(segCss(isSel, s.pos))
+                        s.widget:echo(string.format(
+                            "<center><span style='color:%s;font-size:10px;font-weight:bold;'>%s</span></center>",
+                            isSel and selFg or wFg, s.choice.label))
+                    end
+                end
+                refresh()
+
+                for _, s in ipairs(segs) do
+                    local captured = s.choice
+                    s.widget:setClickCallback(function()
+                        closeDropdown()
+                        spec.writeFn(captured.value)
+                        refresh()
+                    end)
+                end
+                refreshFns[i] = refresh
+                end  -- n > 0
             end
 
             -- ── Reset icon (non-wide rows) ────────────────────────────────────
