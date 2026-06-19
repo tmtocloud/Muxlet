@@ -488,19 +488,19 @@ local function openPropsDialog(title, rows, targetPane, posX, posY)
     _propsEpoch    = _propsEpoch + 1
     _pendingPrefix = "mux_prop_e" .. _propsEpoch
 
-    local sw, sh  = getMainWindowSize()
     local dialogW = 380
 
     local contentH = Mux.ui.formHeight(rows)
 
     -- chrome: titlebar (22) + outer border top+bottom (4)
     local dialogH = contentH + 26
-    local px = posX or math.floor((sw - dialogW) / 2)
-    local py = posY or math.floor((sh - dialogH) / 2)
 
+    -- posX/posY are set only when reopening at a remembered position (a row
+    -- toggle that rebuilds the dialog). On a fresh open they are nil, so
+    -- createDialog centers and cascades off any dialogs already on screen.
     local d = Mux.createDialog({
         title         = title,
-        x=px, y=py, width=dialogW, height=dialogH,
+        x = posX, y = posY, width = dialogW, height = dialogH,
         contextMenu   = false,
     })
 

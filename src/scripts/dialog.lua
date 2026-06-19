@@ -190,13 +190,49 @@ end
 
 -- ── Mux.createDialog ─────────────────────────────────────────────────────────
 
+-- Picks a top-left corner for a new dialog. When the caller doesn't specify a
+-- position, dialogs would otherwise all open dead-center and stack on top of
+-- each other. Instead, cascade diagonally: find the first centered-base slot
+-- (stepping by `step` px) that isn't already occupied by a live dialog, so each
+-- new dialog is visibly offset and closed dialogs free their slot for reuse.
+local function _dialogCascadePos(w, h, sw, sh)
+    local baseX = math.floor((sw - w) / 2)
+    local baseY = math.floor((sh - h) / 2)
+
+    local occupied = {}
+    for _, p in pairs(Mux._panes) do
+        if p._dialog and p.outer then
+            occupied[#occupied + 1] = { x = p.outer:get_x(), y = p.outer:get_y() }
+        end
+    end
+
+    local step, tol, maxSteps = 30, 14, 10
+    local x, y = baseX, baseY
+    for k = 0, maxSteps do
+        x, y = baseX + k * step, baseY + k * step
+        local clash = false
+        for _, o in ipairs(occupied) do
+            if math.abs(o.x - x) < tol and math.abs(o.y - y) < tol then
+                clash = true
+                break
+            end
+        end
+        if not clash then break end
+    end
+
+    -- Keep the dialog fully on screen even after cascading.
+    x = Mux._clamp(x, 0, math.max(0, sw - w))
+    y = Mux._clamp(y, 0, math.max(0, sh - h))
+    return x, y
+end
+
 --- Creates and returns an overlay MuxPane for use as a dialog popup.
 --
 -- @param  opts.title     string   titlebar label (default: "Dialog")
 -- @param  opts.width     number   pixel width    (default: 440)
 -- @param  opts.height    number   pixel height   (default: 280)
--- @param  opts.x         number   left edge px   (default: centered)
--- @param  opts.y         number   top  edge px   (default: centered)
+-- @param  opts.x         number   left edge px   (default: centered, cascaded)
+-- @param  opts.y         number   top  edge px   (default: centered, cascaded)
 -- @param  opts.resizable boolean  resize handles (default: false)
 -- @param  opts.id        string   custom pane id (default: auto "dialog_N")
 -- @return MuxPane  add widgets to pane.content; dismiss with pane:close()
@@ -205,8 +241,16 @@ function Mux.createDialog(opts)
     local w  = opts.width  or 440
     local h  = opts.height or 280
     local sw, sh = getMainWindowSize()
-    local x  = opts.x or math.floor((sw - w) / 2)
-    local y  = opts.y or math.floor((sh - h) / 2)
+
+    -- Explicit x or y is honoured verbatim (callers restoring a remembered
+    -- position). With neither given, cascade off any dialogs already open.
+    local x, y
+    if opts.x or opts.y then
+        x = opts.x or math.floor((sw - w) / 2)
+        y = opts.y or math.floor((sh - h) / 2)
+    else
+        x, y = _dialogCascadePos(w, h, sw, sh)
+    end
 
     local pane = MuxPane:new({
         id               = opts.id or Mux._newId("dialog"),
@@ -227,6 +271,7 @@ function Mux.createDialog(opts)
         convertible      = opts.convertible or false,
         minimizable      = opts.minimizable or false,
     })
+    pane._dialog = true   -- marks this pane for dialog cascade bookkeeping
     pane.floatX = x
     pane.floatY = y
     pane.floatW = w
