@@ -151,6 +151,29 @@ function Mux._suppressReposition(fn)
     return ok
 end
 
+-- Applies each window's computed geometry natively, depth-first, exactly once.
+-- Mirrors the native moveWindow/resizeWindow that Geyser.Container.reposition
+-- performs, but WITHOUT the organize()/set_constraints re-entrancy that makes the
+-- stock path fan out into O(branches^depth) repositions. Safe because Geyser's
+-- get_x/get_y/get_width/get_height are computed from the constraint chain (parent
+-- getters × scale + offset), not native window state — so once constraints are
+-- updated (e.g. inside Mux._suppressReposition), a single pass applies them.
+function Mux._applyGeometry(win)
+    if not win or not win.name then return end
+    if win.type ~= "userwindow" then
+        moveWindow(win.name, win:get_x(), win:get_y())
+        resizeWindow(win.name, win:get_width(), win:get_height())
+    end
+    if win.windowList then
+        for k, child in pairs(win.windowList) do
+            if child ~= win and k ~= win and not child.nestLabels then
+                Mux._applyGeometry(child)
+            end
+        end
+    end
+    if win.redraw then win:redraw() end
+end
+
 -- Singleton context menu. Each row is a reused Geyser.Label with its own callbacks;
 -- pooling avoids widget allocation on every open.
 Mux._contextMenu = Mux._contextMenu or {

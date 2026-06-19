@@ -282,30 +282,6 @@ function MuxSplit:_notifyReposition()
     walk(self.childB)
 end
 
--- Applies each window's computed geometry natively, depth-first, exactly once.
--- This mirrors the native moveWindow/resizeWindow that Geyser.Container.reposition
--- performs, but WITHOUT the organize()/set_constraints re-entrancy that makes the
--- stock path fan out into O(branches^depth) repositions. Safe because Geyser's
--- get_x/get_y/get_width/get_height are computed from the constraint chain (parent
--- getters × scale + offset), not from native window state — so once the dragged
--- box's slot constraints are updated, every descendant's getter already returns
--- the correct pixels and a single pass applies them.
-function MuxSplit:_applyGeometry(win)
-    if not win or not win.name then return end
-    if win.type ~= "userwindow" then
-        moveWindow(win.name, win:get_x(), win:get_y())
-        resizeWindow(win.name, win:get_width(), win:get_height())
-    end
-    if win.windowList then
-        for k, child in pairs(win.windowList) do
-            if child ~= win and k ~= win and not child.nestLabels then
-                self:_applyGeometry(child)
-            end
-        end
-    end
-    if win.redraw then win:redraw() end
-end
-
 function MuxSplit:_setRatio(r)
     self.ratio = r
     if self.direction == "v" then
@@ -335,7 +311,7 @@ function MuxSplit:_setRatio(r)
 
     if Mux.debug then
         local t0 = os.clock()
-        self:_applyGeometry(self.box)
+        Mux._applyGeometry(self.box)
         local t1 = os.clock()
         self:_notifyReposition()
         local t2 = os.clock()
@@ -343,7 +319,7 @@ function MuxSplit:_setRatio(r)
             "\n<grey>[mux perf] %s leaves=%d  applyGeometry=%.0fms  notify=%.0fms<reset>\n",
             self.id, self:_leafCount(), (t1 - t0) * 1000, (t2 - t1) * 1000))
     else
-        self:_applyGeometry(self.box)
+        Mux._applyGeometry(self.box)
         self:_notifyReposition()
     end
 
@@ -654,7 +630,7 @@ function MuxSplit:_splitPaneInSlot(pane, direction, ratio)
         self.box:organize()
         newSplit.box:organize()
     end)
-    self:_applyGeometry(self.box)
+    Mux._applyGeometry(self.box)
     Mux._notifyAllReposition()
     Mux._inResize = wasInResize
 

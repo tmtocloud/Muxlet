@@ -106,28 +106,53 @@ function Mux.applyWorkspace(name)
     Mux._activeWorkspaceName = name
     Mux._running = true
 
+    local _dbg = Mux.debug
+    local _tc = _dbg and os.clock() or nil
     if Mux._clearWorkspace then Mux._clearWorkspace() end
+    local _clearMs = _tc and (os.clock() - _tc) * 1000 or 0
     if def.theme then Mux.applyTheme(def.theme) end
 
     local paneMap     = {}
     local paneSetsArr = def.paneSets or def.pane_sets or {}
 
-    for _, psDef in ipairs(paneSetsArr) do
-        local ps = Mux.newPaneSet({
-            id   = psDef.id,
-            zone = psDef.zone,
-            size = psDef.size,
-        })
-        if psDef.root then
-            local rootObj = buildNode(psDef.root, ps.outer, paneMap, ps)
-            if rootObj then
-                ps:setRoot(rootObj)
-                if rootObj._paneSet == nil and rootObj.outer then
-                    rootObj._paneSet = ps
+    -- Build the tree with Geyser's per-constraint-change reposition suppressed, so
+    -- the organize() calls fired while assembling each split box are calc-only
+    -- (otherwise construction fans out into the O(branches^depth) reposition storm).
+    -- Then apply native geometry over each pane-set in one O(n) pass. _inResize is
+    -- held so the console-border update doesn't echo into a second full reposition.
+    local _tb = _dbg and os.clock() or nil
+    local builtSets   = {}
+    local wasInResize = Mux._inResize
+    Mux._inResize = true
+    Mux._suppressReposition(function()
+        for _, psDef in ipairs(paneSetsArr) do
+            local ps = Mux.newPaneSet({
+                id   = psDef.id,
+                zone = psDef.zone,
+                size = psDef.size,
+            })
+            if psDef.root then
+                local rootObj = buildNode(psDef.root, ps.outer, paneMap, ps)
+                if rootObj then
+                    ps:setRoot(rootObj)
+                    if rootObj._paneSet == nil and rootObj.outer then
+                        rootObj._paneSet = ps
+                    end
                 end
             end
+            ps:show()
+            builtSets[#builtSets + 1] = ps
         end
-        ps:show()
+    end)
+    for _, ps in ipairs(builtSets) do
+        if ps.outer then Mux._applyGeometry(ps.outer) end
+    end
+    Mux._inResize = wasInResize
+    local _buildMs = _tb and (os.clock() - _tb) * 1000 or 0
+    if _dbg then
+        Mux._echo(string.format(
+            "\n<grey>[mux perf] workspace '%s': clear=%.0fms  build+layout=%.0fms<reset>\n",
+            name, _clearMs, _buildMs))
     end
 
     -- Restore floating panes after pane-set geometry resolves.
@@ -157,7 +182,10 @@ function Mux.applyWorkspace(name)
                 p._pendingContent = nil
             end
         end
+        local wasIR = Mux._inResize
+        Mux._inResize = true
         Mux._notifyAllReposition()
+        Mux._inResize = wasIR
         local sw = Mux._settings_ui
         if sw and sw.window and sw.visible then sw.window:raise() end
         Mux.raiseFloatingPanes()

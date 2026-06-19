@@ -29,6 +29,7 @@ local borderInset = 2   -- px gap so the 2px CSS border on frame is visible all 
 
 function MuxPane:init(opts)
     opts = opts or {}
+    local _t0 = Mux.debug and os.clock() or nil
     local theme = Mux.activeTheme()
 
     self.id               = opts.id   or Mux._newId("pane")
@@ -229,6 +230,10 @@ function MuxPane:init(opts)
 
     Mux._panes[self.id] = self
     Mux._log("MuxPane created: %s", self.id)
+    if _t0 then
+        Mux._echo(string.format("\n<grey>[mux perf] pane create %s = %.1fms<reset>\n",
+            self.id, (os.clock() - _t0) * 1000))
+    end
 end
 
 function MuxPane:_buildTitlebar(theme)
@@ -1110,7 +1115,7 @@ function MuxPane:split(direction, ratio)
     local wasInResize = Mux._inResize
     Mux._inResize = true
     Mux._suppressReposition(function() newSplit.box:organize() end)
-    newSplit:_applyGeometry(newSplit.box)
+    Mux._applyGeometry(newSplit.box)
     Mux._notifyAllReposition()
     Mux._inResize = wasInResize
     tempTimer(0, function()
@@ -1423,6 +1428,7 @@ function MuxPane:_confirmClose()
 end
 
 function MuxPane:close()
+    local _t0 = Mux.debug and os.clock() or nil
     if self._propertiesDialogs then
         for _, dlg in pairs(self._propertiesDialogs) do
             pcall(function() dlg:close() end)
@@ -1486,6 +1492,10 @@ function MuxPane:close()
     Mux._freeId(self.id)
     Mux._scheduleAutoSave()
     Mux._log("MuxPane closed: %s", self.id)
+    if _t0 then
+        Mux._echo(string.format("\n<grey>[mux perf] pane destroy %s = %.1fms<reset>\n",
+            self.id, (os.clock() - _t0) * 1000))
+    end
 end
 
 function MuxPane:applyTheme()
