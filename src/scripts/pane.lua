@@ -256,7 +256,39 @@ function MuxPane:_buildTitlebar(theme)
         paneX             = 0, paneY  = 0,
         lastHoverGhostKey = nil,   -- slotKey of the currently highlighted ghost slot
         insertTarget      = nil,   -- {pane, edge} of the currently previewed insertion zone
+        dropTargets       = nil,   -- cached insertable-pane rects, snapshotted once per drag
+        ghostRects        = nil,   -- cached ghost-slot rects, snapshotted once per drag
     }
+
+    -- Snapshots the geometry of every drop target (insertable embedded panes and
+    -- ghost slots) once per drag. These don't move while a pane is being dragged,
+    -- so re-querying their positions every mouse-move frame is wasted work that
+    -- grows with both pane count and nesting depth (absX/width walk the container
+    -- constraint chain to the root). Rebuilt after _detachToFloat, which is the
+    -- only point the embedded layout reflows during a drag.
+    local function snapshotDropTargets()
+        local targets = {}
+        for _, tp in pairs(Mux._panes) do
+            if not tp.floating and tp.insertable and tp ~= self then
+                targets[#targets + 1] = {
+                    pane = tp,
+                    x = tp:absX(), y = tp:absY(),
+                    w = tp:width(), h = tp:height(),
+                }
+            end
+        end
+        drag.dropTargets = targets
+
+        local ghosts = {}
+        for key, ghost in pairs(Mux._ghostSlots) do
+            ghosts[#ghosts + 1] = {
+                key = key,
+                x = ghost.slot:get_x(), y = ghost.slot:get_y(),
+                w = ghost.slot:get_width(), h = ghost.slot:get_height(),
+            }
+        end
+        drag.ghostRects = ghosts
+    end
 
     self.titlebar:setClickCallback(function(event)
         if event.button == "RightButton" then
@@ -275,6 +307,7 @@ function MuxPane:_buildTitlebar(theme)
         drag.startY = event.globalY
         drag.paneX  = self.outer:get_x()
         drag.paneY  = self.outer:get_y()
+        drag.dropTargets = nil  -- snapshot lazily on the first move frame
         self.titlebar:setCursor("ClosedHand")
         if self.floating then self:raise() end
     end)
@@ -289,6 +322,7 @@ function MuxPane:_buildTitlebar(theme)
             self:_detachToFloat()
             drag.paneX = self.floatX
             drag.paneY = self.floatY
+            drag.dropTargets = nil  -- layout reflowed on detach; re-snapshot below
         end
         local newX = drag.paneX + (event.globalX - drag.startX)
         local newY = drag.paneY + (event.globalY - drag.startY)
@@ -299,16 +333,13 @@ function MuxPane:_buildTitlebar(theme)
 
         if not self.convertible then return end
         local gx, gy = event.globalX, event.globalY
+        if not drag.dropTargets then snapshotDropTargets() end
 
         -- Ghost slot hover: highlight whichever slot the cursor is over.
         local newHoverGhost = nil
-        for key, ghost in pairs(Mux._ghostSlots) do
-            local sx = ghost.slot:get_x()
-            local sy = ghost.slot:get_y()
-            local sw = ghost.slot:get_width()
-            local sh = ghost.slot:get_height()
-            if gx >= sx and gx <= sx + sw and gy >= sy and gy <= sy + sh then
-                newHoverGhost = key
+        for _, g in ipairs(drag.ghostRects) do
+            if gx >= g.x and gx <= g.x + g.w and gy >= g.y and gy <= g.y + g.h then
+                newHoverGhost = g.key
                 break
             end
         end
@@ -325,36 +356,27 @@ function MuxPane:_buildTitlebar(theme)
 
         -- Insertion zone detection (only when not over a ghost slot).
         if not newHoverGhost then
-            local insertPane, insertEdge = nil, nil
-            for _, tp in pairs(Mux._panes) do
-                if not tp.floating and tp.insertable and tp ~= self then
-                    local tx = tp:absX()
-                    local ty = tp:absY()
-                    local tw = tp:width()
-                    local th = tp:height()
-                    if gx >= tx and gx <= tx + tw and gy >= ty and gy <= ty + th then
-                        local minPx, maxPx = 30, 80
-                        local edgeH = Mux._clamp(th * 0.20, minPx, maxPx)
-                        local edgeW = Mux._clamp(tw * 0.20, minPx, maxPx)
-                        if gy <= ty + edgeH then
-                            insertPane, insertEdge = tp, "top"
-                        elseif gy >= ty + th - edgeH then
-                            insertPane, insertEdge = tp, "bottom"
-                        elseif gx <= tx + edgeW then
-                            insertPane, insertEdge = tp, "left"
-                        elseif gx >= tx + tw - edgeW then
-                            insertPane, insertEdge = tp, "right"
-                        end
-                        break
+            local insertPane, insertEdge, rect = nil, nil, nil
+            for _, t in ipairs(drag.dropTargets) do
+                if gx >= t.x and gx <= t.x + t.w and gy >= t.y and gy <= t.y + t.h then
+                    local minPx, maxPx = 30, 80
+                    local edgeH = Mux._clamp(t.h * 0.20, minPx, maxPx)
+                    local edgeW = Mux._clamp(t.w * 0.20, minPx, maxPx)
+                    if gy <= t.y + edgeH then
+                        insertEdge = "top"
+                    elseif gy >= t.y + t.h - edgeH then
+                        insertEdge = "bottom"
+                    elseif gx <= t.x + edgeW then
+                        insertEdge = "left"
+                    elseif gx >= t.x + t.w - edgeW then
+                        insertEdge = "right"
                     end
+                    if insertEdge then insertPane, rect = t.pane, t end
+                    break
                 end
             end
             if insertPane then
-                local tx = insertPane:absX()
-                local ty = insertPane:absY()
-                local tw = insertPane:width()
-                local th = insertPane:height()
-                Mux._showInsertionGhost(tx, ty, tw, th, insertEdge)
+                Mux._showInsertionGhost(rect.x, rect.y, rect.w, rect.h, insertEdge)
                 drag.insertTarget = { pane = insertPane, edge = insertEdge }
             else
                 Mux._hideInsertionGhost()
@@ -648,8 +670,17 @@ end
 -- measured one way everywhere.
 function MuxPane:_titlebarNameWidth()
     local charW = (Mux.activeTheme and Mux.activeTheme().titlebarCharWidth) or 7
-    local _, chars = string.gsub(self.name or "", "[^\128-\191]", "")
-    return math.ceil(chars * charW)
+    local name  = self.name or ""
+    -- Cache the result: the gsub runs once per rename / theme change rather than
+    -- on every reposition frame during a resize.
+    if self._nwName == name and self._nwCharW == charW then
+        return self._nwVal
+    end
+    local _, chars = string.gsub(name, "[^\128-\191]", "")
+    self._nwName  = name
+    self._nwCharW = charW
+    self._nwVal   = math.ceil(chars * charW)
+    return self._nwVal
 end
 
 -- Pixel x where infoBtn starts in left-align: just past the pane name text.
@@ -691,35 +722,44 @@ function MuxPane:_refreshTitlebarName()
     if self.titlebar then self.titlebar:echo(self:_nameHtml()) end
 end
 
--- Positions all titlebar buttons and the name label for the current nameAlign.
--- Called at the start of _checkOverflow, so it runs on every resize and
--- visibility change.
+-- Sets the titlebar button anchors and name-label layout for the current
+-- nameAlign. The button positions depend only on alignment, the name width, and
+-- the top margin — never on the header width — so each button is anchored a
+-- constant distance from the header's right edge (via _fromEdgePx, exactly like
+-- the corner handles). Geyser's reposition cascade then tracks them for free
+-- whenever the pane resizes, so this does NOT need to run per resize frame.
+--
+-- A signature of those inputs gates the work: repeated calls with an unchanged
+-- signature (the common case while a split handle is being dragged) return
+-- immediately, which is what keeps embedded-pane resize cheap with many panes.
 --
 -- One model serves all three alignments. The titlebar Label always spans the
--- full header and renders the name via CSS (_nameHtml); buttons are a
--- right-anchored cluster at fixed offsets. The name's pixel width feeds into a
--- single `nameSlot` offset that slides the whole cluster left so the name owns
--- the far-right edge. nameSlot is zero for left and center, so those layouts
--- are unaffected.
+-- full header (a permanent "100%" anchor) and renders the name via CSS
+-- (_nameHtml); the button cluster slides left by `nameSlot` so the name owns the
+-- far-right edge in right-align. nameSlot is zero for left and center.
 function MuxPane:_layoutTitlebarButtons()
     if not self.titlebar then return end
-    local headerW = self.header:get_width()
-    if headerW < 10 then return end
 
     local theme = Mux.activeTheme and Mux.activeTheme() or {}
     local btnY  = theme.btnTopMargin or 2
     local align = self.nameAlign or "left"
+    local nameW = self:_titlebarNameWidth()
 
-    -- Right-align name geometry. namePad is the gap from the header's right edge
-    -- to the name; clusterGap separates the button cluster from the name.
-    -- namePad must match the margin-right in _nameHtml.
+    -- nameW covers both the right-align cluster offset and the left-align infoBtn
+    -- position; btnY is the only other input. Nothing here tracks header width.
+    local sig = align .. ":" .. nameW .. ":" .. btnY
+    if sig == self._btnLayoutSig then return end
+    self._btnLayoutSig = sig
+
+    -- namePad is the gap from the header's right edge to the name; clusterGap
+    -- separates the button cluster from the name. namePad must match the
+    -- margin-right in _nameHtml.
     local namePad, clusterGap = 6, 6
-    local nameSlot = (align == "right")
-        and (namePad + self:_titlebarNameWidth() + clusterGap)
-        or 0
+    local nameSlot = (align == "right") and (namePad + nameW + clusterGap) or 0
 
+    local yPx = Mux._toPx(btnY)
     local function rightAnchor(btn, offset)
-        if btn then btn:move(headerW - nameSlot - offset, btnY) end
+        if btn then btn:move(Mux._fromEdgePx(nameSlot + offset), yPx) end
     end
     rightAnchor(self.closeBtn,   20)
     rightAnchor(self.minBtn,     42)
@@ -729,15 +769,12 @@ function MuxPane:_layoutTitlebarButtons()
     rightAnchor(self.splitVBtn, 140)
     rightAnchor(self.contentBtn, 210)
 
-    self.titlebar:move(0, 0)
-    self.titlebar:resize(headerW, self.header:get_height())
-
-    -- infoBtn: trails the name in left-align; parked at the far left in center
-    -- and right (the name and its cluster occupy the right edge).
+    -- infoBtn: trails the name in left-align (positive offset from the left edge);
+    -- parked at the far left in center and right.
     if align == "left" then
         self:_updateInfoBtnPos()
     elseif self.infoBtn then
-        self.infoBtn:move(2, btnY)
+        self.infoBtn:move(Mux._toPx(2), yPx)
     end
 end
 
@@ -758,7 +795,9 @@ function MuxPane:_checkOverflow()
     local headerW = self.header:get_width()
     if headerW < 10 then return end  -- not yet laid out; skip
 
-    -- Reposition buttons for the current alignment on every resize.
+    -- Refresh button anchors if alignment / name width changed. This is gated
+    -- internally, so during a live resize (where those inputs are stable) it is a
+    -- no-op and the buttons track the header edge via Geyser's reposition cascade.
     self:_layoutTitlebarButtons()
 
     local compact = Mux.settings.get and Mux.settings.get("mux", "compact_titlebar")

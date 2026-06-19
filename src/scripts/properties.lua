@@ -228,7 +228,14 @@ local function paneRows(pane)
             type    = "text",
             readFn  = function() return pane.name end,
             writeFn = function(v)
-                if v ~= "" then pane:setName(v) end
+                if v == "" then return end
+                pane:setName(v)
+                -- Keep the open Properties dialog's own titlebar in sync.
+                if pane._propertiesDialogs then
+                    for _, dlg in pairs(pane._propertiesDialogs) do
+                        if dlg.setName then dlg:setName("Properties: " .. v) end
+                    end
+                end
             end,
         }
     end
@@ -389,7 +396,16 @@ local function tabRows(host, tab)
             desc    = "Display name shown on the tab label",
             type    = "text",
             readFn  = function() return tab.name end,
-            writeFn = function(v) if v ~= "" then host:renameTab(tab.id, v) end end,
+            writeFn = function(v)
+                if v == "" then return end
+                host:renameTab(tab.id, v)
+                -- Keep the open Properties dialog's own titlebar in sync.
+                if tab._propertiesDialogs then
+                    for _, dlg in pairs(tab._propertiesDialogs) do
+                        if dlg.setName then dlg:setName("Tab: " .. v) end
+                    end
+                end
+            end,
         }
     end
     rows[#rows+1] = {

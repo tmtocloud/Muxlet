@@ -937,15 +937,11 @@ function Mux._unhighlightGhostSlot(ghost)
 end
 
 -- Singleton translucent strip previewing where a dragged floating pane will land.
-Mux._insertionGhost = Mux._insertionGhost or nil
+Mux._insertionGhost      = Mux._insertionGhost      or nil
+Mux._insertionGhostKey   = Mux._insertionGhostKey   or nil    -- last previewed strip
+Mux._insertionGhostShown = Mux._insertionGhostShown or false
 
 function Mux._showInsertionGhost(tx, ty, tw, th, edge)
-    local theme   = Mux.activeTheme()
-    local css     = theme.insertionGhostCss or [[
-        background-color: rgba(80, 130, 255, 0.22);
-        border: 2px solid rgba(100, 160, 255, 0.75);
-        border-radius: 2px;
-    ]]
     local stripPx = 6
     local gx, gy, gw, gh
     if edge == "top" then
@@ -957,6 +953,20 @@ function Mux._showInsertionGhost(tx, ty, tw, th, edge)
     else
         gx, gy, gw, gh = tx + tw - stripPx, ty, stripPx, th
     end
+
+    -- The move callback can ask for the same strip on many consecutive frames
+    -- while the cursor sits in one zone. Re-parsing CSS and re-stacking the
+    -- widget every frame is needless churn, so skip when nothing changed.
+    local key = gx .. ":" .. gy .. ":" .. gw .. ":" .. gh .. ":" .. tostring(edge)
+    if Mux._insertionGhostShown and Mux._insertionGhostKey == key then return end
+    Mux._insertionGhostKey = key
+
+    local theme = Mux.activeTheme()
+    local css   = theme.insertionGhostCss or [[
+        background-color: rgba(80, 130, 255, 0.22);
+        border: 2px solid rgba(100, 160, 255, 0.75);
+        border-radius: 2px;
+    ]]
 
     if not Mux._insertionGhost then
         Mux._insertionGhost = Geyser.Label:new({
@@ -971,11 +981,14 @@ function Mux._showInsertionGhost(tx, ty, tw, th, edge)
     Mux._insertionGhost:setStyleSheet(css)
     Mux._insertionGhost:show()
     Mux._insertionGhost:raiseAll()
+    Mux._insertionGhostShown = true
 end
 
 function Mux._hideInsertionGhost()
-    if Mux._insertionGhost then
+    if Mux._insertionGhost and Mux._insertionGhostShown then
         Mux._insertionGhost:hide()
+        Mux._insertionGhostShown = false
+        Mux._insertionGhostKey   = nil
     end
 end
 
