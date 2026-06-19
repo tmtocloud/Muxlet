@@ -160,16 +160,9 @@ Mux.registerTheme("dark", {
         border-radius: 2px;
     ]],
 
-    -- ── Floating pane extra border (permanent floats — gold, distinct from focus blue) ──
+    -- ── Floating pane / dialog accent border (gold) ───────────────────────────
     floatingExtraCss = [[
         border: 2px solid rgba(205, 162, 40, 0.72);
-        border-radius: 3px;
-    ]],
-
-    -- ── Focused pane border ────────────────────────────────────────────────────
-    focusedFrameCss = [[
-        background-color: rgba(10, 10, 16, 248);
-        border: 2px solid rgba(100, 180, 255, 0.85);
         border-radius: 3px;
     ]],
 

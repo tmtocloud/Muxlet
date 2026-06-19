@@ -120,7 +120,7 @@ function MuxPane:init(opts)
     self.frame:setStyleSheet(theme.paneOuterCss or "")
     self.frame:setClickCallback(function(event)
         if Mux._movingTab then Mux._cancelTabMove(); return end
-        if Mux.setFocus then Mux.setFocus(self) end
+        if Mux.raisePane then Mux.raisePane(self) end
     end)
 
     local hdrH = self.titlebarVisible and tbH or rvH
@@ -151,7 +151,7 @@ function MuxPane:init(opts)
     self.contentBg:setStyleSheet(theme.contentCss or "")
     self.contentBg:setClickCallback(function(event)
         if Mux._movingTab then Mux._cancelTabMove(); return end
-        if Mux.setFocus then Mux.setFocus(self) end
+        if Mux.raisePane then Mux.raisePane(self) end
     end)
 
     -- Composable behavioural flags. All of these can be passed directly, or set
@@ -228,7 +228,6 @@ function MuxPane:init(opts)
     end
 
     Mux._panes[self.id] = self
-    if Mux._updateMainHighlightable then Mux._updateMainHighlightable() end
     Mux._log("MuxPane created: %s", self.id)
 end
 
@@ -299,7 +298,7 @@ function MuxPane:_buildTitlebar(theme)
             return
         end
         if event.button ~= "LeftButton" then return end
-        if Mux.setFocus then Mux.setFocus(self) end
+        if Mux.raisePane then Mux.raisePane(self) end
         if not self.convertible and not self.floating then return end
         if not self.movable then return end  -- block non-movable regardless of float state
         drag.active = true
@@ -443,7 +442,7 @@ function MuxPane:_buildTitlebar(theme)
     self.titlebar:setDoubleClickCallback(function(event)
         if not self.convertible then return end
         if not self.floating then
-            if Mux.setFocus then Mux.setFocus(self) end
+            if Mux.raisePane then Mux.raisePane(self) end
             return
         end
 
@@ -599,8 +598,7 @@ function MuxPane:_buildTitlebar(theme)
         tooltip = "Split horizontally (top / bottom)",
         onClick = function(event)
             if event.button == "LeftButton" then
-                Mux.setFocus(self)
-                Mux.splitFocused("v")
+                self:split("v")
             end
         end,
     })
@@ -614,8 +612,7 @@ function MuxPane:_buildTitlebar(theme)
         tooltip = "Split vertically (side by side)",
         onClick = function(event)
             if event.button == "LeftButton" then
-                Mux.setFocus(self)
-                Mux.splitFocused("h")
+                self:split("h")
             end
         end,
     })
@@ -1051,6 +1048,56 @@ function MuxPane:_updatePlaceholder()
     self.contentBg:echo(html)
 end
 
+-- Splits this pane in place, creating a sibling pane in a new split.
+-- direction "v" = side-by-side, "h" = top/bottom (internal convention). Returns
+-- the new MuxSplit, or nil if the pane can't be split. This is the operation the
+-- titlebar split buttons invoke and the programmatic entry point for scripting.
+function MuxPane:split(direction, ratio)
+    if self.floating or not self.splittable then return nil end
+
+    direction = direction or "v"
+    if not ratio then
+        local pct = Mux.settings and Mux.settings.get("mux", "default_split_ratio")
+        ratio = pct and (pct / 100) or 0.5
+    end
+
+    if self._split then
+        local newSplit = self._split:_splitPaneInSlot(self, direction, ratio)
+        if newSplit then
+            tempTimer(0, function()
+                Mux.raiseFloatingPanes()
+                Mux._scheduleAutoSave()
+            end)
+        end
+        return newSplit
+    end
+
+    -- Pane is the direct root of a PaneSet — wrap it in a new split.
+    local ps = self._paneSet
+    if not ps then
+        Mux._err("MuxPane:split: pane '%s' has no PaneSet reference", self.id)
+        return nil
+    end
+    local newSplit = MuxSplit:new({
+        direction = direction,
+        ratio     = ratio,
+        parent    = ps.outer,
+    })
+    newSplit:place(self, "a")
+    local newPane = MuxPane:new({ parent = newSplit.slotB })
+    newSplit:place(newPane, "b")
+    newPane._paneSet = ps
+    ps.root = newSplit
+    newSplit.box:organize()
+    newSplit.box:reposition()
+    Mux._notifyAllReposition()
+    tempTimer(0, function()
+        Mux.raiseFloatingPanes()
+        Mux._scheduleAutoSave()
+    end)
+    return newSplit
+end
+
 function MuxPane:float()
     if self.floating then return end
     if not self.convertible then return end
@@ -1097,7 +1144,6 @@ function MuxPane:_detachToFloat()
         -- Raise ALL floating panes so none are obscured by the new ghost.
         Mux.raiseFloatingPanes()
     end
-    if not self.overlay then Mux._lastFocusedPane = self end
     if self.onFloat then self.onFloat(self) end
     if not self.overlay then Mux._scheduleAutoSave() end
     Mux._log("MuxPane floated: %s (%.0f,%.0f %.0fx%.0f)",
@@ -1406,39 +1452,16 @@ function MuxPane:close()
         if self._split then self._split:collapseSlot(self._slotSide) end
     end
 
-    if Mux._focusedPane == self then
-        Mux._focusedPane = nil
-        tempTimer(0, function()
-            if not Mux._focusedPane then
-                local ordered = orderedPanes()
-                if #ordered > 0 then Mux.setFocus(ordered[1]) end
-            end
-        end)
-    end
-
     Mux._panes[self.id] = nil
     if self._gid then Mux._tabHosts[self._gid] = nil end
     Mux._freeId(self.id)
-    if Mux._updateMainHighlightable then Mux._updateMainHighlightable() end
-    -- When only one embedded pane remains, clear its focus border.
-    local remaining = orderedPanes()
-    if #remaining == 1 then
-        local sole = remaining[1]
-        if sole._setFrameCss and sole._baseFrameCss then
-            sole:_setFrameCss(sole:_baseFrameCss())
-        end
-    end
     Mux._scheduleAutoSave()
     Mux._log("MuxPane closed: %s", self.id)
 end
 
 function MuxPane:applyTheme()
     local theme = Mux.activeTheme()
-    if Mux._focusedPane == self and self.highlightable ~= false then
-        self.frame:setStyleSheet(self:_focusedFrameCss())
-    else
-        self.frame:setStyleSheet(self:_baseFrameCss())
-    end
+    if self.frame then self.frame:setStyleSheet(self:_baseFrameCss()) end
     if self.contentBg  then self.contentBg:setStyleSheet(theme.contentCss or "")       end
     if self.titlebar   then
         self.titlebar:setStyleSheet(theme.titlebarCss or "")
@@ -1647,13 +1670,15 @@ function MuxPane:_hideCornerHandles()
     for _, lbl in ipairs(self._cornerHandles) do lbl:hide() end
 end
 
--- Called by Mux.setFocus to change the frame's border CSS without a full applyTheme().
+-- Sets the frame's border CSS without a full applyTheme() pass.
 function MuxPane:_setFrameCss(css)
     if self.frame then self.frame:setStyleSheet(css) end
 end
 
--- Unfocused frame CSS. transparentFrame panes pass clicks through to the native
--- console underneath. overlay carries the accent border.
+-- Resting frame CSS. transparentFrame panes pass clicks through to the native
+-- console underneath. overlay panes (dialogs) carry the gold accent border;
+-- regular panes are grey. This is the only frame style — there is no focus
+-- highlight.
 function MuxPane:_baseFrameCss()
     if self.transparentFrame or self.consoleBorders then
         return [[
@@ -1667,29 +1692,6 @@ function MuxPane:_baseFrameCss()
         return (theme.paneOuterCss or "") .. "\n" .. (theme.floatingExtraCss or "")
     end
     return (theme.paneOuterCss or "")
-end
-
--- Focused-highlight frame CSS. overlay panes never take the focus border.
--- With only one embedded pane, focus is implicit — no border highlight needed.
-function MuxPane:_focusedFrameCss()
-    if self.overlay then return self:_baseFrameCss() end
-    local paneCount = 0
-    for _, p in pairs(Mux._panes) do
-        if not p.floating then
-            paneCount = paneCount + 1
-            if paneCount > 1 then break end
-        end
-    end
-    if paneCount <= 1 then return self:_baseFrameCss() end
-    if self.transparentFrame or self.consoleBorders then
-        return [[
-            background-color: transparent;
-            border: 2px solid rgba(100, 180, 255, 0.85);
-            border-radius: 3px;
-        ]]
-    end
-    local theme = Mux.activeTheme()
-    return (theme.focusedFrameCss or theme.paneOuterCss or "")
 end
 
 function MuxPane:absX()   return self.outer:get_x()      end

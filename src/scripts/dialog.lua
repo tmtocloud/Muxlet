@@ -188,7 +188,17 @@ function Mux.wireDialogButton(btn, normalCss, hoverCss)
     btn:setOnLeave(function() btn:setStyleSheet(normalCss) end)
 end
 
--- ── Mux.createDialog ─────────────────────────────────────────────────────────
+-- ── MuxDialog ────────────────────────────────────────────────────────────────
+--
+-- A dialog is a specialized MuxPane: a closeable overlay that floats above the
+-- workspace, never participates in splits or PaneSets, and isn't serialized.
+-- MuxDialog rhymes with the other primitives (MuxPane / MuxSplit / MuxPaneSet):
+-- it inherits everything from MuxPane and only layers on dialog defaults,
+-- cascade positioning, and the initial raise. Because an instance *is* a
+-- MuxPane, every pane method (content, close, setName, …) works unchanged, and
+-- Mux.createDialog(opts) is kept as the ergonomic verb that builds one.
+
+MuxDialog = Mux._class(MuxPane)
 
 -- Picks a top-left corner for a new dialog. When the caller doesn't specify a
 -- position, dialogs would otherwise all open dead-center and stack on top of
@@ -226,7 +236,7 @@ local function _dialogCascadePos(w, h, sw, sh)
     return x, y
 end
 
---- Creates and returns an overlay MuxPane for use as a dialog popup.
+--- Constructs the dialog. Called by MuxDialog:new(opts) via Mux._class.
 --
 -- @param  opts.title     string   titlebar label (default: "Dialog")
 -- @param  opts.width     number   pixel width    (default: 440)
@@ -235,11 +245,10 @@ end
 -- @param  opts.y         number   top  edge px   (default: centered, cascaded)
 -- @param  opts.resizable boolean  resize handles (default: false)
 -- @param  opts.id        string   custom pane id (default: auto "dialog_N")
--- @return MuxPane  add widgets to pane.content; dismiss with pane:close()
-function Mux.createDialog(opts)
+function MuxDialog:init(opts)
     opts = opts or {}
-    local w  = opts.width  or 440
-    local h  = opts.height or 280
+    local w = opts.width  or 440
+    local h = opts.height or 280
     local sw, sh = getMainWindowSize()
 
     -- Explicit x or y is honoured verbatim (callers restoring a remembered
@@ -252,12 +261,13 @@ function Mux.createDialog(opts)
         x, y = _dialogCascadePos(w, h, sw, sh)
     end
 
-    local pane = MuxPane:new({
+    -- Build the underlying pane with dialog defaults.
+    MuxPane.init(self, {
         id               = opts.id or Mux._newId("dialog"),
         name             = opts.title or "Dialog",
         x = x, y = y, width = w, height = h,
         parent           = Geyser,
-        overlay   = true,
+        overlay          = true,
         zoomable         = false,
         splittable       = false,
         swappable        = false,
@@ -271,23 +281,28 @@ function Mux.createDialog(opts)
         convertible      = opts.convertible or false,
         minimizable      = opts.minimizable or false,
     })
-    pane._dialog = true   -- marks this pane for dialog cascade bookkeeping
-    pane.floatX = x
-    pane.floatY = y
-    pane.floatW = w
-    pane.floatH = h
-    pane:_detachToFloat()
+
+    self._dialog = true   -- marks this pane for dialog cascade bookkeeping
+    self.floatX, self.floatY = x, y
+    self.floatW, self.floatH = w, h
+    self:_detachToFloat()
     Mux.raiseFloatingPanes()
     -- Deferred second raise forces Qt to repaint border labels that may have
     -- been occluded by a pre-existing pane during the initial layout pass.
     tempTimer(0, function()
-        if pane and pane.outer then
-            pane.outer:reposition()
+        if self and self.outer then
+            self.outer:reposition()
             Mux.raiseFloatingPanes()
         end
     end)
-    Mux._log("Mux.createDialog: '%s' (%dx%d at %d,%d)", pane.name, w, h, x, y)
-    return pane
+    Mux._log("MuxDialog: '%s' (%dx%d at %d,%d)", self.name, w, h, x, y)
+end
+
+--- Creates and returns a dialog overlay. The ergonomic verb wrapping
+--- MuxDialog:new — preferred in calling code, and what existing callers use.
+-- @return MuxDialog  add widgets to dialog.content; dismiss with dialog:close()
+function Mux.createDialog(opts)
+    return MuxDialog:new(opts)
 end
 
 Mux._log("mux_dialog loaded")

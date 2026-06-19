@@ -75,23 +75,6 @@ local function paneRows(pane)
             pane:_applyTitlebarVisibility()
         end,
     }
-    rows[#rows+1] = {
-        label      = "Highlightable",
-        desc       = "Show a focus border when this pane is active",
-        type       = "toggle",
-        trueLabel  = "Yes",
-        falseLabel = "No",
-        readFn     = function() return pane.highlightable ~= false end,
-        writeFn    = function(v)
-            pane.highlightable = v
-            if v and Mux._focusedPane == pane and pane._setFrameCss and pane._focusedFrameCss then
-                pane:_setFrameCss(pane:_focusedFrameCss())
-            elseif not v and pane._setFrameCss and pane._baseFrameCss then
-                pane:_setFrameCss(pane:_baseFrameCss())
-            end
-        end,
-    }
-
     -- Group 2: Behavior toggles
     rows[#rows+1] = {
         label      = "Minimizable",

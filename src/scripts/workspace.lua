@@ -158,18 +158,6 @@ function Mux.applyWorkspace(name)
             end
         end
         Mux._notifyAllReposition()
-        if not Mux._focusedPane then
-            local target
-            for _, p in pairs(Mux._panes) do
-                if p.mainConsoleHost then target = p; break end
-            end
-            if not target then
-                for _, p in pairs(Mux._panes) do
-                    if not p.floating then target = p; break end
-                end
-            end
-            if target then Mux.setFocus(target) end
-        end
         local sw = Mux._settings_ui
         if sw and sw.window and sw.visible then sw.window:raise() end
         Mux.raiseFloatingPanes()

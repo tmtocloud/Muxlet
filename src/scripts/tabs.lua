@@ -347,7 +347,7 @@ local function buildTabInfrastructure(host)
     host._tabBar:setStyleSheet(theme.tabBarCss or "")
     if not host._isSubTabHost then
         host._tabBar:setClickCallback(function(event)
-            if Mux.setFocus then Mux.setFocus(host) end
+            if Mux.raisePane then Mux.raisePane(host) end
         end)
     end
 
@@ -668,7 +668,7 @@ function MuxPane:_wireTabLabel(tab)
         drag.startY  = event.globalY
 
         pane:_activateTabObj(tab)
-        if Mux.setFocus then Mux.setFocus(pane) end
+        if Mux.raisePane then Mux.raisePane(pane) end
     end)
 
     tab.label:setMoveCallback(function(event)
