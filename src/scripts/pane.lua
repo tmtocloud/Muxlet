@@ -745,11 +745,20 @@ function MuxPane:setTitlebarVisible(visible)
     self:_applyTitlebarVisibility()
 end
 
--- Returns the pixel x position where infoBtn should start: just after the pane name text.
+-- Pixel width of the rendered titlebar name. Counts UTF-8 characters (every
+-- byte that is not a 0x80–0xBF continuation byte begins one character) times
+-- the theme's per-character width. Shared by every alignment so the name is
+-- measured one way everywhere.
+function MuxPane:_titlebarNameWidth()
+    local charW = (Mux.activeTheme and Mux.activeTheme().titlebarCharWidth) or 7
+    local _, chars = string.gsub(self.name or "", "[^\128-\191]", "")
+    return math.ceil(chars * charW)
+end
+
+-- Pixel x where infoBtn starts in left-align: just past the pane name text.
+-- ~8px for label left edge + 2 &nbsp; chars, then name width, then 4px gap.
 function MuxPane:_infoBtnX()
-    local charW = (Mux.activeTheme and Mux.activeTheme().titlebarCharWidth or 7)
-    -- ~8px for label left edge + 2 &nbsp; chars, then name width, then 4px gap.
-    return 8 + math.ceil(#self.name * charW) + 4
+    return 8 + self:_titlebarNameWidth() + 4
 end
 
 -- Moves infoBtn to its correct position based on current name length (left-align only).
@@ -761,6 +770,8 @@ function MuxPane:_updateInfoBtnPos()
 end
 
 -- Returns the HTML string for the titlebar name, styled for the current nameAlign.
+-- The right-align margin-right matches namePad in _layoutTitlebarButtons so the
+-- glyphs line up with the slot reserved for the name.
 function MuxPane:_nameHtml()
     local theme = Mux.activeTheme and Mux.activeTheme() or {}
     local tbc   = theme.titlebarTextColor or theme.btnTextColor or "#aaaabb"
@@ -770,7 +781,8 @@ function MuxPane:_nameHtml()
             "<center><span style='color:%s;'>%s</span></center>", tbc, self.name)
     elseif align == "right" then
         return string.format(
-            "<div style='text-align:right;'><span style='color:%s;'>%s</span></div>", tbc, self.name)
+            "<div style='text-align:right;margin-right:6px;'><span style='color:%s;'>%s</span></div>",
+            tbc, self.name)
     else
         return string.format(
             "<span style='color:%s;'>&nbsp;&nbsp;%s</span>", tbc, self.name)
@@ -782,67 +794,53 @@ function MuxPane:_refreshTitlebarName()
     if self.titlebar then self.titlebar:echo(self:_nameHtml()) end
 end
 
--- Repositions all titlebar buttons and sizes the name label to match nameAlign.
--- Called at the start of _checkOverflow so it runs on every resize and visibility change.
+-- Positions all titlebar buttons and the name label for the current nameAlign.
+-- Called at the start of _checkOverflow, so it runs on every resize and
+-- visibility change.
+--
+-- One model serves all three alignments. The titlebar Label always spans the
+-- full header and renders the name via CSS (_nameHtml); buttons are a
+-- right-anchored cluster at fixed offsets. The name's pixel width feeds into a
+-- single `nameSlot` offset that slides the whole cluster left so the name owns
+-- the far-right edge. nameSlot is zero for left and center, so those layouts
+-- are unaffected.
 function MuxPane:_layoutTitlebarButtons()
     if not self.titlebar then return end
     local headerW = self.header:get_width()
     if headerW < 10 then return end
 
-    local theme  = Mux.activeTheme and Mux.activeTheme() or {}
-    local btnY   = theme.btnTopMargin or 2
-    local btnSz  = theme.btnSize or 18
-    local btnGap = 4
-    local align  = self.nameAlign or "left"
+    local theme = Mux.activeTheme and Mux.activeTheme() or {}
+    local btnY  = theme.btnTopMargin or 2
+    local align = self.nameAlign or "left"
+
+    -- Right-align name geometry. namePad is the gap from the header's right edge
+    -- to the name; clusterGap separates the button cluster from the name.
+    -- namePad must match the margin-right in _nameHtml.
+    local namePad, clusterGap = 6, 6
+    local nameSlot = (align == "right")
+        and (namePad + self:_titlebarNameWidth() + clusterGap)
+        or 0
 
     local function rightAnchor(btn, offset)
-        if btn then btn:move(headerW - offset, btnY) end
+        if btn then btn:move(headerW - nameSlot - offset, btnY) end
     end
+    rightAnchor(self.closeBtn,   20)
+    rightAnchor(self.minBtn,     42)
+    rightAnchor(self.zoomBtn,    70)
+    rightAnchor(self.swapBtn,    96)
+    rightAnchor(self.splitHBtn, 120)
+    rightAnchor(self.splitVBtn, 140)
+    rightAnchor(self.contentBtn, 210)
 
-    if align == "right" then
-        rightAnchor(self.closeBtn, 20)
-        local minVis = self:_minBtnVisible()
-        if minVis then rightAnchor(self.minBtn, 42) end
-        local rightBtnEdge = minVis and (headerW - 42) or (headerW - 20)
+    self.titlebar:move(0, 0)
+    self.titlebar:resize(headerW, self.header:get_height())
 
-        -- infoBtn at far left.
-        local leftX   = 2
-        if self.infoBtn then self.infoBtn:move(leftX, btnY); leftX = leftX + btnSz + btnGap end
-
-        -- Action buttons left-to-right after infoBtn (content → splitH → splitV → swap → zoom).
-        local function placeLeft(btn)
-            if btn then btn:move(leftX, btnY); leftX = leftX + btnSz + btnGap end
-        end
-        placeLeft(self.contentBtn)
-        placeLeft(self.splitHBtn)
-        placeLeft(self.splitVBtn)
-        placeLeft(self.swapBtn)
-        placeLeft(self.zoomBtn)
-
-        -- Titlebar label stops before the right button cluster; name text right-aligned within.
-        self.titlebar:move(0, 0)
-        self.titlebar:resize(rightBtnEdge, self.header:get_height())
-    else
-        -- Left and center: action buttons stay at their standard right-anchored offsets.
-        rightAnchor(self.closeBtn,   20)
-        rightAnchor(self.minBtn,     42)
-        rightAnchor(self.zoomBtn,    70)
-        rightAnchor(self.swapBtn,    96)
-        rightAnchor(self.splitHBtn, 120)
-        rightAnchor(self.splitVBtn, 140)
-        rightAnchor(self.contentBtn, 210)
-
-        self.titlebar:move(0, 0)
-        self.titlebar:resize(headerW, self.header:get_height())
-
-        if align == "center" then
-            if self.infoBtn then
-                local theme2 = Mux.activeTheme and Mux.activeTheme() or {}
-                self.infoBtn:move(2, theme2.btnTopMargin or 2)
-            end
-        else
-            self:_updateInfoBtnPos()
-        end
+    -- infoBtn: trails the name in left-align; parked at the far left in center
+    -- and right (the name and its cluster occupy the right edge).
+    if align == "left" then
+        self:_updateInfoBtnPos()
+    elseif self.infoBtn then
+        self.infoBtn:move(2, btnY)
     end
 end
 
@@ -866,37 +864,35 @@ function MuxPane:_checkOverflow()
     -- Reposition buttons for the current alignment on every resize.
     self:_layoutTitlebarButtons()
 
-    local theme   = Mux.activeTheme and Mux.activeTheme() or {}
-    local charW   = theme.titlebarCharWidth or 7
     local compact = Mux.settings.get and Mux.settings.get("mux", "compact_titlebar")
     local align   = self.nameAlign or "left"
 
     local showInfo = self.infoBtn and self.contextMenu
         and (self.showSettingsInMenu or self.propertiesButton)
     local infoBtnW = showInfo and 22 or 0
-    local nameW    = math.ceil(#self.name * charW)
+    local nameW    = self:_titlebarNameWidth()
 
     -- Always-visible close + min cluster.
     local closeMinW = 22
     if self.floating and self.minimizable then closeMinW = closeMinW + 22 end
 
+    -- Width of the right-anchored action cluster in the current state.
+    local rightW = closeMinW
+    if self.zoomable and (self._split or self._zoomed)          then rightW = rightW + 28 end
+    if self.swappable and self._split and not self.floating      then rightW = rightW + 26 end
+    if self.splittable and not self.floating                     then rightW = rightW + 44 end
+    if self:_contentEnabled()                                    then rightW = rightW + 70 end
+
     local newOverflow
     if align == "right" then
-        -- Action buttons moved to LEFT; only close+min stay on right.
-        local leftActionW = 0
-        if self.zoomable and (self._split or self._zoomed)          then leftActionW = leftActionW + 22 end
-        if self.swappable and self._split and not self.floating      then leftActionW = leftActionW + 22 end
-        if self.splittable and not self.floating                     then leftActionW = leftActionW + 44 end
-        if self:_contentEnabled()                                    then leftActionW = leftActionW + 22 end
-        local leftW = 6 + infoBtnW + leftActionW
-        newOverflow = compact or (headerW < leftW + nameW + closeMinW + 10)
+        -- Cluster stays on the right; the name reserves a slot to its right.
+        -- Same shape as center plus the name slot. namePad / clusterGap match
+        -- _layoutTitlebarButtons.
+        local namePad, clusterGap = 6, 6
+        local leftW = 6 + infoBtnW
+        newOverflow = compact
+            or (headerW < leftW + rightW + namePad + nameW + clusterGap + 10)
     else
-        -- Left and center: action buttons stay right-anchored with their original spacing.
-        local rightW = closeMinW
-        if self.zoomable and (self._split or self._zoomed)          then rightW = rightW + 28 end
-        if self.swappable and self._split and not self.floating      then rightW = rightW + 26 end
-        if self.splittable and not self.floating                     then rightW = rightW + 44 end
-        if self:_contentEnabled()                                    then rightW = rightW + 70 end
         if align == "center" then
             local leftW = 6 + infoBtnW
             newOverflow = compact or (headerW < leftW + nameW + rightW + 10)

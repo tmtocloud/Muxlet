@@ -36,10 +36,10 @@ Type `mux help` at any time for a command summary.
 
 | Command | Description |
 |---------|-------------|
-| `mux` / `mux start` | Start Muxlet (restores last session) |
+| `mux` / `mux start` | Start Muxlet (restores last session, or the `default` workspace on first run) |
 | `mux stop` | Stop Muxlet, restore the normal Mudlet console |
-| `mux reset` | Re-apply the default workspace |
-| `mux status` | Show version, workspace, and pane count |
+| `mux reset` | Re-apply the reset workspace (configurable via the `mux.reset_workspace` setting; defaults to `default`) |
+| `mux status` | Show status overview (version, workspace, pane count) |
 
 #### Pane
 
@@ -58,6 +58,8 @@ All pane commands act on the **focused** pane — the one with a highlighted bor
 | `mux pane rename <name>` | Rename the focused pane |
 | `mux pane lock` / `mux pane unlock` | Lock or unlock the focused pane |
 | `mux pane new [name]` | Create a new free-floating pane |
+| `mux pane width <1-99>` | Set the focused pane's width to a percentage of the screen width |
+| `mux pane height <1-99>` | Set the focused pane's height to a percentage of the screen height |
 | `mux pane properties` | Open the Properties dialog for the focused pane |
 
 Locked panes ignore drag, close, split, and rename actions. Unlock with `mux pane unlock` before making structural changes.
@@ -86,6 +88,7 @@ Save and restore complete window arrangements. Muxlet auto-saves the live sessio
 | `mux workspace load <name>` | Restore a saved workspace |
 | `mux workspace list` | List all saved workspaces |
 | `mux workspace delete <name>` | Remove a named workspace |
+| `mux workspaces` | Alias for `mux workspace list` |
 
 #### Theme
 
@@ -126,6 +129,8 @@ mux settings set mux.theme light        — switch to light theme persistently
 |---------|-------------|
 | `mux debug [on\|off]` | Toggle (or set) debug output in the console |
 | `mux version` | Show installed version and check for updates |
+| `mux reload` | Reinstall Muxlet from the local build, preserving settings (development helper) |
+| `mux reload fresh` | Reinstall and reset the update-skip counter, simulating a fresh install |
 
 ---
 
