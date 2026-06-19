@@ -135,6 +135,22 @@ function Mux._applyBorders()
         Mux._borders.bottom, Mux._borders.left)
 end
 
+-- Runs fn() with Geyser's per-constraint-change reposition suppressed. Geyser's
+-- set_constraints() repositions on every change, and organize() changes constraints
+-- via move()+resize() per child — so naive organize/reposition over a nested tree
+-- fans out into O(branches^depth) repositions. Because get_x/get_width are computed
+-- from the constraint chain (not native state), callers can update constraints inside
+-- fn() and then apply native geometry once via Mux._applyGeometry. Always restores
+-- set_constraints, even on error.
+function Mux._suppressReposition(fn)
+    local origSet = Geyser.set_constraints
+    Geyser.set_constraints = function(w, c, cc) Geyser.calc_constraints(w, c, cc) end
+    local ok, err = pcall(fn)
+    Geyser.set_constraints = origSet
+    if not ok then Mux._err("suppressReposition: %s", tostring(err)) end
+    return ok
+end
+
 -- Singleton context menu. Each row is a reused Geyser.Label with its own callbacks;
 -- pooling avoids widget allocation on every open.
 Mux._contextMenu = Mux._contextMenu or {

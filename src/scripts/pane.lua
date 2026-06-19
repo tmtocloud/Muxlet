@@ -789,6 +789,12 @@ end
 -- If wide enough: restores button visibility without calling _applyTitlebarVisibility().
 function MuxPane:_checkOverflow()
     if not self.titlebarVisible then return end
+    -- During a live handle drag this is called for every pane on every reposition
+    -- frame. Anchored titlebar buttons already track position via reposition, so
+    -- only overflow *visibility* could change — and that can wait until the drag
+    -- ends (MuxSplit:_flushRatio re-runs this once across the sub-tree). Skipping
+    -- the per-frame width query keeps resize cheap with many panes.
+    if Mux._resizing then return end
     local headerW = self.header:get_width()
     if headerW < 10 then return end  -- not yet laid out; skip
 
@@ -1038,7 +1044,7 @@ function MuxPane:_updatePlaceholder()
         .. "</span>"
         .. "<br/><br/>"
         .. "<span style='font-size:9px;color:rgba(90,98,138,0.5);'>"
-        .. "≡ Properties or use mux pane properties"
+        .. "≡ Properties button in the titlebar"
         .. "</span>"
         .. (self.contentable
             and "<br/><span style='color:rgba(100,165,255,0.4);font-size:9px;'>▥ Content Library via titlebar</span>"
@@ -1046,6 +1052,19 @@ function MuxPane:_updatePlaceholder()
         .. "</div>",
         ds, self.name, is, self.id, cs, self.id)
     self.contentBg:echo(html)
+end
+
+-- Re-evaluates the drag-lock state of every split handle from this pane up to
+-- the root. A non-resizable pane must lock not only the handle it shares with
+-- its immediate sibling but every ancestor handle that could change its size,
+-- so none of its borders can be dragged. _childResizable already recurses; this
+-- just makes sure each ancestor split re-checks after a resizable change.
+function MuxPane:_refreshResizeHandles()
+    local s = self._split
+    while s do
+        if s._updateHandleResizability then s:_updateHandleResizability() end
+        s = s._parentSplit
+    end
 end
 
 -- Splits this pane in place, creating a sibling pane in a new split.
@@ -1088,9 +1107,12 @@ function MuxPane:split(direction, ratio)
     newSplit:place(newPane, "b")
     newPane._paneSet = ps
     ps.root = newSplit
-    newSplit.box:organize()
-    newSplit.box:reposition()
+    local wasInResize = Mux._inResize
+    Mux._inResize = true
+    Mux._suppressReposition(function() newSplit.box:organize() end)
+    newSplit:_applyGeometry(newSplit.box)
     Mux._notifyAllReposition()
+    Mux._inResize = wasInResize
     tempTimer(0, function()
         Mux.raiseFloatingPanes()
         Mux._scheduleAutoSave()
@@ -1381,6 +1403,9 @@ function MuxPane:_confirmClose()
     local sw    = getMainWindowSize()
     local cw    = 340
     local pane  = self
+    local key   = "confirm:close:" .. self.id
+    local existing = Mux.getDialog(key)
+    if existing then existing:show(); existing:raise(); return end
     local confirmD = Mux.createDialog({
         title         = "Close Pane?",
         x             = math.floor((sw - cw) / 2),
@@ -1389,6 +1414,7 @@ function MuxPane:_confirmClose()
         closeable     = false,
         minimizable   = false,
         contextMenu   = false,
+        singleton     = key,
     })
     Mux._pendingPaneClose = { paneName = self.name, onProceed = function() pane:close() end }
     Mux._applyContent(confirmD, "mux_pane_close_confirm")
@@ -1454,6 +1480,9 @@ function MuxPane:close()
 
     Mux._panes[self.id] = nil
     if self._gid then Mux._tabHosts[self._gid] = nil end
+    if self._singletonKey and Mux._singletonDialogs then
+        Mux._singletonDialogs[self._singletonKey] = nil
+    end
     Mux._freeId(self.id)
     Mux._scheduleAutoSave()
     Mux._log("MuxPane closed: %s", self.id)

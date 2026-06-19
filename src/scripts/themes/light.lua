@@ -100,6 +100,11 @@ Mux.registerTheme("light", {
         background-color: rgba(50, 100, 220, 0.55);
         border: none;
     ]],
+    -- Preview line shown while dragging a split handle in preview mode.
+    dragGuideCss = [[
+        background-color: rgba(50, 100, 220, 0.70);
+        border-radius: 2px;
+    ]],
     handleCursorV = "ResizeVertical",
     handleCursorH = "ResizeHorizontal",
 

@@ -17,8 +17,13 @@ function Mux.raisePane(pane)
 end
 
 function Mux.raiseFloatingPanes()
+    -- Raise non-dialog floats first, then dialogs, so dialog overlays (incl.
+    -- close confirmations) always sit above ordinary floats and a zoomed pane.
     for _, pane in pairs(Mux._panes) do
-        if pane.floating then pane:raise() end
+        if pane.floating and not pane.overlay then pane:raise() end
+    end
+    for _, pane in pairs(Mux._panes) do
+        if pane.floating and pane.overlay then pane:raise() end
     end
 end
 
@@ -150,8 +155,37 @@ function Mux.revealUI(id)
 end
 
 
--- Resize the focused pane's width to a percentage of screen width.
--- Floating panes resize directly; embedded panes in a left/right split adjust their ratio.
+-- Finds the nearest ancestor split (including the pane's immediate split) whose
+-- orientation matches `direction` ("h" = side-by-side, controls width; "v" =
+-- top/bottom, controls height). Returns (split, side) where `side` is which
+-- slot ("a"/"b") the pane's subtree occupies in that split, or nil if none.
+function Mux._ancestorSplitOfDirection(pane, direction)
+    local split = pane._split
+    local side  = pane._slotSide
+    while split do
+        if split.direction == direction then return split, side end
+        side  = split._parentSide
+        split = split._parentSplit
+    end
+    return nil
+end
+
+-- Adjusts `split`'s ratio so the pane-side measures ~targetPx along `dim`
+-- ("width"/"height"). Used by both resize functions.
+local function _setSplitForPx(split, side, targetPx, dim)
+    local handlePx = Mux.activeTheme().handleSize or 3
+    local box      = (dim == "width") and split.box:get_width() or split.box:get_height()
+    local dyn      = box - handlePx
+    if dyn <= 0 then return false end
+    local ratio = Mux._clamp(targetPx / dyn, 0.05, 0.95)
+    if side == "b" then ratio = 1 - ratio end
+    split:_setRatio(ratio)
+    return true
+end
+
+-- Resize a pane's width to a percentage of screen width. Floating panes resize
+-- directly; embedded panes adjust the nearest side-by-side split above them
+-- (which may be an ancestor, resizing the whole sub-tree).
 function Mux.resizePaneToWidth(pane, pct)
     if not pane then
         Mux._echo("\n<yellow>[Muxlet]<reset> No pane specified.\n"); return
@@ -168,30 +202,23 @@ function Mux.resizePaneToWidth(pane, pct)
         pane.outer:reposition()
         Mux._scheduleAutoSave()
         Mux._echo(string.format("\n<green>[Muxlet]<reset> Width set to %d%% (%dpx).\n", pct, targetPx))
-    elseif pane._split then
-        local split = pane._split
-        if split.direction ~= "h" then
-            Mux._echo("\n<yellow>[Muxlet]<reset> Pane is in a top/bottom split — use 'height' to resize it.\n"); return
-        end
-        local handlePx = Mux.activeTheme().handleSize or 3
-        local boxW     = split.box:get_width()
-        local dynW     = boxW - handlePx
-        if dynW <= 0 then
-            Mux._echo("\n<yellow>[Muxlet]<reset> Split not yet laid out — try again after startup.\n"); return
-        end
-        local ratio = Mux._clamp(targetPx / dynW, 0.05, 0.95)
-        if pane._slotSide == "b" then ratio = 1 - ratio end
-        split:_setRatio(ratio)
-        Mux._scheduleAutoSave()
-        Mux._echo(string.format("\n<green>[Muxlet]<reset> Width adjusted to ~%d%% (%dpx in %dpx split).\n",
-            pct, targetPx, dynW))
-    else
-        Mux._echo("\n<yellow>[Muxlet]<reset> Pane has no parent split to resize.\n")
+        return
     end
+    local split, side = Mux._ancestorSplitOfDirection(pane, "h")
+    if not split then
+        Mux._echo("\n<yellow>[Muxlet]<reset> This pane spans the full width — nothing to its left or right to resize against.\n")
+        return
+    end
+    if not _setSplitForPx(split, side, targetPx, "width") then
+        Mux._echo("\n<yellow>[Muxlet]<reset> Split not yet laid out — try again after startup.\n"); return
+    end
+    Mux._scheduleAutoSave()
+    Mux._echo(string.format("\n<green>[Muxlet]<reset> Width set to ~%d%% of screen.\n", pct))
 end
 
--- Resize the focused pane's height to a percentage of screen height.
--- Floating panes resize directly; embedded panes in a top/bottom split adjust their ratio.
+-- Resize a pane's height to a percentage of screen height. Floating panes resize
+-- directly; embedded panes adjust the nearest top/bottom split above them (which
+-- may be an ancestor, resizing the whole sub-tree the pane belongs to).
 function Mux.resizePaneToHeight(pane, pct)
     if not pane then
         Mux._echo("\n<yellow>[Muxlet]<reset> No pane specified.\n"); return
@@ -208,26 +235,18 @@ function Mux.resizePaneToHeight(pane, pct)
         pane.outer:reposition()
         Mux._scheduleAutoSave()
         Mux._echo(string.format("\n<green>[Muxlet]<reset> Height set to %d%% (%dpx).\n", pct, targetPx))
-    elseif pane._split then
-        local split = pane._split
-        if split.direction ~= "v" then
-            Mux._echo("\n<yellow>[Muxlet]<reset> Pane is in a left/right split — use 'width' to resize it.\n"); return
-        end
-        local handlePx = Mux.activeTheme().handleSize or 3
-        local boxH     = split.box:get_height()
-        local dynH     = boxH - handlePx
-        if dynH <= 0 then
-            Mux._echo("\n<yellow>[Muxlet]<reset> Split not yet laid out — try again after startup.\n"); return
-        end
-        local ratio = Mux._clamp(targetPx / dynH, 0.05, 0.95)
-        if pane._slotSide == "b" then ratio = 1 - ratio end
-        split:_setRatio(ratio)
-        Mux._scheduleAutoSave()
-        Mux._echo(string.format("\n<green>[Muxlet]<reset> Height adjusted to ~%d%% (%dpx in %dpx split).\n",
-            pct, targetPx, dynH))
-    else
-        Mux._echo("\n<yellow>[Muxlet]<reset> Pane has no parent split to resize.\n")
+        return
     end
+    local split, side = Mux._ancestorSplitOfDirection(pane, "v")
+    if not split then
+        Mux._echo("\n<yellow>[Muxlet]<reset> This pane spans the full height — nothing above or below to resize against.\n")
+        return
+    end
+    if not _setSplitForPx(split, side, targetPx, "height") then
+        Mux._echo("\n<yellow>[Muxlet]<reset> Split not yet laid out — try again after startup.\n"); return
+    end
+    Mux._scheduleAutoSave()
+    Mux._echo(string.format("\n<green>[Muxlet]<reset> Height set to ~%d%% of screen.\n", pct))
 end
 
 -- Creates a free-floating blank pane near the centre of the screen.

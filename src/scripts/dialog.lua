@@ -200,6 +200,20 @@ end
 
 MuxDialog = Mux._class(MuxPane)
 
+-- Registry of singleton dialogs, keyed by the caller's `singleton` string. A
+-- dialog created with a singleton key that's already live is never duplicated —
+-- the existing one is raised instead. Entries are cleared in MuxPane:close.
+Mux._singletonDialogs = Mux._singletonDialogs or {}
+
+-- Returns the live dialog registered under `key`, or nil. Guards against stale
+-- entries whose pane has already been closed.
+function Mux.getDialog(key)
+    local d = key and Mux._singletonDialogs[key]
+    if d and Mux._panes[d.id] then return d end
+    Mux._singletonDialogs[key or ""] = nil
+    return nil
+end
+
 -- Picks a top-left corner for a new dialog. When the caller doesn't specify a
 -- position, dialogs would otherwise all open dead-center and stack on top of
 -- each other. Instead, cascade diagonally: find the first centered-base slot
@@ -283,6 +297,10 @@ function MuxDialog:init(opts)
     })
 
     self._dialog = true   -- marks this pane for dialog cascade bookkeeping
+    if opts.singleton then
+        self._singletonKey = opts.singleton
+        Mux._singletonDialogs[opts.singleton] = self
+    end
     self.floatX, self.floatY = x, y
     self.floatW, self.floatH = w, h
     self:_detachToFloat()
@@ -302,6 +320,15 @@ end
 --- MuxDialog:new — preferred in calling code, and what existing callers use.
 -- @return MuxDialog  add widgets to dialog.content; dismiss with dialog:close()
 function Mux.createDialog(opts)
+    opts = opts or {}
+    if opts.singleton then
+        local existing = Mux.getDialog(opts.singleton)
+        if existing then
+            existing:show()
+            existing:raise()
+            return existing
+        end
+    end
     return MuxDialog:new(opts)
 end
 

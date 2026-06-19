@@ -813,10 +813,17 @@ local function buildWindow()
     -- Geyser's hide() only covers children that existed at the time hide() was called.
     -- Tab infrastructure (sub-tab bars, viewports, content) is added after the initial
     -- hide, so non-active top-level tabs may still be visible. Re-hide them now that
-    -- all content is built.
+    -- all content is built — and do the same for each top tab's sub-tabs, otherwise a
+    -- non-active sub-tab (e.g. Main) stays drawn over the active one (General) on the
+    -- first open until the user switches tabs and back.
     for _, topTab in ipairs(pane._tabs or {}) do
         if topTab.id ~= pane._activeTabId then
             topTab.content:hide()
+        end
+        for _, subTab in ipairs(topTab._tabs or {}) do
+            if subTab.id ~= topTab._activeTabId and subTab.content then
+                subTab.content:hide()
+            end
         end
     end
 
@@ -882,6 +889,13 @@ Mux.settings.register("mux", "default_split_ratio", {
     default     = 50,
     min         = 10,
     max         = 90,
+})
+
+Mux.settings.register("mux", "live_resize_max_panes", {
+    description = "Live-resize panes while dragging a split handle only when the affected area holds at most this many panes; above it, drag a preview line and apply on release (instant regardless of pane count). Set high to always resize live, or 1 to always preview",
+    default     = 2,
+    min         = 1,
+    max         = 99,
 })
 
 Mux.settings.register("mux", "auto_start", {

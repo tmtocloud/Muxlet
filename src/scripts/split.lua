@@ -105,6 +105,21 @@ function MuxSplit:init(opts)
     Mux._log("MuxSplit created: %s dir=%s ratio=%.2f", self.id, self.direction, self.ratio)
 end
 
+-- Lazily-created overlay line shown during a preview drag. It's a plain Geyser
+-- label parented to the root, reused across all splits; the real split handle is
+-- never moved, so it keeps its cursor and clickability after a preview drag.
+local function _ensureDragGuide()
+    if Mux._dragGuide then return Mux._dragGuide end
+    local theme = Mux.activeTheme()
+    local g = Geyser.Label:new({ name = "mux_drag_guide", x = 0, y = 0, width = 4, height = 4 }, Geyser)
+    g:setStyleSheet(theme.dragGuideCss
+        or "background-color: rgba(120,170,255,0.55); border-radius: 2px;")
+    if g.setClickThrough then pcall(function() g:setClickThrough(true) end) end
+    g:hide()
+    Mux._dragGuide = g
+    return g
+end
+
 function MuxSplit:_setupHandleDrag(theme, handlePx)
     -- Drag state: local per-split so multiple splits can be dragged concurrently.
     local drag = {
@@ -128,6 +143,12 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
         if event.button ~= "LeftButton" then return end
         if self._dragDisabled then return end
         drag.active = true
+        -- Decide live vs preview: live resize stays smooth for a few panes, but
+        -- each added content pane makes a single reposition heavier than a frame
+        -- budget. Above the threshold, drag a cheap preview line and apply once
+        -- on release so cost is independent of pane count.
+        local maxLive = (Mux.settings and Mux.settings.get("mux", "live_resize_max_panes")) or 2
+        drag.preview  = self:_leafCount() > maxLive
         -- Measure slotA and dynamic space NOW (after any prior organize call).
         if self.direction == "v" then
             drag.startPos  = event.globalY
@@ -138,23 +159,63 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
             drag.slotAPx   = self.slotA:get_width()
             drag.dynamicPx = self.box:get_width() - handlePx
         end
+        if drag.preview then
+            -- Overlay the guide on the handle's current spot, then let it track
+            -- the cursor. The real handle stays put and fully interactive.
+            local g = _ensureDragGuide()
+            drag.guideX0 = self.handle:get_x()
+            drag.guideY0 = self.handle:get_y()
+            g:resize(self.handle:get_width(), self.handle:get_height())
+            g:move(drag.guideX0, drag.guideY0)
+            g:show()
+            g:raise()
+        end
     end)
 
     self.handle:setMoveCallback(function(event)
         if not drag.active then return end
         local pos    = (self.direction == "v") and event.globalY or event.globalX
         local delta  = pos - drag.startPos
-        local target = drag.slotAPx + delta
         -- Guard against zero dynamic space (layout not yet rendered).
         if drag.dynamicPx <= 0 then return end
-        local newR = Mux._clamp(target / drag.dynamicPx, minRatio, 1 - minRatio)
-        self:_setRatio(newR)
+        local newSlotA = Mux._clamp(drag.slotAPx + delta,
+            minRatio * drag.dynamicPx, (1 - minRatio) * drag.dynamicPx)
+        if drag.preview then
+            -- Move only the lightweight guide overlay — one cheap native op per
+            -- frame, so it tracks the cursor live regardless of pane count.
+            local shift = newSlotA - drag.slotAPx
+            local g = Mux._dragGuide
+            if g then
+                if self.direction == "v" then g:move(drag.guideX0, drag.guideY0 + shift)
+                else                          g:move(drag.guideX0 + shift, drag.guideY0) end
+            end
+        else
+            -- Coalesced live resize: records the target and lets a single
+            -- scheduled flush apply it, so fast events don't pile up repositions.
+            self:_requestRatio(newSlotA / drag.dynamicPx)
+        end
     end)
 
     self.handle:setReleaseCallback(function(event)
         if event.button ~= "LeftButton" then return end
         drag.active = false
         self.handle:setStyleSheet(theme.handleCss or "")
+        if drag.preview then
+            if Mux._dragGuide then Mux._dragGuide:hide() end
+            -- Apply the previewed position once. Gate per-pane overflow checks
+            -- during this single heavy reposition, then recheck once via flush.
+            local pos   = (self.direction == "v") and event.globalY or event.globalX
+            local delta = pos - drag.startPos
+            if drag.dynamicPx > 0 then
+                local ratio = Mux._clamp((drag.slotAPx + delta) / drag.dynamicPx, minRatio, 1 - minRatio)
+                Mux._resizing = true
+                self:_setRatio(ratio)
+                self:_flushRatio()
+            end
+            drag.preview = false
+        else
+            self:_flushRatio()
+        end
         Mux._scheduleAutoSave()
     end)
 end
@@ -188,6 +249,20 @@ function MuxSplit:_updateHandleResizability()
     end
 end
 
+-- Counts MuxPane leaves in this split's subtree. Used to decide whether a live
+-- drag would resize few enough panes to stay smooth, or enough to warrant the
+-- cheaper preview-line drag.
+function MuxSplit:_leafCount()
+    local n = 0
+    local function walk(node)
+        if not node then return end
+        if node.outer then n = n + 1 else walk(node.childA); walk(node.childB) end
+    end
+    walk(self.childA)
+    walk(self.childB)
+    return n
+end
+
 -- Fires onReposition for every MuxPane leaf in this split's subtree. Used after
 -- a ratio change: only descendants of this split change geometry, so notifying
 -- the whole workspace (as a structural change does) would be wasted work. During
@@ -207,6 +282,30 @@ function MuxSplit:_notifyReposition()
     walk(self.childB)
 end
 
+-- Applies each window's computed geometry natively, depth-first, exactly once.
+-- This mirrors the native moveWindow/resizeWindow that Geyser.Container.reposition
+-- performs, but WITHOUT the organize()/set_constraints re-entrancy that makes the
+-- stock path fan out into O(branches^depth) repositions. Safe because Geyser's
+-- get_x/get_y/get_width/get_height are computed from the constraint chain (parent
+-- getters × scale + offset), not from native window state — so once the dragged
+-- box's slot constraints are updated, every descendant's getter already returns
+-- the correct pixels and a single pass applies them.
+function MuxSplit:_applyGeometry(win)
+    if not win or not win.name then return end
+    if win.type ~= "userwindow" then
+        moveWindow(win.name, win:get_x(), win:get_y())
+        resizeWindow(win.name, win:get_width(), win:get_height())
+    end
+    if win.windowList then
+        for k, child in pairs(win.windowList) do
+            if child ~= win and k ~= win and not child.nestLabels then
+                self:_applyGeometry(child)
+            end
+        end
+    end
+    if win.redraw then win:redraw() end
+end
+
 function MuxSplit:_setRatio(r)
     self.ratio = r
     if self.direction == "v" then
@@ -216,14 +315,83 @@ function MuxSplit:_setRatio(r)
         self.slotA.h_stretch_factor = r
         self.slotB.h_stretch_factor = 1 - r
     end
-    -- organize() updates the constraint closures (get_x/y/w/h) for all children.
-    -- reposition() then cascades moveWindow/resizeWindow to every native-window
-    -- descendant using those updated closures.
-    -- VBox.reposition() calls Container.reposition first then organize internally,
-    -- so organize() must be called first to ensure correct ordering.
-    self.box:organize()
-    self.box:reposition()
-    self:_notifyReposition()
+    -- Why not just box:reposition()? Geyser's set_constraints() repositions on every
+    -- constraint change, and organize() updates each child via move()+resize() (two
+    -- set_constraints each). Because our box holds a Fixed handle, reposition() also
+    -- runs organize(), so one nested box:reposition() fans out into O(branches^depth)
+    -- repositions — seconds for a handful of panes. Instead: update only the dragged
+    -- box's slot constraints with reposition suppressed (nested boxes' percentages are
+    -- unchanged and recompute automatically through the getter chain), then apply
+    -- native geometry over the sub-tree in a single O(n) pass.
+    --
+    -- _inResize is held across the whole operation: updateConsoleBorders (in the notify
+    -- below) calls setBorderSizes, which raises sysWindowResizeEvent; that handler would
+    -- otherwise re-run a full all-pane reposition and a second console rewrap. We've
+    -- already laid out the affected sub-tree, so the echo is pure duplication.
+    local wasInResize = Mux._inResize
+    Mux._inResize = true
+
+    Mux._suppressReposition(function() self.box:organize() end)
+
+    if Mux.debug then
+        local t0 = os.clock()
+        self:_applyGeometry(self.box)
+        local t1 = os.clock()
+        self:_notifyReposition()
+        local t2 = os.clock()
+        Mux._echo(string.format(
+            "\n<grey>[mux perf] %s leaves=%d  applyGeometry=%.0fms  notify=%.0fms<reset>\n",
+            self.id, self:_leafCount(), (t1 - t0) * 1000, (t2 - t1) * 1000))
+    else
+        self:_applyGeometry(self.box)
+        self:_notifyReposition()
+    end
+
+    Mux._inResize = wasInResize
+end
+
+-- Coalesced ratio update for live handle drags. Mudlet emits mouse-move events
+-- far faster than a full reposition (organize + reposition + per-pane notify)
+-- can complete, especially with many panes in the sub-tree. Calling _setRatio on
+-- every event lets repositions queue up faster than they finish, so the drag
+-- lags seconds behind the cursor while the backlog drains. Instead, we record
+-- only the latest target ratio and schedule a single pending flush; any events
+-- that arrive before it fires just overwrite the target. This caps reposition
+-- frequency to how fast one can actually complete, regardless of pane count or
+-- event rate. _flushRatio() applies the final value precisely on mouse release.
+function MuxSplit:_requestRatio(r)
+    self._pendingRatio = r
+    if self._reposScheduled then return end
+    self._reposScheduled = true
+    Mux._resizing = true
+    tempTimer(0, function()
+        self._reposScheduled = false
+        local pr = self._pendingRatio
+        self._pendingRatio = nil
+        if pr ~= nil then self:_setRatio(pr) end
+    end)
+end
+
+-- Applies any still-pending ratio immediately and ends the resize, then runs the
+-- titlebar overflow check (skipped during the drag) once across the sub-tree.
+function MuxSplit:_flushRatio()
+    if self._pendingRatio ~= nil then
+        local pr = self._pendingRatio
+        self._pendingRatio = nil
+        self:_setRatio(pr)
+    end
+    Mux._resizing = false
+    local function recheck(node)
+        if not node then return end
+        if node.outer then
+            if node.titlebar and node._checkOverflow then node:_checkOverflow() end
+        else
+            recheck(node.childA)
+            recheck(node.childB)
+        end
+    end
+    recheck(self.childA)
+    recheck(self.childB)
 end
 
 -- Accepts a MuxPane or a MuxSplit. Reparents its root widget into the slot.
@@ -477,10 +645,18 @@ function MuxSplit:_splitPaneInSlot(pane, direction, ratio)
     else                self.childB = newSplit
     end
 
-    self.box:organize()
-    self.box:reposition()
-
+    -- Lay out the new sub-tree without Geyser's set_constraints→reposition
+    -- re-entrancy (which made each split cost more as the tree grew). Update the
+    -- constraints with reposition suppressed, then apply native geometry once.
+    local wasInResize = Mux._inResize
+    Mux._inResize = true
+    Mux._suppressReposition(function()
+        self.box:organize()
+        newSplit.box:organize()
+    end)
+    self:_applyGeometry(self.box)
     Mux._notifyAllReposition()
+    Mux._inResize = wasInResize
 
     return newSplit
 end

@@ -65,7 +65,7 @@ local function paneRows(pane)
     end
     rows[#rows+1] = {
         label      = "Properties Button",
-        desc       = "Show the ≡ button in the titlebar. If hidden, use 'mux pane properties' to reopen",
+        desc       = "Show the ≡ button in the titlebar. If hidden (and the titlebar too), run 'mux reveal <id>' to restore it",
         type       = "toggle",
         trueLabel  = "Visible",
         falseLabel = "Hidden",
@@ -177,7 +177,7 @@ local function paneRows(pane)
     -- Group 3: Resizable, then Renamable + optional Name input together
     rows[#rows+1] = {
         label      = "Resizable",
-        desc       = "Show corner and edge drag handles for resizing (applies to floating panes)",
+        desc       = "Allow this pane to be resized. When off, no border of the pane can be dragged — its corner handles (when floating) and every split handle that would change its size are locked",
         type       = "toggle",
         trueLabel  = "Yes",
         falseLabel = "No",
@@ -189,7 +189,7 @@ local function paneRows(pane)
             else
                 pane:_hideCornerHandles()
             end
-            if pane._split then pane._split:_updateHandleResizability() end
+            pane:_refreshResizeHandles()
         end,
     }
     rows[#rows+1] = {
@@ -247,45 +247,47 @@ local function paneRows(pane)
         writeFn    = function(v) pane:setConnectionAware(v) end,
     }
 
-    -- Group 4: Size inputs
-    rows[#rows+1] = {
-        label   = "Width %",
-        desc    = "Set width as a percentage of screen width (1–99). Applies to floating panes or horizontal splits",
-        type    = "text",
-        readFn  = function()
-            local sw = getMainWindowSize()
-            if pane.floating then
-                return tostring(math.floor(pane.floatW / sw * 100))
-            elseif pane._split and pane._split.direction == "h" then
-                local r = (pane._slotSide == "a") and pane._split.ratio or (1 - pane._split.ratio)
-                return tostring(math.floor(r * 100))
-            end
-            return ""
-        end,
-        writeFn = function(v)
-            local pct = tonumber(v:match("%d+"))
-            if pct then Mux.resizePaneToWidth(pane, pct) end
-        end,
-    }
-    rows[#rows+1] = {
-        label   = "Height %",
-        desc    = "Set height as a percentage of screen height (1–99). Applies to floating panes or vertical splits",
-        type    = "text",
-        readFn  = function()
-            local _, sh = getMainWindowSize()
-            if pane.floating then
-                return tostring(math.floor(pane.floatH / sh * 100))
-            elseif pane._split and pane._split.direction == "v" then
-                local r = (pane._slotSide == "a") and pane._split.ratio or (1 - pane._split.ratio)
-                return tostring(math.floor(r * 100))
-            end
-            return ""
-        end,
-        writeFn = function(v)
-            local pct = tonumber(v:match("%d+"))
-            if pct then Mux.resizePaneToHeight(pane, pct) end
-        end,
-    }
+    -- Group 4: Size inputs. Width applies to floating panes or when some
+    -- side-by-side split exists above the pane; height likewise for top/bottom.
+    -- The displayed value is the pane's actual size as a percentage of the
+    -- screen, regardless of which split controls it.
+    local canWidth  = pane.floating or Mux._ancestorSplitOfDirection(pane, "h") ~= nil
+    local canHeight = pane.floating or Mux._ancestorSplitOfDirection(pane, "v") ~= nil
+
+    if canWidth then
+        rows[#rows+1] = {
+            label   = "Width %",
+            desc    = "Set width as a percentage of the screen (1–99)",
+            type    = "text",
+            readFn  = function()
+                local sw = getMainWindowSize()
+                local w  = pane.floating and pane.floatW or (pane.width and pane:width())
+                if not w or w <= 0 or not sw or sw <= 0 then return "" end
+                return tostring(math.floor(w / sw * 100))
+            end,
+            writeFn = function(v)
+                local pct = tonumber(v:match("%d+"))
+                if pct then Mux.resizePaneToWidth(pane, pct) end
+            end,
+        }
+    end
+    if canHeight then
+        rows[#rows+1] = {
+            label   = "Height %",
+            desc    = "Set height as a percentage of the screen (1–99)",
+            type    = "text",
+            readFn  = function()
+                local _, sh = getMainWindowSize()
+                local h     = pane.floating and pane.floatH or (pane.height and pane:height())
+                if not h or h <= 0 or not sh or sh <= 0 then return "" end
+                return tostring(math.floor(h / sh * 100))
+            end,
+            writeFn = function(v)
+                local pct = tonumber(v:match("%d+"))
+                if pct then Mux.resizePaneToHeight(pane, pct) end
+            end,
+        }
+    end
     return rows
 end
 
@@ -485,6 +487,7 @@ local function openPropsDialog(title, rows, targetPane, posX, posY)
         title         = title,
         x = posX, y = posY, width = dialogW, height = dialogH,
         contextMenu   = false,
+        singleton     = targetPane and ("muxprops:" .. tostring(targetPane.id)) or nil,
     })
 
     -- Track on the target so close() / removeTab() can clean us up.
@@ -514,13 +517,14 @@ local function openPropsDialog(title, rows, targetPane, posX, posY)
                 if #reasons > 0 then
                     local reasonStr = table.concat(reasons, " and ")
                     message = "This pane has a <b>" .. reasonStr .. "</b>.<br/>"
-                           .. "To reopen Properties use: "
-                           .. "<tt style='color:#8ab4ff;'>mux pane properties</tt>"
+                           .. "To restore its controls, run: "
+                           .. "<tt style='color:#8ab4ff;'>mux reveal " .. (targetPane.id or "&lt;id&gt;") .. "</tt>"
                 end
             elseif targetPane.propertiesButton == false then
                 -- Tab target
                 message = "This tab's <b>Properties is hidden</b> from its right-click menu.<br/>"
-                       .. "There is no other UI path to reopen this dialog."
+                       .. "To restore it, run: "
+                       .. "<tt style='color:#8ab4ff;'>mux reveal " .. (targetPane.id or "&lt;id&gt;") .. "</tt>"
             end
             if message then
                 Mux._showPropsCloseConfirm(message, function() d:close() end)
@@ -547,26 +551,15 @@ local function closeExistingPropsDialogs(target)
 end
 
 function Mux.showPaneProperties(pane)
-    -- Raise existing dialog rather than opening a duplicate.
-    if pane._propertiesDialogs then
-        for _, dlg in pairs(pane._propertiesDialogs) do
-            if dlg.show  then dlg:show()  end
-            if dlg.raise then dlg:raise() end
-            return
-        end
-    end
+    -- Singleton: raise the existing dialog rather than opening a duplicate.
+    local existing = Mux.getDialog("muxprops:" .. tostring(pane.id))
+    if existing then existing:show(); existing:raise(); return end
     openPropsDialog(string.format("Properties: %s", pane.name), paneRows(pane), pane)
 end
 
 function Mux.showTabProperties(host, tab)
-    -- Raise existing dialog rather than opening a duplicate.
-    if tab._propertiesDialogs then
-        for _, dlg in pairs(tab._propertiesDialogs) do
-            if dlg.show  then dlg:show()  end
-            if dlg.raise then dlg:raise() end
-            return
-        end
-    end
+    local existing = Mux.getDialog("muxprops:" .. tostring(tab.id))
+    if existing then existing:show(); existing:raise(); return end
     openPropsDialog(string.format("Tab: %s", tab.name), tabRows(host, tab), tab)
 end
 
@@ -593,12 +586,16 @@ refreshTabProperties = function(host, tab)
 end
 
 function Mux._showPropsCloseConfirm(message, onProceed)
+    local key = "confirm:propsclose"
+    local existing = Mux.getDialog(key)
+    if existing then existing:show(); existing:raise(); return end
     local confirmD = Mux.createDialog({
         title       = "Confirm Close",
         width       = 380, height = 140,
         closeable   = false,
         minimizable = false,
         contextMenu = false,
+        singleton   = key,
     })
     _pendingPropsConfirm = { message = message, onProceed = onProceed }
     Mux._applyContent(confirmD, "mux_props_close_confirm")
