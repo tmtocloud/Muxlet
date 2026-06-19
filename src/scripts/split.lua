@@ -188,6 +188,25 @@ function MuxSplit:_updateHandleResizability()
     end
 end
 
+-- Fires onReposition for every MuxPane leaf in this split's subtree. Used after
+-- a ratio change: only descendants of this split change geometry, so notifying
+-- the whole workspace (as a structural change does) would be wasted work. During
+-- a live handle drag this runs every mouse-move frame, so keeping it scoped is
+-- what keeps embedded-resize cheap regardless of how many other panes exist.
+function MuxSplit:_notifyReposition()
+    local function walk(node)
+        if not node then return end
+        if node.outer then                       -- MuxPane leaf
+            if node.onReposition then node.onReposition(node) end
+        else                                     -- nested MuxSplit
+            walk(node.childA)
+            walk(node.childB)
+        end
+    end
+    walk(self.childA)
+    walk(self.childB)
+end
+
 function MuxSplit:_setRatio(r)
     self.ratio = r
     if self.direction == "v" then
@@ -204,9 +223,7 @@ function MuxSplit:_setRatio(r)
     -- so organize() must be called first to ensure correct ordering.
     self.box:organize()
     self.box:reposition()
-    for _, p in pairs(Mux._panes) do
-        if p.onReposition then p.onReposition(p) end
-    end
+    self:_notifyReposition()
 end
 
 -- Accepts a MuxPane or a MuxSplit. Reparents its root widget into the slot.
@@ -316,9 +333,7 @@ function MuxSplit:collapseSlot(closedSide)
             else
                 parentContainer:reposition()
             end
-            for _, p in pairs(Mux._panes) do
-                if p.onReposition then p.onReposition(p) end
-            end
+            Mux._notifyAllReposition()
             return
         else
             sibling._split    = nil
@@ -428,9 +443,7 @@ function MuxSplit:collapseSlot(closedSide)
         parentContainer:reposition()
     end
 
-    for _, p in pairs(Mux._panes) do
-        if p.onReposition then p.onReposition(p) end
-    end
+    Mux._notifyAllReposition()
 
     Mux._log("MuxSplit.collapseSlot: %s retired, sibling promoted", self.id)
 end
@@ -467,9 +480,7 @@ function MuxSplit:_splitPaneInSlot(pane, direction, ratio)
     self.box:organize()
     self.box:reposition()
 
-    for _, p in pairs(Mux._panes) do
-        if p.onReposition then p.onReposition(p) end
-    end
+    Mux._notifyAllReposition()
 
     return newSplit
 end
@@ -518,9 +529,7 @@ function MuxSplit:_splitAndEmbed(existingPane, floatingPane, direction, floatOnS
 
     self.box:organize()
     self.box:reposition()
-    for _, p in pairs(Mux._panes) do
-        if p.onReposition then p.onReposition(p) end
-    end
+    Mux._notifyAllReposition()
     Mux._log("MuxSplit._splitAndEmbed: new split %s in slot_%s of %s",
         newSplit.id, existingSide, self.id)
     return newSplit
@@ -565,9 +574,7 @@ function MuxSplit:swapSlots()
 
     self.box:organize()
     self.box:reposition()
-    for _, p in pairs(Mux._panes) do
-        if p.onReposition then p.onReposition(p) end
-    end
+    Mux._notifyAllReposition()
     Mux._scheduleAutoSave()
     Mux._log("MuxSplit.swapSlots: %s swapped a↔b", self.id)
 end

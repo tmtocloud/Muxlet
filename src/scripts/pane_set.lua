@@ -116,14 +116,6 @@ function MuxPaneSet:setRoot(child)
     Mux._log("MuxPaneSet.setRoot: %s in %s", child.id, self.id)
 end
 
--- Create a single empty pane and set it as root. Returns the MuxPane.
-function MuxPaneSet:newRootPane(paneOpts)
-    local p = MuxPane:new(Mux._merge(paneOpts or {}, { parent = self.outer }))
-    self.root = p
-    p._paneSet = self
-    return p
-end
-
 function MuxPaneSet:show()
     if self.visible then return end
     self.visible = true

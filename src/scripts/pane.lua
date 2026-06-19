@@ -455,264 +455,161 @@ function MuxPane:_buildTitlebar(theme)
         self:embed()
     end)
 
-    -- infoBtn: positioned dynamically just after the pane name text ends.
-    -- Shows a gear (⚙) for panes that own the Settings panel, or a list
-    -- icon (≡) for panes where Properties is available. Hidden otherwise.
-    self.infoBtn = Geyser.Label:new({
-        name   = self._gid .. "_info",
-        x      = tostring(self:_infoBtnX()),
-        y      = tostring(btnY),
-        width  = tostring(theme.btnSize),
-        height = tostring(btnH),
-        fillBg = 1,
-    }, self.header)
-    self.infoBtn:setStyleSheet(theme.btnCss or "")
-    local infoBtnIcon = self.showSettingsInMenu and "⚙" or "≡"
-    local function infoBtnEcho(hovered)
-        local tc = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
-        self.infoBtn:echo(string.format("<center><font color='%s'>%s</font></center>", tc, infoBtnIcon))
-    end
-    self._infoBtnEcho = infoBtnEcho
-    infoBtnEcho(false)
-    self.infoBtn:setToolTip(self.showSettingsInMenu and "Settings" or "Properties")
-    self.infoBtn:setOnEnter(function()
-        self.infoBtn:setStyleSheet(Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss)
-        infoBtnEcho(true)
-    end)
-    self.infoBtn:setOnLeave(function()
-        self.infoBtn:setStyleSheet(Mux.activeTheme().btnCss or "")
-        infoBtnEcho(false)
-    end)
-    self.infoBtn:setClickCallback(function(event)
-        if event.button ~= "LeftButton" then return end
-        if self.showSettingsInMenu then
-            Mux.settings.toggle()
-        else
-            Mux.showPaneProperties(self)
+    -- ── Titlebar buttons ──────────────────────────────────────────────────────
+    -- Every titlebar button is an identically shaped Label in the header that
+    -- swaps stylesheet + glyph colour on hover and runs a click handler.
+    -- _makeTitlebarButton builds one from a spec and returns the Label plus its
+    -- echo closure; the closure is stored on self so applyTheme(), lock/unlock,
+    -- and zoom toggling can repaint the glyph. Qt ignores CSS `color:` on a
+    -- QLabel containing rich text, so the glyph colour is set with <font color>.
+    --
+    -- spec fields:
+    --   suffix    widget-name suffix appended to self._gid
+    --   x         Geyser x (negative string = px from the header's right edge)
+    --   icon      glyph string, or a function returning one (for dynamic icons)
+    --   tooltip   hover tooltip (optional)
+    --   hoverCss  theme key for the hover stylesheet (default "minHoverCss")
+    --   onClick   click callback (optional)
+    local function makeTitlebarButton(spec)
+        local btn = Geyser.Label:new({
+            name   = self._gid .. spec.suffix,
+            x      = spec.x,
+            y      = tostring(btnY),
+            width  = tostring(theme.btnSize),
+            height = tostring(btnH),
+            fillBg = 1,
+        }, self.header)
+        btn:setStyleSheet(theme.btnCss or "")
+        local hoverKey = spec.hoverCss or "minHoverCss"
+        local function echo(hovered)
+            local tc   = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
+            local icon = (type(spec.icon) == "function") and spec.icon() or spec.icon
+            btn:echo(string.format("<center><font color='%s'>%s</font></center>", tc, icon))
         end
-    end)
+        echo(false)
+        if spec.tooltip then btn:setToolTip(spec.tooltip) end
+        btn:setOnEnter(function()
+            btn:setStyleSheet(Mux.activeTheme()[hoverKey] or Mux.activeTheme().btnCss)
+            echo(true)
+        end)
+        btn:setOnLeave(function()
+            btn:setStyleSheet(Mux.activeTheme().btnCss or "")
+            echo(false)
+        end)
+        if spec.onClick then btn:setClickCallback(spec.onClick) end
+        return btn, echo
+    end
+
+    -- infoBtn sits just after the pane name (x via _infoBtnX). Gear (⚙) for panes
+    -- that own the Settings panel, list icon (≡) where Properties applies.
     -- Visibility is managed by _applyTitlebarVisibility.
+    self.infoBtn, self._infoBtnEcho = makeTitlebarButton({
+        suffix  = "_info",
+        x       = tostring(self:_infoBtnX()),
+        icon    = self.showSettingsInMenu and "⚙" or "≡",
+        tooltip = self.showSettingsInMenu and "Settings" or "Properties",
+        onClick = function(event)
+            if event.button ~= "LeftButton" then return end
+            if self.showSettingsInMenu then
+                Mux.settings.toggle()
+            else
+                Mux.showPaneProperties(self)
+            end
+        end,
+    })
 
-    -- closeBtn: x="-20" places it 20px from the right edge of header.
-    self.closeBtn = Geyser.Label:new({
-        name    = self._gid .. "_close",
-        x       = "-20",
-        y       = tostring(btnY),
-        width   = tostring(theme.btnSize),
-        height  = tostring(btnH),
-        fillBg  = 1,
-    }, self.header)
-    -- Qt ignores CSS color: on a QLabel containing rich text; use <font color> instead.
-    local function closeBtnEcho(hovered)
-        local tc = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
-        self.closeBtn:echo(string.format("<center><font color='%s'>✕</font></center>", tc))
-    end
-    self.closeBtn:setStyleSheet(theme.btnCss or "")
-    closeBtnEcho(false)
-    self.closeBtn:setToolTip("Close pane")
-    self.closeBtn:setOnEnter(function()
-        self.closeBtn:setStyleSheet(Mux.activeTheme().closeHoverCss or Mux.activeTheme().btnCss)
-        closeBtnEcho(true)
-    end)
-    self.closeBtn:setOnLeave(function()
-        self.closeBtn:setStyleSheet(Mux.activeTheme().btnCss or "")
-        closeBtnEcho(false)
-    end)
-    self.closeBtn:setClickCallback(function(event)
-        if event.button == "LeftButton" then self:_confirmClose() end
-    end)
+    -- closeBtn: 20px from the right edge. Uses the dedicated close-hover style.
+    self.closeBtn, self._closeBtnEcho = makeTitlebarButton({
+        suffix   = "_close",
+        x        = "-20",
+        icon     = "✕",
+        tooltip  = "Close pane",
+        hoverCss = "closeHoverCss",
+        onClick  = function(event)
+            if event.button == "LeftButton" then self:_confirmClose() end
+        end,
+    })
 
-    -- minBtn: x="-42" = btnSize(18) + gap(2) + close_offset(20) + margin(2)
-    self.minBtn = Geyser.Label:new({
-        name    = self._gid .. "_min",
+    -- minBtn: x="-42" = btnSize(18) + gap(2) + close offset(20) + margin(2).
+    self.minBtn, self._minBtnEcho = makeTitlebarButton({
+        suffix  = "_min",
         x       = "-42",
-        y       = tostring(btnY),
-        width   = tostring(theme.btnSize),
-        height  = tostring(btnH),
-        fillBg  = 1,
-    }, self.header)
-    local function minBtnEcho(hovered)
-        local tc = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
-        self.minBtn:echo(string.format("<center><font color='%s'>–</font></center>", tc))
-    end
-    self.minBtn:setStyleSheet(theme.btnCss or "")
-    minBtnEcho(false)
-    self.minBtn:setToolTip("Minimize pane")
-    self.minBtn:setOnEnter(function()
-        self.minBtn:setStyleSheet(Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss)
-        minBtnEcho(true)
-    end)
-    self.minBtn:setOnLeave(function()
-        self.minBtn:setStyleSheet(Mux.activeTheme().btnCss or "")
-        minBtnEcho(false)
-    end)
-    self.minBtn:setClickCallback(function(event)
-        if event.button == "LeftButton" then self:toggleMinimize() end
-    end)
+        icon    = "–",
+        tooltip = "Minimize pane",
+        onClick = function(event)
+            if event.button == "LeftButton" then self:toggleMinimize() end
+        end,
+    })
 
-    -- zoomBtn: x="-70" places it left of minBtn with a clear visual gap.
-    -- Close occupies [-20,-2], min occupies [-42,-24]; zoom occupies [-70,-52]
-    -- giving a 10px gap to minBtn and 32px gap to close when minBtn is hidden.
-    self.zoomBtn = Geyser.Label:new({
-        name   = self._gid .. "_zoom",
-        x      = "-70",
-        y      = tostring(btnY),
-        width  = tostring(theme.btnSize),
-        height = tostring(btnH),
-        fillBg = 1,
-    }, self.header)
-    self.zoomBtn:setStyleSheet(theme.btnCss or "")
-    local function zoomBtnEcho(hovered)
-        local tc   = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
-        local icon = self._zoomed and "⧉" or "<span style='font-size:12px;line-height:1;'>□</span>"
-        self.zoomBtn:echo(string.format("<center><font color='%s'>%s</font></center>", tc, icon))
-    end
-    self._zoomBtnEcho = zoomBtnEcho
-    zoomBtnEcho(false)
-    self.zoomBtn:setToolTip("Zoom")
-    self.zoomBtn:setOnEnter(function()
-        self.zoomBtn:setStyleSheet(Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss)
-        zoomBtnEcho(true)
-    end)
-    self.zoomBtn:setOnLeave(function()
-        self.zoomBtn:setStyleSheet(Mux.activeTheme().btnCss or "")
-        zoomBtnEcho(false)
-    end)
-    self.zoomBtn:setClickCallback(function(event)
-        if event.button == "LeftButton" then self:zoom() end
-    end)
+    -- zoomBtn: x="-70", left of minBtn with a clear gap. Icon reflects zoom state.
+    self.zoomBtn, self._zoomBtnEcho = makeTitlebarButton({
+        suffix  = "_zoom",
+        x       = "-70",
+        icon    = function()
+            return self._zoomed and "⧉" or "<span style='font-size:12px;line-height:1;'>□</span>"
+        end,
+        tooltip = "Zoom",
+        onClick = function(event)
+            if event.button == "LeftButton" then self:zoom() end
+        end,
+    })
     self.zoomBtn:hide()  -- shown by _updateZoomBtn once embedded in a split
 
-    -- swapBtn: x="-96" — 8px gap after zoomBtn, a clear visual break before the action cluster.
-    -- splitHBtn at "-120" — 6px gap from swap. splitVBtn at "-140" — 2px gap from splitH.
-    self.swapBtn = Geyser.Label:new({
-        name   = self._gid .. "_swap",
-        x      = "-96",
-        y      = tostring(btnY),
-        width  = tostring(theme.btnSize),
-        height = tostring(btnH),
-        fillBg = 1,
-    }, self.header)
-    self.swapBtn:setStyleSheet(theme.btnCss or "")
-    local function swapBtnEcho(hovered)
-        local tc = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
-        self.swapBtn:echo(string.format("<center><font color='%s'>⇔</font></center>", tc))
-    end
-    self._swapBtnEcho = swapBtnEcho
-    swapBtnEcho(false)
-    self.swapBtn:setToolTip("Swap with sibling")
-    self.swapBtn:setOnEnter(function()
-        self.swapBtn:setStyleSheet(Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss)
-        swapBtnEcho(true)
-    end)
-    self.swapBtn:setOnLeave(function()
-        self.swapBtn:setStyleSheet(Mux.activeTheme().btnCss or "")
-        swapBtnEcho(false)
-    end)
-    self.swapBtn:setClickCallback(function(event)
-        if event.button == "LeftButton" and self._split then
-            self._split:swapSlots()
-        end
-    end)
+    -- swapBtn: x="-96" — 8px gap after zoomBtn before the split/action cluster.
+    self.swapBtn, self._swapBtnEcho = makeTitlebarButton({
+        suffix  = "_swap",
+        x       = "-96",
+        icon    = "⇔",
+        tooltip = "Swap with sibling",
+        onClick = function(event)
+            if event.button == "LeftButton" and self._split then
+                self._split:swapSlots()
+            end
+        end,
+    })
     if not self.swappable then self.swapBtn:hide() end
 
-    -- splitHBtn: horizontal split — one pane above the other (direction "v" internally).
-    -- Icon ═ (double horizontal bar) is distinct from the minimize – glyph.
-    self.splitHBtn = Geyser.Label:new({
-        name   = self._gid .. "_splitH",
-        x      = "-120",
-        y      = tostring(btnY),
-        width  = tostring(theme.btnSize),
-        height = tostring(btnH),
-        fillBg = 1,
-    }, self.header)
-    self.splitHBtn:setStyleSheet(theme.btnCss or "")
-    local function splitHBtnEcho(hovered)
-        local tc = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
-        self.splitHBtn:echo(string.format("<center><font color='%s'>═</font></center>", tc))
-    end
-    self._splitHBtnEcho = splitHBtnEcho
-    splitHBtnEcho(false)
-    self.splitHBtn:setToolTip("Split horizontally (top / bottom)")
-    self.splitHBtn:setOnEnter(function()
-        self.splitHBtn:setStyleSheet(Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss)
-        splitHBtnEcho(true)
-    end)
-    self.splitHBtn:setOnLeave(function()
-        self.splitHBtn:setStyleSheet(Mux.activeTheme().btnCss or "")
-        splitHBtnEcho(false)
-    end)
-    self.splitHBtn:setClickCallback(function(event)
-        if event.button == "LeftButton" then
-            Mux.setFocus(self)
-            Mux.splitFocused("v")
-        end
-    end)
+    -- splitHBtn: x="-120" — horizontal split (one pane above the other; "v" internally).
+    self.splitHBtn, self._splitHBtnEcho = makeTitlebarButton({
+        suffix  = "_splitH",
+        x       = "-120",
+        icon    = "═",
+        tooltip = "Split horizontally (top / bottom)",
+        onClick = function(event)
+            if event.button == "LeftButton" then
+                Mux.setFocus(self)
+                Mux.splitFocused("v")
+            end
+        end,
+    })
     if not self.splittable then self.splitHBtn:hide() end
 
-    -- splitVBtn: vertical split — two panes side by side (direction "h" internally).
-    -- Icon ║ (double vertical bar) represents the divider between left and right panes.
-    self.splitVBtn = Geyser.Label:new({
-        name   = self._gid .. "_splitV",
-        x      = "-140",
-        y      = tostring(btnY),
-        width  = tostring(theme.btnSize),
-        height = tostring(btnH),
-        fillBg = 1,
-    }, self.header)
-    self.splitVBtn:setStyleSheet(theme.btnCss or "")
-    local function splitVBtnEcho(hovered)
-        local tc = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
-        self.splitVBtn:echo(string.format("<center><font color='%s'>║</font></center>", tc))
-    end
-    self._splitVBtnEcho = splitVBtnEcho
-    splitVBtnEcho(false)
-    self.splitVBtn:setToolTip("Split vertically (side by side)")
-    self.splitVBtn:setOnEnter(function()
-        self.splitVBtn:setStyleSheet(Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss)
-        splitVBtnEcho(true)
-    end)
-    self.splitVBtn:setOnLeave(function()
-        self.splitVBtn:setStyleSheet(Mux.activeTheme().btnCss or "")
-        splitVBtnEcho(false)
-    end)
-    self.splitVBtn:setClickCallback(function(event)
-        if event.button == "LeftButton" then
-            Mux.setFocus(self)
-            Mux.splitFocused("h")
-        end
-    end)
+    -- splitVBtn: x="-140" — vertical split (two panes side by side; "h" internally).
+    self.splitVBtn, self._splitVBtnEcho = makeTitlebarButton({
+        suffix  = "_splitV",
+        x       = "-140",
+        icon    = "║",
+        tooltip = "Split vertically (side by side)",
+        onClick = function(event)
+            if event.button == "LeftButton" then
+                Mux.setFocus(self)
+                Mux.splitFocused("h")
+            end
+        end,
+    })
     if not self.splittable then self.splitVBtn:hide() end
 
-    -- contentBtn: x="-210" — ~52px gap left of the split cluster, clearly separated from split buttons.
-    self.contentBtn = Geyser.Label:new({
-        name   = self._gid .. "_cadd",
-        x      = "-210",
-        y      = tostring(btnY),
-        width  = tostring(theme.btnSize),
-        height = tostring(btnH),
-        fillBg = 1,
-    }, self.header)
-    self.contentBtn:setStyleSheet(theme.btnCss or "")
-    local function contentBtnEcho(hovered)
-        local tc = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
-        self.contentBtn:echo(string.format("<center><font color='%s'>▥</font></center>", tc))
-    end
-    self._contentBtnEcho = contentBtnEcho
-    contentBtnEcho(false)
-    self.contentBtn:setToolTip("Content Library")
-    self.contentBtn:setOnEnter(function()
-        self.contentBtn:setStyleSheet(Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss)
-        contentBtnEcho(true)
-    end)
-    self.contentBtn:setOnLeave(function()
-        self.contentBtn:setStyleSheet(Mux.activeTheme().btnCss or "")
-        contentBtnEcho(false)
-    end)
-    self.contentBtn:setClickCallback(function(event)
-        if event.button ~= "LeftButton" then return end
-        Mux._showContentLibrary(self)
-    end)
+    -- contentBtn: x="-210" — separated from the split cluster.
+    self.contentBtn, self._contentBtnEcho = makeTitlebarButton({
+        suffix  = "_cadd",
+        x       = "-210",
+        icon    = "▥",
+        tooltip = "Content Library",
+        onClick = function(event)
+            if event.button ~= "LeftButton" then return end
+            Mux._showContentLibrary(self)
+        end,
+    })
     if not self.contentable then self.contentBtn:hide() end
 
     -- reveal strip: shown when titlebar is hidden; right-click only via Alt+[ or mux titlebar
@@ -1510,18 +1407,17 @@ function MuxPane:applyTheme()
         self.titlebar:echo(string.format("<span style='color:%s;'>&nbsp;&nbsp;%s</span>", tbc, self.name))
         self:_updateInfoBtnPos()
     end
-    local tc = theme.btnTextColor or "#aaaabb"
     if self.infoBtn then
         self.infoBtn:setStyleSheet(theme.btnCss or "")
         if self._infoBtnEcho then self._infoBtnEcho(false) end
     end
     if self.closeBtn   then
         self.closeBtn:setStyleSheet(theme.btnCss or "")
-        self.closeBtn:echo(string.format("<center><font color='%s'>✕</font></center>", tc))
+        if self._closeBtnEcho then self._closeBtnEcho(false) end
     end
     if self.minBtn     then
         self.minBtn:setStyleSheet(theme.btnCss or "")
-        self.minBtn:echo(string.format("<center><font color='%s'>–</font></center>", tc))
+        if self._minBtnEcho then self._minBtnEcho(false) end
     end
     if self.zoomBtn    then
         self.zoomBtn:setStyleSheet(theme.btnCss or "")

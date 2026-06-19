@@ -157,9 +157,7 @@ function Mux.applyWorkspace(name)
                 p._pendingContent = nil
             end
         end
-        for _, p in pairs(Mux._panes) do
-            if p.onReposition then p.onReposition(p) end
-        end
+        Mux._notifyAllReposition()
         if not Mux._focusedPane then
             local target
             for _, p in pairs(Mux._panes) do

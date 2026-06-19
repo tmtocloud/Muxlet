@@ -1,12 +1,6 @@
 -- Muxlet manager — public API for pane creation, focus, and workspace operations.
 
 function Mux.newPane(opts)      return MuxPane:new(opts)    end
-function Mux.newSplit(opts, a, b)
-    local s = MuxSplit:new(opts)
-    if a then s:place(a, "a") end
-    if b then s:place(b, "b") end
-    return s
-end
 function Mux.newPaneSet(opts)  return MuxPaneSet:new(opts) end
 
 function Mux.getPane(id)     return Mux._panes[id]     end
@@ -165,9 +159,7 @@ function Mux.splitFocused(direction, ratio)
         ps.root = newSplit
         newSplit.box:organize()
         newSplit.box:reposition()
-        for _, p in pairs(Mux._panes) do
-            if p.onReposition then p.onReposition(p) end
-        end
+        Mux._notifyAllReposition()
         tempTimer(0, function()
             Mux.setFocus(newPane)
             Mux.raiseFloatingPanes()
@@ -566,48 +558,6 @@ function Mux._clearWorkspace()
     Mux._borders = { top = 0, right = 0, bottom = 0, left = 0 }
     Mux._applyBorders()
     Mux._log("_clearWorkspace: cleared")
-end
-
--- Creates a MiniConsole inside the named pane's content area and installs a
--- catch-all trigger that appends every game output line to it.
-Mux._outputCapture = nil    -- tempTrigger ID
-Mux._outputConsole = nil    -- Geyser.MiniConsole name (string)
-
-function Mux.setupOutputCapture(paneId)
-    paneId = paneId or "output"
-    local pane = Mux._panes[paneId]
-    if not pane then
-        Mux._err("setupOutputCapture: pane '%s' not found", paneId)
-        return
-    end
-
-    if Mux._outputCapture then
-        killTrigger(Mux._outputCapture)
-        Mux._outputCapture = nil
-    end
-
-    local conName = "mux_output_" .. paneId
-
-    if not Geyser.windowList[conName] then
-        Geyser.MiniConsole:new({
-            name      = conName,
-            x = "0%", y = "0%", width = "100%", height = "100%",
-            fontSize  = 12, color = "black",
-            scrollBar = true, autoWrap = true,
-        }, pane.content)
-    end
-    Mux._outputConsole = conName
-
-    -- appendBuffer preserves ANSI colour; echo adds the required trailing newline.
-    Mux._outputCapture = tempTrigger(".*", function()
-        selectCurrentLine()
-        appendBuffer(conName)
-        echo(conName, "\n")
-    end)
-
-    Mux._echo(string.format(
-        "\n<green>[Muxlet]<reset> Game output → pane '%s' (console: %s)\n",
-        paneId, conName))
 end
 
 -- fullStop  — destroys all visible widgets, kills the resize handler, reloads

@@ -24,6 +24,17 @@ panes = setmetatable({}, {
     end,
 })
 
+-- Fires onReposition for every live pane. Used after structural or global
+-- geometry changes (window resize, workspace restore, embed/remove/split/swap)
+-- where panes across the whole workspace may have moved. For a localized ratio
+-- change during a handle drag, use MuxSplit:_notifyReposition() instead, which
+-- only walks the affected subtree.
+function Mux._notifyAllReposition()
+    for _, p in pairs(Mux._panes) do
+        if p.onReposition then p.onReposition(p) end
+    end
+end
+
 -- User-facing IDs (pane_N, split_N, ps_N) recycle freed numbers via _idFree.
 -- Internal widget names (mux_w_N) never recycle — Qt holds named widgets in
 -- memory even when hidden, so recycled names would alias old destroyed widgets.
@@ -774,9 +785,7 @@ function Mux._registerResizeHandler()
         for _, ps in pairs(Mux._paneSets) do
             if ps._onWindowResize then ps:_onWindowResize() end
         end
-        for _, p in pairs(Mux._panes) do
-            if p.onReposition then p.onReposition(p) end
-        end
+        Mux._notifyAllReposition()
         Mux._inResize = false
     end)
 end
@@ -1024,9 +1033,7 @@ function Mux._doInsertAtEdge(floatingPane, targetPane, edge)
         resizeWindow(newSplit.box.name, ps.outer:get_width(), ps.outer:get_height())
         newSplit.box:organize()
         newSplit.box:reposition()
-        for _, p in pairs(Mux._panes) do
-            if p.onReposition then p.onReposition(p) end
-        end
+        Mux._notifyAllReposition()
     end
     Mux._log("doInsertAtEdge: %s → %s edge=%s", floatingPane.id, targetPane.id, edge)
 end
