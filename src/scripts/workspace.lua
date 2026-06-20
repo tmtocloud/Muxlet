@@ -155,7 +155,7 @@ function Mux.applyWorkspace(name)
             name, _clearMs, _buildMs))
     end
 
-    -- Restore floating panes after pane-set geometry resolves.
+    -- Restore floating panes after panespace geometry resolves.
     local floatingPanes = def.floatingPanes or {}
     if #floatingPanes > 0 then
         tempTimer(0.2, function()
