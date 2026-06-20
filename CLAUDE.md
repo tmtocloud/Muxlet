@@ -320,7 +320,7 @@ src/scripts/pane.lua               — MuxPane class: construction, titlebar, lo
 src/scripts/tabs.lua               — Tab infrastructure: buildTabInfrastructure, addTab, activateTabObj
 src/scripts/connection.lua         — connectionAware pane/tab integration
 src/scripts/split.lua              — MuxSplit: binary split with drag-resize handle
-src/scripts/pane_space.lua           — MuxPaneSpace: border-zone management, root node management
+src/scripts/panespace.lua           — MuxPaneSpace: border-zone management, root node management
 src/scripts/manager.lua            — pane lookup (getPane), z-order (raisePane / raiseFloatingPanes via Mux._raiseSeq), recovery (mux panes / mux reveal). No focus tracking — panes are styled by their resting frame, not a focus border.
 src/scripts/dialog.lua             — Mux.createDialog(opts), Mux.dialogCss palette
 src/scripts/widgets.lua            — Mux.ui declarative, theme-aware form builder (buildForm/specHeight/formHeight)
@@ -333,7 +333,7 @@ src/scripts/themes/                — dark.lua, light.lua (theme definitions)
 src/aliases/mux.lua                — the `mux` command alias (parses all subcommands)
 ```
 
-Load order (`src/scripts/scripts.json`): globals → settings → content → update → theme → pane → tabs → connection → split → pane_space → manager → dialog → widgets → welcome → workspace → content_builtins → properties → devmode → themes
+Load order (`src/scripts/scripts.json`): globals → settings → content → update → theme → pane → tabs → connection → split → panespace → manager → dialog → widgets → welcome → workspace → content_builtins → properties → devmode → themes
 
 There is no keybinds module. Muxlet ships no Alt+key bindings; every action is reachable through the `mux` command alias, the titlebar buttons, and the context menus. (The reveal-strip tooltip in `pane.lua` mentions "Press Alt+[ to restore titlebar," but no such binding is registered — the tooltip text is stale and the titlebar is restored by clicking the reveal strip, through the Properties dialog, with `pane:setTitlebarVisible(true)`, or with `mux reveal <id>`. Treat that tooltip as a known bug, not a documented feature.)
 

@@ -236,24 +236,22 @@ A workspace is a complete snapshot of the pane/split tree, theme, and content as
 Mux.registerWorkspace("my-game-layout", {
     name  = "My Game Layout",
     theme = "dark",          -- optional; uses the active theme if omitted
-    paneSpaces = {
-        {
-            id   = "screen",
-            zone = "screen",
-            root = {
-                type = "split", direction = "v", ratio = 0.70,
-                a = {
-                    type            = "pane",
-                    id              = "output",
-                    name            = "Main",
-                    mainConsoleHost = true,
-                },
-                b = {
-                    type = "split", direction = "h", ratio = 0.50,
-                    a = { type = "pane", id = "chat",   name = "Chat" },
-                    b = { type = "pane", id = "status", name = "Status",
-                          activeContent = "gmcp:char.vitals" },
-                },
+    paneSpace = {
+        id   = "screen",
+        zone = "screen",
+        root = {
+            type = "split", direction = "v", ratio = 0.70,
+            a = {
+                type            = "pane",
+                id              = "output",
+                name            = "Main",
+                mainConsoleHost = true,
+            },
+            b = {
+                type = "split", direction = "h", ratio = 0.50,
+                a = { type = "pane", id = "chat",   name = "Chat" },
+                b = { type = "pane", id = "status", name = "Status",
+                      activeContent = "gmcp:char.vitals" },
             },
         },
     },
@@ -427,7 +425,7 @@ end
 
 ```lua
 Mux.registerWorkspace("with-float", {
-    paneSpaces = { ... },
+    paneSpace = { ... },
     floatingPanes = {
         {
             type   = "pane",
