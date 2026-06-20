@@ -32,6 +32,8 @@ Type `mux help` at any time for a command summary.
 
 ### Commands
 
+The `mux` alias covers sessions, workspaces, themes, settings, diagnostics, and recovery. There are no `mux pane …`, `mux tab …`, or `mux focus …` subcommands — panes and tabs are manipulated directly through their titlebar buttons, context menus, and drag gestures, or programmatically through methods on the pane/tab object (see *Accessing the Live Pane Graph*). Muxlet does not track a "focused" pane.
+
 #### Session
 
 | Command | Description |
@@ -41,42 +43,43 @@ Type `mux help` at any time for a command summary.
 | `mux reset` | Re-apply the reset workspace (configurable via the `mux.reset_workspace` setting; defaults to `default`) |
 | `mux status` | Show status overview (version, workspace, pane count) |
 
-#### Pane
+#### Panes (interactive + programmatic)
 
-All pane commands act on the **focused** pane — the one with a highlighted border. Click a pane titlebar to focus it.
+Use the pane's **titlebar buttons** (shown according to its capability flags): split vertical, split horizontal, swap with sibling, zoom, Content Library, minimize (floating panes), Properties (≡), and close. **Right-click** a titlebar for the full context menu. **Drag** a titlebar to move a floating pane, drop a pane on another pane's edge to insert a split, and drag a corner handle to resize.
 
-| Command | Description |
-|---------|-------------|
-| `mux pane split v [ratio]` | Split left / right (vertical divider); ratio is 0.0–1.0, default 0.5 |
-| `mux pane split h [ratio]` | Split top / bottom (horizontal divider) |
-| `mux pane zoom` | Zoom the focused pane to fill the screen; repeat to restore |
-| `mux pane swap` | Swap the focused pane with its sibling in the split |
-| `mux pane close` | Close the focused pane |
-| `mux pane float` | Detach the focused pane into a free-floating window |
-| `mux pane embed` | Re-attach the last floating pane into the split tree |
-| `mux pane titlebar` | Toggle the titlebar on the focused pane |
-| `mux pane rename <name>` | Rename the focused pane |
-| `mux pane lock` / `mux pane unlock` | Lock or unlock the focused pane |
-| `mux pane new [name]` | Create a new free-floating pane |
-| `mux pane width <1-99>` | Set the focused pane's width to a percentage of the screen width |
-| `mux pane height <1-99>` | Set the focused pane's height to a percentage of the screen height |
-| `mux pane properties` | Open the Properties dialog for the focused pane |
+Programmatic equivalents on any pane `p`:
 
-Locked panes ignore drag, close, split, and rename actions. Unlock with `mux pane unlock` before making structural changes.
+```lua
+p:split("v", 0.6)     -- "v" = left/right divider, "h" = top/bottom; ratio 0.0-1.0
+p:zoom()              -- fill the screen; call again to restore
+p:float() / p:embed()
+p:close()
+p:setName("Map")
+p:lock() / p:unlock()
+p:setTitlebarVisible(false)
+p._split:swapSlots()  -- swap a pane with its split sibling
+```
 
-#### Tab
+Locked panes ignore drag, close, split, and rename until `p:unlock()` (or context-menu Unlock).
 
-Tab commands act on the **active tab** in the focused pane.
+#### Tabs (interactive + programmatic)
 
-| Command | Description |
-|---------|-------------|
-| `mux tab add [name]` | Add a tab to the focused pane |
-| `mux tab close` | Close the active tab (shows a confirmation dialog) |
-| `mux tab rename [name]` | Rename the active tab; opens a dialog if no name is given |
-| `mux tab lock` / `mux tab unlock` | Lock or unlock the active tab |
-| `mux tab next` / `mux tab prev` | Switch to the next or previous tab |
+Add tabs from a pane's context menu (**Add Tab**); manage them via the tab labels:
 
-Drag tab labels to reorder them within a bar, or drop them onto a different pane's tab bar to move them. Middle-click a tab label to close it (with confirmation). Double-click a tab label to enter move mode — the tab turns red and drop targets appear on every bar so you can click to place it anywhere.
+- **Drag** a tab label to reorder it within a bar, or drop it onto a different pane's tab bar to move it.
+- **Middle-click** a tab label to close it (with confirmation).
+- **Double-click** a tab label to enter move mode — the tab turns red and drop targets appear on every bar so you can click to place it anywhere.
+- **Right-click** a tab for rename / lock / close / Properties.
+
+Tabs share the `MuxSurface` API with panes, so these methods exist on both:
+
+```lua
+p:enableTabs()           -- turn a pane into a tab host
+p:addTab("Status")       -- returns the new MuxTab
+p:activateTab(tabId)
+p:renameTab(tabId, "Chat")
+p:removeTab(tabId)
+```
 
 #### Workspace
 
@@ -116,12 +119,15 @@ mux settings set mux.auto_start true    — start automatically on every profile
 mux settings set mux.theme light        — switch to light theme persistently
 ```
 
-#### Focus
+#### Recovery
+
+If a pane's titlebar or Properties access has been hidden, these commands bring them back.
 
 | Command | Description |
 |---------|-------------|
-| `mux focus` | Show which pane currently has focus |
-| `mux focus next` / `mux focus prev` | Move focus forward or backward through panes |
+| `mux panes` | List every pane and tab with its id and hidden state |
+| `mux reveal <id>` | Restore the titlebar and Properties access on one pane or tab |
+| `mux reveal all` | Restore them across the entire workspace |
 
 #### Debug
 
@@ -300,9 +306,8 @@ All behavioral flags default to `true` (the permissive state). Set a flag to `fa
 | `movable` | bool | `true` | Allow repositioning by dragging the titlebar. |
 | `contextMenu` | bool | `true` | Show the right-click context menu on the titlebar. |
 | `propertiesButton` | bool | `true` | Show the Properties (≡) button in the titlebar and context menu. |
-| `highlightable` | bool | `true` | Show a focus border when this pane has keyboard/click focus. Set to `false` to keep the frame permanently unfocused-looking. |
 | `insertable` | bool | `true` | Include this pane as a drop target when another pane is dragged over it for edge-insertion. |
-| `overlay` | bool | `false` | Pane is always floating and excluded from workspace save/restore, the focus system, and ghost slots. Used for system dialogs and persistent HUDs that should not participate in the split tree. |
+| `overlay` | bool | `false` | Pane is always floating and excluded from workspace save/restore and ghost slots. Used for system dialogs and persistent HUDs that should not participate in the split tree. |
 | `transparentFrame` | bool | `false` | Makes the frame transparent and click-through. Use for HUD overlays that sit above the Qt surface without blocking interaction. |
 | `floatX` | number | `100` | Initial left edge (px) when the pane is floating. |
 | `floatY` | number | `100` | Initial top edge (px) when the pane is floating. |
@@ -316,7 +321,7 @@ Pre-create tabs on a pane by including a `tabs` array in the pane node. Each ent
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `name` | string | — | Display name shown on the tab label. |
-| `renamable` | bool | `true` | Allow renaming via the Properties dialog or `mux tab rename`. |
+| `renamable` | bool | `true` | Allow renaming via the Properties dialog. |
 | `closeable` | bool | `true` | Allow this tab to be closed. |
 | `movable` | bool | `true` | Allow this tab to be dragged to reorder or moved to another pane. |
 | `contentable` | bool | `true` | Allow Content Library assignments on this tab. |
@@ -533,7 +538,6 @@ registerAnonymousEventHandler("muxletReady", function()
         titlebarHeight  = 28,
         titlebarCss     = "background-color: #1e1e2e; border: none;",
         paneOuterCss    = "background-color: #181825; border: 2px solid #313244; border-radius: 4px;",
-        focusedFrameCss = "background-color: #181825; border: 2px solid #cba6f7; border-radius: 4px;",
         handleCss       = "background-color: #313244;",
         handleHoverCss  = "background-color: #45475a;",
     }))
@@ -787,19 +791,13 @@ local p = panes["sidebar"]        -- equivalent to Mux._panes["sidebar"]
 local s = Mux.getSplit("split_0001")
 local ps = Mux.getPaneSet("screen")
 
--- Focus control
-Mux.setFocus(panes["sidebar"])
-Mux.focusNext()
-Mux.focusPrev()
-Mux.focusAdjacent("right")   -- "left" | "right" | "up" | "down"
-
--- Structural operations
-Mux.splitFocused("v", 0.6)   -- "v" = left/right, "h" = top/bottom; ratio 0.0–1.0
-Mux.floatFocused()
-Mux.embedFocused()
-Mux.zoomFocused()
-Mux.swapFocused()
-Mux.closeFocused()
+-- Structural operations are methods on the pane object (there is no focus concept)
+panes["sidebar"]:split("v", 0.6)   -- "v" = left/right, "h" = top/bottom; ratio 0.0-1.0
+panes["sidebar"]:float()
+panes["sidebar"]:embed()
+panes["sidebar"]:zoom()
+panes["sidebar"]:close()
+s:swapSlots()                      -- swap the two children of a split node
 
 -- Raise all floating panes above embedded ones
 -- Call this after adding widgets to any floating or dialog pane.
@@ -812,8 +810,8 @@ The `panes` global is a metatable proxy over `Mux._panes`. Always use `panes["id
 
 ### Developer Notes
 
-- All Mux Lua identifiers use **camelCase** — `titlebarHeight`, `setFocus`, `applyTheme`. Match this in any code that touches Mux internals.
-- All behavioral pane flags use a **positive convention** — `closeable`, `minimizable`, `resizable`, `renamable`, `contentable`, `highlightable`, `convertible`, `contextMenu`, `propertiesButton`, `insertable`, `titlebarHideable`. A flag set to `false` restricts that capability; omitting it (or setting `true`) leaves it enabled. `lock()` sets all mutable flags to `false`; `unlock()` restores them.
+- All Mux Lua identifiers use **camelCase** — `titlebarHeight`, `setName`, `applyTheme`. Match this in any code that touches Mux internals.
+- All behavioral pane flags use a **positive convention** — `closeable`, `minimizable`, `resizable`, `renamable`, `contentable`, `convertible`, `contextMenu`, `propertiesButton`, `insertable`, `titlebarHideable`. A flag set to `false` restricts that capability; omitting it (or setting `true`) leaves it enabled. `lock()` sets all mutable flags to `false`; `unlock()` restores them.
 - `MuxPane`, `MuxSplit`, and `MuxPaneSet` are the three concrete classes. Instances are registered in `Mux._panes`, `Mux._splits`, and `Mux._paneSets` automatically on creation.
 - IDs (e.g. `pane_0003`) are user-facing and recycle freed numbers. Internal Geyser widget names (e.g. `mux_w_0042`) never recycle — Qt holds named widgets in memory and recycled names would alias destroyed widgets.
 - `Mux._scheduleAutoSave()` is called internally after every structural change. You do not need to call it unless you make external modifications to the pane graph.

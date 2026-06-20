@@ -9,7 +9,7 @@ Muxlet is a game-agnostic tiling window manager for Mudlet, written in Lua.  It 
 Every piece of Muxlet's own UI — settings window, properties dialog, popups, notifications — is a **MuxPane**.  Nothing uses native Mudlet dialogs or bare Geyser widgets as top-level windows.  This keeps the theme system universal: if the active theme changes, every surface refreshes automatically because `applyTheme()` walks `Mux._panes`.
 
 Consequences:
-- "Popup windows" → `Mux.createDialog(opts)` which returns a `permanentFloat` MuxPane.  Put widgets in `pane.content`.
+- "Popup windows" → `Mux.createDialog(opts)` which returns an `overlay` MuxPane.  Put widgets in `pane.content`.
 - "Settings window" → a dialog-mode MuxPane that is `locked`, `resizable = false`, `contextMenu = false`, with tabs enabled internally.
 - "Properties panel" → same dialog pattern, content applied via `Mux.registerContent`/`Mux._applyContent` so the placeholder is suppressed and the content lifecycle (singleton tracking, remove callbacks) is respected.
 - Any new system UI follows the same pattern.  Never create a raw `Geyser.Label` or `Geyser.Container` as a floating window; always go through `Mux.createDialog`.
@@ -44,7 +44,7 @@ What `saveWorkspace` / `_doAutoSave` capture per pane:
 - Float position (`floatX/Y/W/H`) for floating panes
 - Full tab tree (via `_serializeTabs`): tab names, locked state, active tab, nested sub-tab structure, each tab's `activeContent`
 
-`permanentFloat` panes (dialogs) are **excluded** from serialization — they are transient system UI.
+`overlay` panes (dialogs) are **excluded** from serialization — they are transient system UI.
 
 ---
 
@@ -84,6 +84,29 @@ Key behaviour:
 
 ---
 
+## Class model
+
+Runtime objects are built with a tiny factory, `Mux._class(parent)` (globals.lua). It returns a class table whose `__index` is itself; if a `parent` is given, the class's metatable falls through to the parent, so both instance lookups and static `Class.field` access inherit. Each class defines an `:init(opts)` hook; `Class:new(opts)` allocates the instance and calls `:init`.
+
+```
+MuxSurface = Mux._class()            -- shared base: content + name + lifecycle + tab-hosting
+MuxPane    = Mux._class(MuxSurface)  -- a chrome-wrapped surface (titlebar, borders, splits)
+MuxTab     = Mux._class(MuxSurface)  -- a content surface that lives in a tab bar
+MuxDialog  = Mux._class(MuxPane)     -- an overlay pane used for all system dialogs
+MuxSplit   = Mux._class()            -- a binary split node (not a surface)
+MuxPaneSet = Mux._class()            -- the root container / border-zone manager
+```
+
+**Why MuxSurface exists.** A tab is not a specialised pane — it never runs `MuxPane:init`, and has no titlebar, borders, or split machinery. But panes and tabs share two things: they both hold content (the `content`/`contentBg`/`_activeContent` trio and the `_applyContent` lifecycle), and they can both *host* a tab bar (a pane has tabs; a tab can have nested sub-tabs). Those shared concerns live on `MuxSurface`, so `MuxPane` and `MuxTab` are siblings that inherit them rather than one pretending to be the other. The content system treats any `target` (pane or tab) identically because both satisfy the `MuxSurface` interface. This is a clarity win, not a speed one — it costs one extra metatable hop.
+
+**MuxTab.** `addTab` builds a real `MuxTab:new({host = surface, id, name})` (tabs.lua). The tab owns its `content` container, `contentBg` placeholder, label, and the positive-convention flags (`renamable`, `closeable`, `movable`, `contentable`, `contextMenu`). `tab.pane` is the back-reference to its host surface.
+
+**MuxDialog.** `Mux.createDialog(opts)` is a thin wrapper that returns `MuxDialog:new(opts)`; existing call sites keep working unchanged. `MuxDialog:init` runs the pane chrome, forces `overlay`, applies the dialog palette, and claims the top of the raise order so a new dialog never lands underneath an older one (z-order is by an ascending `Mux._raiseSeq` counter; see manager.lua).
+
+**Tear-off seam (future).** `MuxSurface:_captureState()` snapshots a surface's name/content/flags/tabs. It is unused today; it exists so a tab can later be *promoted* into a standalone pane (drag-tab-to-pane) without a special-case path. Serialization stays inline for now.
+
+---
+
 ## MuxPane — constructor options and runtime fields
 
 `MuxPane:new(opts)` — most fields survive workspace serialization.
@@ -95,7 +118,7 @@ Behavioral flags follow the **positive convention**: each flag enables a capabil
 | `id` | Stable user-facing ID (reused after close via free pool) |
 | `name` | Titlebar display text; changed with `pane:setName(text)` |
 | `nameAlign` | Titlebar name alignment: `"left"` (default), `"center"`, or `"right"`. Governs both where the name renders and how the titlebar buttons arrange around it. |
-| `permanentFloat` | Always floating; excluded from workspace serialization; cannot be embedded |
+| `overlay` | Always floating; excluded from workspace serialization; cannot be embedded |
 | `resizable` | `false` hides corner drag handles when floating |
 | `titlebarHideable` | `false` keeps the titlebar permanently visible; `setTitlebarVisible(false)` becomes a no-op |
 | `renamable` | `false` blocks rename from UI and API |
@@ -129,7 +152,7 @@ Geyser widget name uniqueness: pane IDs are user-facing and recycled; internal G
 
 ## Tab objects — property parity with panes
 
-Wherever a pane has a property or behaviour, consider whether a tab should too.  Current tab fields:
+A tab is a `MuxTab` — a `MuxSurface` sibling of `MuxPane` (see Class model) — built by `addTab` as `MuxTab:new({host, id, name})`. Wherever a pane has a property or behaviour, consider whether a tab should too.  Current tab fields:
 
 | Field | Notes |
 |-------|-------|
@@ -160,9 +183,11 @@ local d = Mux.createDialog({
     contextMenu   = false,   -- default for createDialog; system dialogs keep it off
     closeable     = true,    -- default; gives a close button
 })
--- d is a permanentFloat MuxPane; put widgets in d.content
+-- d is an overlay MuxPane; put widgets in d.content
 -- Dismiss: d:close()
 ```
+
+`Mux.createDialog` is a thin wrapper over `MuxDialog:new` (a `MuxPane` subclass — see Class model); dialogs claim the top of the z-order on creation, so a newer dialog never opens beneath an older one.
 
 `createDialog` accepts the same positive-convention option names used everywhere else (`resizable`, `contextMenu`, `titlebarHideable`, `renamable`, `contentable`, `tabsLocked`, `convertible`, `minimizable`, `closeable`) and defaults each to the restrictive state appropriate for a system dialog. Passing legacy `no*` names has no effect — they are not read.
 
@@ -296,7 +321,7 @@ src/scripts/tabs.lua               — Tab infrastructure: buildTabInfrastructur
 src/scripts/connection.lua         — connectionAware pane/tab integration
 src/scripts/split.lua              — MuxSplit: binary split with drag-resize handle
 src/scripts/pane_set.lua           — MuxPaneSet: border-zone management, root node management
-src/scripts/manager.lua            — High-level commands: splitFocused, zoomFocused, renameFocused, tabRename
+src/scripts/manager.lua            — pane lookup (getPane), z-order (raisePane / raiseFloatingPanes via Mux._raiseSeq), recovery (mux panes / mux reveal). No focus tracking — panes are styled by their resting frame, not a focus border.
 src/scripts/dialog.lua             — Mux.createDialog(opts), Mux.dialogCss palette
 src/scripts/widgets.lua            — Mux.ui declarative, theme-aware form builder (buildForm/specHeight/formHeight)
 src/scripts/welcome.lua            — first-run welcome dialog (registered internal content)
@@ -310,7 +335,31 @@ src/aliases/mux.lua                — the `mux` command alias (parses all subco
 
 Load order (`src/scripts/scripts.json`): globals → settings → content → update → theme → pane → tabs → connection → split → pane_set → manager → dialog → widgets → welcome → workspace → content_builtins → properties → devmode → themes
 
-There is no keybinds module. Muxlet ships no Alt+key bindings; every action is reachable through the `mux` command alias, the titlebar buttons, and the context menus. (The reveal-strip tooltip in `pane.lua` mentions "Press Alt+[ to restore titlebar," but no such binding is registered — the tooltip text is stale and the titlebar is restored via `mux pane titlebar`. Treat that tooltip as a known bug, not a documented feature.)
+There is no keybinds module. Muxlet ships no Alt+key bindings; every action is reachable through the `mux` command alias, the titlebar buttons, and the context menus. (The reveal-strip tooltip in `pane.lua` mentions "Press Alt+[ to restore titlebar," but no such binding is registered — the tooltip text is stale and the titlebar is restored by clicking the reveal strip, through the Properties dialog, with `pane:setTitlebarVisible(true)`, or with `mux reveal <id>`. Treat that tooltip as a known bug, not a documented feature.)
+
+---
+
+## Performance model
+
+Layout used to be O(branches^depth). Geyser's `set_constraints` runs `calc_constraints` **and** `reposition`; `Container:move`/`:resize` each call it; `HBox`/`VBox:organize` calls both move and resize per child; and `Container:set_constraints` recurses every child. Because a MuxSplit box always contains a Fixed-policy handle, any `reposition` re-runs `organize`. One `box:reposition()` therefore fans out across the whole subtree, and a nested resize measured 3600–5500 ms.
+
+The fix rests on one fact: Geyser's `get_x/get_y/get_width/get_height` are derived from the constraint **chain** (parent getter × scale + offset), not from native window state. So constraints can be recomputed with repositioning suppressed, then native geometry applied in a single pass.
+
+Two shared helpers in globals.lua:
+- `Mux._suppressReposition(fn)` — temporarily replaces `Geyser.set_constraints` with a calc-only version, runs `fn` (e.g. `organize`), and restores it under `pcall`. Constraints update; nothing repositions.
+- `Mux._applyGeometry(win)` — one depth-first pass of `moveWindow`/`resizeWindow` per window, then `redraw`. This is the single geometry-apply used by resize, split-create, and workspace load.
+
+The resize/create/load paths all follow the same shape: **suppress → `organize` → `Mux._applyGeometry` → notify.** Resize dropped from ~3600 ms to 1–2 ms. The whole block runs inside a `Mux._inResize` guard so the `sysWindowResizeEvent` echo that `setBorderSizes` raises is ignored (the event handler's own guard only blocks re-entry once already running).
+
+**Preview vs live drag.** Dragging a handle live re-runs the layout every frame — smooth for pane-only subtrees, but unusable when the main console is involved because resizing it reflows the entire scrollback each frame. So a handle uses the lightweight preview line (deferring the real resize to mouse-release) when `_leafCount() > mux.live_resize_max_panes` **or** `MuxSplit:_subtreeHasMainConsole()` is true; otherwise it stays live. `live_resize_max_panes` is a registered setting (default 2).
+
+**What the release cost actually is (measured).** The one-time `notify` on release scales with the **live** layout — roughly per visible pane, plus more per live tab — topping out around ~125 ms for a heavy multi-pane/many-tab arrangement. It is **not** proportional to the scrollback buffer, and it is **not** caused by hidden/closed widgets: closing a tab only hides it, yet the cost drops, so dead widgets don't count toward it. Earlier ~900 ms readings came from an earlier code state before the preview + `_inResize` guard landed (a double-fire of the main-console reflow), not from the steady state.
+
+**Still using stock layout.** Structural operations off the hot path — `place`, `collapseSlot`, `zoom` — still use stock `organize()` + `reposition()`. They could adopt the suppress technique later if they ever surface in profiling.
+
+**Debug timing.** With `mux debug on`, `_setRatio` prints `[mux perf] <split> leaves=N applyGeometry=Xms notify=Yms`, and pane create/close print their own timings. These lines are gated behind `Mux.debug` and can be stripped for a clean build.
+
+**Teardown note.** Pane/tab/paneset teardown currently *hides* widgets rather than deleting them, so hidden Geyser windows accumulate over a long session — a memory matter, not a resize-speed one (see above). Geyser exposes a recursive `Container:delete()` (deletes children first, clears its registries, calls `deleteLabel`/`deleteMiniConsole`) that can be wired into `close`/`removeTab`/`destroy` if long-session memory ever becomes a concern.
 
 ---
 
@@ -356,6 +405,7 @@ External API names (Geyser, Mudlet built-ins) are not ours to rename.
 - Do not create floating system UI as raw Geyser windows — always use `Mux.createDialog`.
 - Do not hardcode CSS colours — derive them from `Mux.activeTheme()` so the theme system can refresh them.
 - Do not skip `contentBg:hide()` when applying content — the placeholder label covers the entire content area with `fillBg=1`.
-- Do not serialise `permanentFloat` panes into workspaces — they are transient system UI and are excluded by `serializeNode`.
+- Do not serialise `overlay` panes into workspaces — they are transient system UI and are excluded by `serializeNode`.
 - Do not use `\xNN` or `\uXXXX` Lua escape sequences for Unicode characters — embed them as literal UTF-8 in source files.
 - Do not create `Geyser.ScrollBox` children using percentage constraints — ScrollBox's `get_x/get_y` returns 0 after construction; use absolute pixel values.
+- Do not call stock `organize()`/`reposition()` on the resize/create/load hot path — wrap layout in `Mux._suppressReposition` and apply native geometry once with `Mux._applyGeometry`, or you reintroduce the O(branches^depth) cascade (see Performance model).
