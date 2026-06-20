@@ -94,7 +94,7 @@ MuxPane    = Mux._class(MuxSurface)  -- a chrome-wrapped surface (titlebar, bord
 MuxTab     = Mux._class(MuxSurface)  -- a content surface that lives in a tab bar
 MuxDialog  = Mux._class(MuxPane)     -- an overlay pane used for all system dialogs
 MuxSplit   = Mux._class()            -- a binary split node (not a surface)
-MuxPaneSet = Mux._class()            -- the root container / border-zone manager
+MuxPaneSpace = Mux._class()            -- the root container / border-zone manager
 ```
 
 **Why MuxSurface exists.** A tab is not a specialised pane — it never runs `MuxPane:init`, and has no titlebar, borders, or split machinery. But panes and tabs share two things: they both hold content (the `content`/`contentBg`/`_activeContent` trio and the `_applyContent` lifecycle), and they can both *host* a tab bar (a pane has tabs; a tab can have nested sub-tabs). Those shared concerns live on `MuxSurface`, so `MuxPane` and `MuxTab` are siblings that inherit them rather than one pretending to be the other. The content system treats any `target` (pane or tab) identically because both satisfy the `MuxSurface` interface. This is a clarity win, not a speed one — it costs one extra metatable hop.
@@ -320,7 +320,7 @@ src/scripts/pane.lua               — MuxPane class: construction, titlebar, lo
 src/scripts/tabs.lua               — Tab infrastructure: buildTabInfrastructure, addTab, activateTabObj
 src/scripts/connection.lua         — connectionAware pane/tab integration
 src/scripts/split.lua              — MuxSplit: binary split with drag-resize handle
-src/scripts/pane_set.lua           — MuxPaneSet: border-zone management, root node management
+src/scripts/pane_space.lua           — MuxPaneSpace: border-zone management, root node management
 src/scripts/manager.lua            — pane lookup (getPane), z-order (raisePane / raiseFloatingPanes via Mux._raiseSeq), recovery (mux panes / mux reveal). No focus tracking — panes are styled by their resting frame, not a focus border.
 src/scripts/dialog.lua             — Mux.createDialog(opts), Mux.dialogCss palette
 src/scripts/widgets.lua            — Mux.ui declarative, theme-aware form builder (buildForm/specHeight/formHeight)
@@ -333,7 +333,7 @@ src/scripts/themes/                — dark.lua, light.lua (theme definitions)
 src/aliases/mux.lua                — the `mux` command alias (parses all subcommands)
 ```
 
-Load order (`src/scripts/scripts.json`): globals → settings → content → update → theme → pane → tabs → connection → split → pane_set → manager → dialog → widgets → welcome → workspace → content_builtins → properties → devmode → themes
+Load order (`src/scripts/scripts.json`): globals → settings → content → update → theme → pane → tabs → connection → split → pane_space → manager → dialog → widgets → welcome → workspace → content_builtins → properties → devmode → themes
 
 There is no keybinds module. Muxlet ships no Alt+key bindings; every action is reachable through the `mux` command alias, the titlebar buttons, and the context menus. (The reveal-strip tooltip in `pane.lua` mentions "Press Alt+[ to restore titlebar," but no such binding is registered — the tooltip text is stale and the titlebar is restored by clicking the reveal strip, through the Properties dialog, with `pane:setTitlebarVisible(true)`, or with `mux reveal <id>`. Treat that tooltip as a known bug, not a documented feature.)
 
@@ -359,7 +359,7 @@ The resize/create/load paths all follow the same shape: **suppress → `organize
 
 **Debug timing.** With `mux debug on`, `_setRatio` prints `[mux perf] <split> leaves=N applyGeometry=Xms notify=Yms`, and pane create/close print their own timings. These lines are gated behind `Mux.debug` and can be stripped for a clean build.
 
-**Teardown note.** Pane/tab/paneset teardown currently *hides* widgets rather than deleting them, so hidden Geyser windows accumulate over a long session — a memory matter, not a resize-speed one (see above). Geyser exposes a recursive `Container:delete()` (deletes children first, clears its registries, calls `deleteLabel`/`deleteMiniConsole`) that can be wired into `close`/`removeTab`/`destroy` if long-session memory ever becomes a concern.
+**Teardown note.** Pane/tab/panespace teardown currently *hides* widgets rather than deleting them, so hidden Geyser windows accumulate over a long session — a memory matter, not a resize-speed one (see above). Geyser exposes a recursive `Container:delete()` (deletes children first, clears its registries, calls `deleteLabel`/`deleteMiniConsole`) that can be wired into `close`/`removeTab`/`destroy` if long-session memory ever becomes a concern.
 
 ---
 

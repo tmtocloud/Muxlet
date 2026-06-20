@@ -7,7 +7,7 @@ Mux._version = (_pkgInfo and _pkgInfo.version) or "unknown"
 -- Internal registries (never access directly; use Mux API)
 Mux._panes    = Mux._panes    or {}   -- id → MuxPane instance
 Mux._splits   = Mux._splits   or {}   -- id → MuxSplit instance
-Mux._paneSets = Mux._paneSets or {}   -- id → MuxPaneSet instance
+Mux._paneSpaces = Mux._paneSpaces or {}   -- id → MuxPaneSpace instance
 Mux._running             = Mux._running             or false
 Mux._activeWorkspaceName = Mux._activeWorkspaceName or nil
 
@@ -128,7 +128,7 @@ function Mux._warn(fmt, ...)
     cecho(string.format("\n<yellow>[Muxlet]<reset> %s\n", string.format(fmt, ...)))
 end
 
--- MuxPaneSet instances write their pixel contributions here; _applyBorders()
+-- MuxPaneSpace instances write their pixel contributions here; _applyBorders()
 -- commits all four sides in a single setBorderSizes call to avoid ordering issues.
 Mux._borders = Mux._borders or { top = 0, right = 0, bottom = 0, left = 0 }
 
@@ -673,7 +673,7 @@ function Mux._registerResizeHandler()
         -- setBorderSizes can itself fire sysWindowResizeEvent; guard against recursion.
         if Mux._inResize then return end
         Mux._inResize = true
-        for _, ps in pairs(Mux._paneSets) do
+        for _, ps in pairs(Mux._paneSpaces) do
             if ps._onWindowResize then ps:_onWindowResize() end
         end
         Mux._notifyAllReposition()
@@ -689,7 +689,7 @@ Mux._registerResizeHandler()
 -- across split retirement works without back-referencing the original pane.
 Mux._ghostSlots = Mux._ghostSlots or {}
 
-function Mux._createGhostSlot(slot, split, side, paneSet)
+function Mux._createGhostSlot(slot, split, side, paneSpace)
     local theme = Mux.activeTheme()
     local gid   = Mux._newInternalId()
 
@@ -778,7 +778,7 @@ function Mux._createGhostSlot(slot, split, side, paneSet)
         slot       = slot,
         split      = split,
         side       = side,
-        paneSet    = paneSet,
+        paneSpace    = paneSpace,
     }
     Mux._ghostSlots[slotKey] = record
     Mux._log("ghost slot created: %s (split=%s side=%s)", slotKey, split and split.id or "?", side or "?")
@@ -897,10 +897,10 @@ function Mux._doInsertAtEdge(floatingPane, targetPane, edge)
     if targetPane._split then
         targetPane._split:_splitAndEmbed(targetPane, floatingPane, dir, floatOnSide, ratio)
     else
-        -- Target is the root of its PaneSet — create a new top-level split.
-        local ps = targetPane._paneSet
+        -- Target is the root of its PaneSpace — create a new top-level split.
+        local ps = targetPane._paneSpace
         if not ps then
-            Mux._warn("doInsertAtEdge: target '%s' has no paneSet", targetPane.id)
+            Mux._warn("doInsertAtEdge: target '%s' has no paneSpace", targetPane.id)
             return
         end
         local newSplit = MuxSplit:new({
@@ -923,7 +923,7 @@ function Mux._doInsertAtEdge(floatingPane, targetPane, edge)
         floatingPane._slot     = floatSlot
         floatingPane._split    = newSplit
         floatingPane._slotSide = floatOnSide
-        floatingPane._paneSet  = ps
+        floatingPane._paneSpace  = ps
         if floatOnSide == "a" then newSplit.childA = floatingPane
         else                       newSplit.childB = floatingPane
         end

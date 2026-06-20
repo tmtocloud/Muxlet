@@ -18,7 +18,7 @@
 --             activeContent="my_content" }
 --   Split : { type="split", direction="v", ratio=0.6, a=<node>, b=<node> }
 --
--- Only one paneSet per workspace is supported. Multiple paneSets create
+-- Only one paneSpace per workspace is supported. Multiple paneSpaces create
 -- overlapping containers with no awareness of each other's boundaries,
 -- which breaks split operations and console border management.
 
@@ -86,12 +86,12 @@ end
 function Mux.registerWorkspace(name, def)
     assert(type(name) == "string", "workspace name must be a string")
     assert(type(def)  == "table",  "workspace definition must be a table")
-    local paneSets = def.paneSets or def.pane_sets or {}
-    if #paneSets > 1 then
+    local paneSpaces = def.paneSpaces or {}
+    if #paneSpaces > 1 then
         error(string.format(
-            "workspace '%s': only one paneSet is supported (got %d). "
-            .. "Use splits within a single paneSet to arrange multiple panels.",
-            name, #paneSets), 2)
+            "workspace '%s': only one paneSpace is supported (got %d). "
+            .. "Use splits within a single paneSpace to arrange multiple panels.",
+            name, #paneSpaces), 2)
     end
     Mux._workspaces[name] = def
     Mux._log("Registered workspace: %s", name)
@@ -113,7 +113,7 @@ function Mux.applyWorkspace(name)
     if def.theme then Mux.applyTheme(def.theme) end
 
     local paneMap     = {}
-    local paneSetsArr = def.paneSets or def.pane_sets or {}
+    local paneSpacesArr = def.paneSpaces or {}
 
     -- Build the tree with Geyser's per-constraint-change reposition suppressed, so
     -- the organize() calls fired while assembling each split box are calc-only
@@ -125,8 +125,8 @@ function Mux.applyWorkspace(name)
     local wasInResize = Mux._inResize
     Mux._inResize = true
     Mux._suppressReposition(function()
-        for _, psDef in ipairs(paneSetsArr) do
-            local ps = Mux.newPaneSet({
+        for _, psDef in ipairs(paneSpacesArr) do
+            local ps = Mux.newPaneSpace({
                 id   = psDef.id,
                 zone = psDef.zone,
                 size = psDef.size,
@@ -135,8 +135,8 @@ function Mux.applyWorkspace(name)
                 local rootObj = buildNode(psDef.root, ps.outer, paneMap, ps)
                 if rootObj then
                     ps:setRoot(rootObj)
-                    if rootObj._paneSet == nil and rootObj.outer then
-                        rootObj._paneSet = ps
+                    if rootObj._paneSpace == nil and rootObj.outer then
+                        rootObj._paneSpace = ps
                     end
                 end
             end
@@ -252,16 +252,16 @@ function Mux.saveWorkspace(name)
     local def = {
         name         = name,
         theme        = Mux._activeThemeName,
-        paneSets     = {},
+        paneSpaces     = {},
         floatingPanes = {},
     }
 
     local psCount = 0
-    for _, ps in pairs(Mux._paneSets) do
+    for _, ps in pairs(Mux._paneSpaces) do
         psCount = psCount + 1
         local psDef = { id = ps.id, zone = ps.zone, size = ps.size }
         if ps.root then psDef.root = serializeNode(ps.root) end
-        table.insert(def.paneSets, psDef)
+        table.insert(def.paneSpaces, psDef)
     end
 
     for _, pane in pairs(Mux._panes) do
@@ -303,16 +303,16 @@ function Mux._doAutoSave()
     local def = {
         name          = "current",
         theme         = Mux._activeThemeName,
-        paneSets      = {},
+        paneSpaces      = {},
         floatingPanes = {},
     }
 
     local psCount = 0
-    for _, ps in pairs(Mux._paneSets) do
+    for _, ps in pairs(Mux._paneSpaces) do
         psCount = psCount + 1
         local psDef = { id = ps.id, zone = ps.zone, size = ps.size }
         if ps.root then psDef.root = serializeNode(ps.root) end
-        table.insert(def.paneSets, psDef)
+        table.insert(def.paneSpaces, psDef)
     end
 
     for _, pane in pairs(Mux._panes) do
@@ -444,7 +444,7 @@ local function restoreTabsOnPane(p, node)
     end)
 end
 
-buildNode = function(node, parentContainer, paneMap, paneSet)
+buildNode = function(node, parentContainer, paneMap, paneSpace)
     if not node or not node.type then return nil end
 
     if node.type == "pane" then
@@ -472,7 +472,7 @@ buildNode = function(node, parentContainer, paneMap, paneSet)
             splittable       = node.splittable,
             swappable        = node.swappable,
         })
-        p._paneSet = paneSet
+        p._paneSpace = paneSpace
         if node.id then paneMap[node.id] = p end
 
         if node.connectionAware and p.setConnectionAware then
@@ -498,11 +498,11 @@ buildNode = function(node, parentContainer, paneMap, paneSet)
             parent    = parentContainer,
         })
         if node.a then
-            local ca = buildNode(node.a, s.slotA, paneMap, paneSet)
+            local ca = buildNode(node.a, s.slotA, paneMap, paneSpace)
             if ca then s:place(ca, "a") end
         end
         if node.b then
-            local cb = buildNode(node.b, s.slotB, paneMap, paneSet)
+            local cb = buildNode(node.b, s.slotB, paneMap, paneSpace)
             if cb then s:place(cb, "b") end
         end
         return s
@@ -516,7 +516,7 @@ end
 Mux.registerWorkspace("default", {
     name     = "Default",
     theme    = "dark",
-    paneSets = {
+    paneSpaces = {
         {
             id   = "screen",
             zone = "screen",

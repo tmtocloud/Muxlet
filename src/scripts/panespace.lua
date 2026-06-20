@@ -1,6 +1,6 @@
--- Muxlet — MuxPaneSet
+-- Muxlet — MuxPaneSpace
 --
--- A PaneSet is a top-level workspace zone that occupies a region relative to
+-- A PaneSpace is a top-level workspace zone that occupies a region relative to
 -- Mudlet's main game console. It is the bridge between the tiling tree and
 -- Mudlet's border management system.
 --
@@ -12,19 +12,19 @@
 --   "float"  — free-floating overlay (no border management; explicit geometry)
 --
 -- Border management uses Mudlet's setBorderSizes(top, right, bottom, left).
--- Mux._borders tracks the current contribution of every PaneSet.
+-- Mux._borders tracks the current contribution of every PaneSpace.
 -- Mux._applyBorders() recomputes and applies the combined value.
 --
 -- The root of the tiling tree is either:
 --   • a single MuxPane  (no splits yet)
 --   • a MuxSplit        (at least one split has been made)
 
-MuxPaneSet = Mux._class()
-Mux.PaneSet = MuxPaneSet
+MuxPaneSpace = Mux._class()
+Mux.PaneSpace = MuxPaneSpace
 
 local minBorderPx = 40   -- prevents the border from collapsing to zero
 
-function MuxPaneSet:init(opts)
+function MuxPaneSpace:init(opts)
     opts = opts or {}
 
     self.id      = opts.id   or Mux._newId("ps")
@@ -42,13 +42,13 @@ function MuxPaneSet:init(opts)
         height = geo.height,
     }, Geyser)
 
-    Mux._paneSets[self.id] = self
+    Mux._paneSpaces[self.id] = self
     self:_registerBorder()
 
-    Mux._log("MuxPaneSet created: %s zone=%s size=%s", self.id, self.zone, self.size)
+    Mux._log("MuxPaneSpace created: %s zone=%s size=%s", self.id, self.zone, self.size)
 end
 
-function MuxPaneSet:_zoneGeometry()
+function MuxPaneSpace:_zoneGeometry()
     local z = self.zone
     local s = self.size
     if z == "left" then
@@ -68,15 +68,15 @@ function MuxPaneSet:_zoneGeometry()
     end
 end
 
-function MuxPaneSet:_registerBorder()
+function MuxPaneSpace:_registerBorder()
     if self.zone == "float" then return end
     self:_updateBorderContribution()
 end
 
 -- "screen" zone: renders over the main console without collapsing it to 0px.
 -- Collapsing the console breaks selectCurrentLine()+appendBuffer, which breaks
--- output capture. Instead, the PaneSet sits in front via Geyser z-order.
-function MuxPaneSet:_updateBorderContribution()
+-- output capture. Instead, the PaneSpace sits in front via Geyser z-order.
+function MuxPaneSpace:_updateBorderContribution()
     if self.zone == "float" then return end
 
     if self.zone == "screen" then
@@ -97,13 +97,13 @@ function MuxPaneSet:_updateBorderContribution()
     Mux._applyBorders()
 end
 
-function MuxPaneSet:_onWindowResize()
+function MuxPaneSpace:_onWindowResize()
     self:_updateBorderContribution()
 end
 
--- Place a MuxSplit or MuxPane as the root of this PaneSet's layout tree.
+-- Place a MuxSplit or MuxPane as the root of this PaneSpace's layout tree.
 -- The root's widget is reparented into outer and made to fill it completely.
-function MuxPaneSet:setRoot(child)
+function MuxPaneSpace:setRoot(child)
     self.root = child
     local widget = child.box or child.outer
     if not widget then
@@ -113,31 +113,31 @@ function MuxPaneSet:setRoot(child)
     widget:changeContainer(self.outer)
     moveWindow(widget.name, 0, 0)
     resizeWindow(widget.name, self.outer:get_width(), self.outer:get_height())
-    Mux._log("MuxPaneSet.setRoot: %s in %s", child.id, self.id)
+    Mux._log("MuxPaneSpace.setRoot: %s in %s", child.id, self.id)
 end
 
-function MuxPaneSet:show()
+function MuxPaneSpace:show()
     if self.visible then return end
     self.visible = true
     self.outer:show()
     self:_updateBorderContribution()
-    Mux._log("MuxPaneSet shown: %s", self.id)
+    Mux._log("MuxPaneSpace shown: %s", self.id)
 end
 
-function MuxPaneSet:hide()
+function MuxPaneSpace:hide()
     if not self.visible then return end
     self.visible = false
     self.outer:hide()
     self:_updateBorderContribution()
-    Mux._log("MuxPaneSet hidden: %s", self.id)
+    Mux._log("MuxPaneSpace hidden: %s", self.id)
 end
 
-function MuxPaneSet:toggle()
+function MuxPaneSpace:toggle()
     if self.visible then self:hide() else self:show() end
 end
 
 -- newSize: a Geyser constraint string, e.g. "25%" or "300px".
-function MuxPaneSet:resize(newSize)
+function MuxPaneSpace:resize(newSize)
     self.size = newSize
     local geo = self:_zoneGeometry()
     moveWindow(self.outer.name, 0, 0)
@@ -149,13 +149,13 @@ function MuxPaneSet:resize(newSize)
     self:_updateBorderContribution()
 end
 
-function MuxPaneSet:destroy()
+function MuxPaneSpace:destroy()
     self:hide()
     Mux._borders[self.zone] = 0
     Mux._applyBorders()
     self.outer:hide()
-    Mux._paneSets[self.id] = nil
-    Mux._log("MuxPaneSet destroyed: %s", self.id)
+    Mux._paneSpaces[self.id] = nil
+    Mux._log("MuxPaneSpace destroyed: %s", self.id)
 end
 
-Mux._log("mux_pane_set loaded")
+Mux._log("panespace loaded")

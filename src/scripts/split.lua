@@ -478,10 +478,10 @@ function MuxSplit:collapseSlot(closedSide)
                 else                           self._parentSplit.childB = sibling
                 end
             else
-                for _, ps in pairs(Mux._paneSets) do
+                for _, ps in pairs(Mux._paneSpaces) do
                     if ps.root == self then
                         ps.root          = sibling
-                        sibling._paneSet = ps
+                        sibling._paneSpace = ps
                         break
                     end
                 end
@@ -527,7 +527,7 @@ function MuxSplit:collapseSlot(closedSide)
         if self._parentSplit then
             self._parentSplit:collapseSlot(self._parentSide)
         else
-            for _, ps in pairs(Mux._paneSets) do
+            for _, ps in pairs(Mux._paneSpaces) do
                 if ps.root == self then ps.root = nil; break end
             end
         end
@@ -583,10 +583,10 @@ function MuxSplit:collapseSlot(closedSide)
         end
     end
 
-    for _, ps in pairs(Mux._paneSets) do
+    for _, ps in pairs(Mux._paneSpaces) do
         if ps.root == self then
             ps.root = sibling
-            if sibling.outer then sibling._paneSet = ps end
+            if sibling.outer then sibling._paneSpace = ps end
             break
         end
     end
@@ -601,7 +601,7 @@ function MuxSplit:collapseSlot(closedSide)
     -- Re-layout from the grandparent's perspective so the promoted sibling fills
     -- its new space immediately. For a nested case the grandparent is another
     -- MuxSplit whose VBox needs organize(); for the root case reposition() on the
-    -- PaneSet outer is sufficient.
+    -- PaneSpace outer is sufficient.
     if self._parentSplit then
         self._parentSplit.box:organize()
         self._parentSplit.box:reposition()
@@ -634,7 +634,7 @@ function MuxSplit:_splitPaneInSlot(pane, direction, ratio)
 
     local newPane = MuxPane:new({ parent = newSplit.slotB })
     newSplit:place(newPane, "b")
-    newPane._paneSet = pane._paneSet
+    newPane._paneSpace = pane._paneSpace
 
     newSplit._parentSplit = self
     newSplit._parentSide  = side
@@ -689,7 +689,7 @@ function MuxSplit:_splitAndEmbed(existingPane, floatingPane, direction, floatOnS
     floatingPane._slot     = floatSlot
     floatingPane._split    = newSplit
     floatingPane._slotSide = floatOnSide
-    floatingPane._paneSet  = existingPane._paneSet
+    floatingPane._paneSpace  = existingPane._paneSpace
     if floatOnSide == "a" then newSplit.childA = floatingPane
     else                       newSplit.childB = floatingPane
     end

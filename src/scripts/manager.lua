@@ -1,10 +1,10 @@
 -- Muxlet manager — public API for pane creation, focus, and workspace operations.
 
 function Mux.newPane(opts)      return MuxPane:new(opts)    end
-function Mux.newPaneSet(opts)  return MuxPaneSet:new(opts) end
+function Mux.newPaneSpace(opts)  return MuxPaneSpace:new(opts) end
 
 function Mux.getPane(id)     return Mux._panes[id]     end
-function Mux.getPaneSet(id)  return Mux._paneSets[id]  end
+function Mux.getPaneSpace(id)  return Mux._paneSpaces[id]  end
 function Mux.currentTheme()  return Mux._activeThemeName end
 
 -- Brings a floating pane or dialog to the front of the z-order. Embedded panes
@@ -283,7 +283,7 @@ function Mux.status()
     local pc, sc, ps = 0, 0, 0
     for _ in pairs(Mux._panes)    do pc = pc + 1 end
     for _ in pairs(Mux._splits)   do sc = sc + 1 end
-    for _ in pairs(Mux._paneSets) do ps = ps + 1 end
+    for _ in pairs(Mux._paneSpaces) do ps = ps + 1 end
 
     Mux._echo("\n<cyan>[Muxlet]<reset> v" .. Mux._version .. "\n")
 
@@ -295,7 +295,7 @@ function Mux.status()
         Mux._echo("  State     : <yellow>STOPPED<reset>  — type <cyan>mux start<reset> to begin\n")
     end
 
-    Mux._echo(string.format("  PaneSets  : %d  Splits: %d  Panes: %d\n", ps, sc, pc))
+    Mux._echo(string.format("  PaneSpaces  : %d  Splits: %d  Panes: %d\n", ps, sc, pc))
     Mux._echo(string.format("  Debug     : %s\n", tostring(Mux.debug)))
 end
 
@@ -316,7 +316,7 @@ function Mux._echo(text)
     cecho(text)
 end
 
--- Destroys all current panes/splits/panesets and resets borders without
+-- Destroys all current panes/splits/panespaces and resets borders without
 -- killing persistent event handlers or the command console pane.
 function Mux._clearWorkspace()
     -- Cancel any pending auto-save so it doesn't write an empty/transitional state.
@@ -339,11 +339,11 @@ function Mux._clearWorkspace()
             pane._propertiesDialogs = nil
         end
     end
-    for _, ps in pairs(Mux._paneSets) do
+    for _, ps in pairs(Mux._paneSpaces) do
         if ps.destroy then ps:destroy() end
     end
     -- Floating panes are reparented to the Geyser root and are not owned by any
-    -- PaneSet, so ps:destroy() misses them. Hide them explicitly before the wipe.
+    -- PaneSpace, so ps:destroy() misses them. Hide them explicitly before the wipe.
     for _, pane in pairs(Mux._panes) do
         if pane.floating and pane.outer then pane.outer:hide() end
     end
@@ -351,7 +351,7 @@ function Mux._clearWorkspace()
     local savedSet = Mux._settings_ui and Mux._settings_ui.window or nil
     Mux._panes    = {}
     Mux._splits   = {}
-    Mux._paneSets = {}
+    Mux._paneSpaces = {}
     Mux._connAware = {}
     if Mux._settings_ui then Mux._settings_ui.window = savedSet end
     -- Panes are gone; release singleton locks so the next workspace can apply the

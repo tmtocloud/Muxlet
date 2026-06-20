@@ -191,8 +191,8 @@ end
 -- ── MuxDialog ────────────────────────────────────────────────────────────────
 --
 -- A dialog is a specialized MuxPane: a closeable overlay that floats above the
--- workspace, never participates in splits or PaneSets, and isn't serialized.
--- MuxDialog rhymes with the other primitives (MuxPane / MuxSplit / MuxPaneSet):
+-- workspace, never participates in splits or PaneSpaces, and isn't serialized.
+-- MuxDialog rhymes with the other primitives (MuxPane / MuxSplit / MuxPaneSpace):
 -- it inherits everything from MuxPane and only layers on dialog defaults,
 -- cascade positioning, and the initial raise. Because an instance *is* a
 -- MuxPane, every pane method (content, close, setName, …) works unchanged, and

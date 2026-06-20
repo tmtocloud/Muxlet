@@ -8,7 +8,7 @@
   {"name": "tabs"},
   {"name": "connection"},
   {"name": "split"},
-  {"name": "pane_set"},
+  {"name": "panespace"},
   {"name": "manager"},
   {"name": "dialog"},
   {"name": "widgets"},

@@ -236,7 +236,7 @@ A workspace is a complete snapshot of the pane/split tree, theme, and content as
 Mux.registerWorkspace("my-game-layout", {
     name  = "My Game Layout",
     theme = "dark",          -- optional; uses the active theme if omitted
-    paneSets = {
+    paneSpaces = {
         {
             id   = "screen",
             zone = "screen",
@@ -265,18 +265,18 @@ Mux.applyWorkspace("my-game-layout")
 
 #### Zone types
 
-The `zone` field on a paneSet controls how it interacts with the main console borders:
+The `zone` field on a paneSpace controls how it interacts with the main console borders:
 
 | Zone | Behaviour |
 |------|-----------|
 | `"screen"` | Covers the full window. Use `mainConsoleHost = true` on one pane to show game output. |
-| `"left"` | Left border panel. Pushes the console right by the paneSet width. |
+| `"left"` | Left border panel. Pushes the console right by the paneSpace width. |
 | `"right"` | Right border panel. Pushes the console left. |
 | `"top"` | Top border panel. Pushes the console down. |
 | `"bottom"` | Bottom border panel. Pushes the console up. |
 | `"float"` | Free-floating overlay. No border management; supply explicit geometry. |
 
-Only **one paneSet per workspace** is supported. Use splits within it to arrange multiple panels.
+Only **one paneSpace per workspace** is supported. Use splits within it to arrange multiple panels.
 
 #### Pane node fields
 
@@ -427,7 +427,7 @@ end
 
 ```lua
 Mux.registerWorkspace("with-float", {
-    paneSets = { ... },
+    paneSpaces = { ... },
     floatingPanes = {
         {
             type   = "pane",
@@ -789,7 +789,7 @@ Mux._connReadyDelay = 0
 -- Lookup by id (panes proxy is always current after workspace changes)
 local p = panes["sidebar"]        -- equivalent to Mux._panes["sidebar"]
 local s = Mux.getSplit("split_0001")
-local ps = Mux.getPaneSet("screen")
+local ps = Mux.getPaneSpace("screen")
 
 -- Structural operations are methods on the pane object (there is no focus concept)
 panes["sidebar"]:split("v", 0.6)   -- "v" = left/right, "h" = top/bottom; ratio 0.0-1.0
@@ -812,10 +812,10 @@ The `panes` global is a metatable proxy over `Mux._panes`. Always use `panes["id
 
 - All Mux Lua identifiers use **camelCase** — `titlebarHeight`, `setName`, `applyTheme`. Match this in any code that touches Mux internals.
 - All behavioral pane flags use a **positive convention** — `closeable`, `minimizable`, `resizable`, `renamable`, `contentable`, `convertible`, `contextMenu`, `propertiesButton`, `insertable`, `titlebarHideable`. A flag set to `false` restricts that capability; omitting it (or setting `true`) leaves it enabled. `lock()` sets all mutable flags to `false`; `unlock()` restores them.
-- `MuxPane`, `MuxSplit`, and `MuxPaneSet` are the three concrete classes. Instances are registered in `Mux._panes`, `Mux._splits`, and `Mux._paneSets` automatically on creation.
+- `MuxPane`, `MuxSplit`, and `MuxPaneSpace` are the three concrete classes. Instances are registered in `Mux._panes`, `Mux._splits`, and `Mux._paneSpaces` automatically on creation.
 - IDs (e.g. `pane_0003`) are user-facing and recycle freed numbers. Internal Geyser widget names (e.g. `mux_w_0042`) never recycle — Qt holds named widgets in memory and recycled names would alias destroyed widgets.
 - `Mux._scheduleAutoSave()` is called internally after every structural change. You do not need to call it unless you make external modifications to the pane graph.
-- `Mux._applyBorders()` recomputes all border sizes atomically from `Mux._borders`. Never call `setBorderSizes` directly — route through this function so all PaneSet contributions are combined correctly.
+- `Mux._applyBorders()` recomputes all border sizes atomically from `Mux._borders`. Never call `setBorderSizes` directly — route through this function so all PaneSpace contributions are combined correctly.
 
 ---
 

@@ -39,7 +39,7 @@ function MuxPane:init(opts)
     self.minimized        = false
     self._overflowMode    = false
 
-    -- overlay: always floating; never interacts with any PaneSet or split.
+    -- overlay: always floating; never interacts with any PaneSpace or split.
     -- Drag-to-embed, double-click-to-embed, and Alt+A are all no-ops.
     -- Used for system overlays (settings window, dialogs) that must survive workspace changes.
     self.overlay          = opts.overlay or false
@@ -418,7 +418,7 @@ function MuxPane:_buildTitlebar(theme)
                 self._slot     = ghost.slot
                 self._split    = ghost.split
                 self._slotSide = ghost.side
-                self._paneSet  = ghost.paneSet
+                self._paneSpace  = ghost.paneSpace
                 if ghost.split then
                     if ghost.side == "a" then ghost.split.childA = self
                     else                     ghost.split.childB = self
@@ -438,7 +438,7 @@ function MuxPane:_buildTitlebar(theme)
             return
         end
 
-        -- Drop priority 3: normal PaneSet drop.
+        -- Drop priority 3: normal PaneSpace drop.
         self:_tryEmbedAt(event.globalX, event.globalY)
     end)
 
@@ -472,7 +472,7 @@ function MuxPane:_buildTitlebar(theme)
         self._slot     = target.slot
         self._split    = target.split
         self._slotSide = target.side
-        self._paneSet  = target.paneSet
+        self._paneSpace  = target.paneSpace
         if target.split then
             if target.side == "a" then target.split.childA = self
             else                      target.split.childB = self
@@ -1096,10 +1096,10 @@ function MuxPane:split(direction, ratio)
         return newSplit
     end
 
-    -- Pane is the direct root of a PaneSet — wrap it in a new split.
-    local ps = self._paneSet
+    -- Pane is the direct root of a PaneSpace — wrap it in a new split.
+    local ps = self._paneSpace
     if not ps then
-        Mux._err("MuxPane:split: pane '%s' has no PaneSet reference", self.id)
+        Mux._err("MuxPane:split: pane '%s' has no PaneSpace reference", self.id)
         return nil
     end
     local newSplit = MuxSplit:new({
@@ -1110,7 +1110,7 @@ function MuxPane:split(direction, ratio)
     newSplit:place(self, "a")
     local newPane = MuxPane:new({ parent = newSplit.slotB })
     newSplit:place(newPane, "b")
-    newPane._paneSet = ps
+    newPane._paneSpace = ps
     ps.root = newSplit
     local wasInResize = Mux._inResize
     Mux._inResize = true
@@ -1167,7 +1167,7 @@ function MuxPane:_detachToFloat()
     -- Always leave a ghost slot in the vacated split slot. Ghosts persist until
     -- explicitly dismissed (×) or the pane is closed; they never auto-vanish.
     if self._split then
-        Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSet)
+        Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace)
         -- Raise ALL floating panes so none are obscured by the new ghost.
         Mux.raiseFloatingPanes()
     end
@@ -1238,7 +1238,7 @@ function MuxPane:zoom()
         slot        = self._slot,
         split       = self._split,
         slotSide    = self._slotSide,
-        paneSet     = self._paneSet,
+        paneSpace     = self._paneSpace,
     }
     if not self.floating then
         -- Detach from the split tree into the Geyser root, leaving a ghost slot
@@ -1247,12 +1247,12 @@ function MuxPane:zoom()
         self.outer:changeContainer(Geyser)
         self.frame:setStyleSheet(self:_baseFrameCss())
         if self._split then
-            Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSet)
+            Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace)
         end
-        -- consoleBorders panes have a transparent frame; hiding the pane set
+        -- consoleBorders panes have a transparent frame; hiding the pane space
         -- prevents other panes from showing through while zoomed.
-        if self.consoleBorders and self._paneSet then
-            self._paneSet.outer:hide()
+        if self.consoleBorders and self._paneSpace then
+            self._paneSpace.outer:hide()
         end
         if self.splitVBtn then self.splitVBtn:hide() end
         if self.splitHBtn then self.splitHBtn:hide() end
@@ -1293,7 +1293,7 @@ function MuxPane:_unzoom()
             if state.split then state.split.box:show() end
         end
         self.floating = false
-        local target = state.slot or (state.paneSet and state.paneSet.outer)
+        local target = state.slot or (state.paneSpace and state.paneSpace.outer)
         if target then self.outer:changeContainer(target) end
         self.outer:move("0%", "0%")
         self.outer:resize("100%", "100%")
@@ -1301,8 +1301,8 @@ function MuxPane:_unzoom()
         self.frame:setStyleSheet(self:_baseFrameCss())
         self:_hideCornerHandles()
         self.minBtn:hide()
-        if self.consoleBorders and self._paneSet then
-            self._paneSet.outer:show()
+        if self.consoleBorders and self._paneSpace then
+            self._paneSpace.outer:show()
         end
         if self.titlebarVisible then
             if self.splittable then
@@ -1554,20 +1554,20 @@ function MuxPane:applyTheme()
     if self.outer then self.outer:reposition() end
 end
 
--- On titlebar release while floating: if the cursor is inside a visible PaneSet,
--- return the pane to its original split slot (if remembered) or embed at PaneSet
+-- On titlebar release while floating: if the cursor is inside a visible PaneSpace,
+-- return the pane to its original split slot (if remembered) or embed at PaneSpace
 -- root level (if the pane has never been in a split here).
 function MuxPane:_tryEmbedAt(gx, gy)
-    for _, ps in pairs(Mux._paneSets) do
+    for _, ps in pairs(Mux._paneSpaces) do
         if ps.visible then
             local px = ps.outer:get_x()
             local py = ps.outer:get_y()
             local pw = ps.outer:get_width()
             local ph = ps.outer:get_height()
             if gx >= px and gx <= px + pw and gy >= py and gy <= py + ph then
-                -- Don't re-embed into the same PaneSet unless the original split was
+                -- Don't re-embed into the same PaneSpace unless the original split was
                 -- retired (both sides floated), in which case _slot is nil.
-                if self._slot and self._paneSet and ps == self._paneSet then return end
+                if self._slot and self._paneSpace and ps == self._paneSpace then return end
 
                 if self._slot then
                     self:embed()
@@ -1575,7 +1575,7 @@ function MuxPane:_tryEmbedAt(gx, gy)
                     self._slot     = ps.outer
                     self._split    = nil
                     self._slotSide = nil
-                    self._paneSet  = ps
+                    self._paneSpace  = ps
                     self:embed(ps.outer)
                     ps.root = self
                 end
