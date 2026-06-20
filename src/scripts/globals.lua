@@ -84,6 +84,15 @@ function Mux._class(parent)
     return cls
 end
 
+-- MuxSurface: common base for any content-bearing Muxlet surface (panes and tabs).
+-- It owns only what both genuinely share — most importantly the tab-HOSTING
+-- capability (addTab/activateTab/removeTab/enableTabs/serialize/…), so a pane can
+-- host tabs and a tab can host sub-tabs through the same code. MuxPane adds chrome
+-- and layout; MuxTab adds the tab surface. Tab-host methods are attached to
+-- MuxSurface in tabs.lua. (Both subclasses resolve them via the __index chain, and
+-- static MuxPane.x access falls through here too, so this move changes no behavior.)
+MuxSurface = Mux._class()
+
 -- Returns a new table with all fields from base, overridden by override.
 function Mux._merge(base, override)
     local t = {}

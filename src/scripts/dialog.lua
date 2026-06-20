@@ -304,6 +304,10 @@ function MuxDialog:init(opts)
     self.floatX, self.floatY = x, y
     self.floatW, self.floatH = w, h
     self:_detachToFloat()
+    -- Give the new dialog the top z-sequence so raiseFloatingPanes puts it above
+    -- any already-open dialog (rather than below, per pairs() ordering).
+    Mux._raiseSeq = (Mux._raiseSeq or 0) + 1
+    self._raiseSeq = Mux._raiseSeq
     Mux.raiseFloatingPanes()
     -- Deferred second raise forces Qt to repaint border labels that may have
     -- been occluded by a pre-existing pane during the initial layout pass.

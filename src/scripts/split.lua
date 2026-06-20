@@ -146,9 +146,11 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
         -- Decide live vs preview: live resize stays smooth for a few panes, but
         -- each added content pane makes a single reposition heavier than a frame
         -- budget. Above the threshold, drag a cheap preview line and apply once
-        -- on release so cost is independent of pane count.
+        -- on release so cost is independent of pane count. Also force preview when
+        -- the main console is in this subtree: live mode would rewrap its scrollback
+        -- buffer every frame (~1s each), which is unusable regardless of pane count.
         local maxLive = (Mux.settings and Mux.settings.get("mux", "live_resize_max_panes")) or 2
-        drag.preview  = self:_leafCount() > maxLive
+        drag.preview  = self:_leafCount() > maxLive or self:_subtreeHasMainConsole()
         -- Measure slotA and dynamic space NOW (after any prior organize call).
         if self.direction == "v" then
             drag.startPos  = event.globalY
@@ -261,6 +263,26 @@ function MuxSplit:_leafCount()
     walk(self.childA)
     walk(self.childB)
     return n
+end
+
+-- True if a console-borders pane (the main game console host) is anywhere in this
+-- split's subtree. Resizing such a split changes the main console's width, which
+-- forces Mudlet to rewrap its entire scrollback (~1s for a busy session). That cost
+-- is fine once, on release, but ruinous per-frame — so a drag that touches the main
+-- console must use the preview line regardless of how few panes it contains.
+function MuxSplit:_subtreeHasMainConsole()
+    local found = false
+    local function walk(node)
+        if not node or found then return end
+        if node.outer then
+            if node.consoleBorders then found = true end
+        else
+            walk(node.childA); walk(node.childB)
+        end
+    end
+    walk(self.childA)
+    walk(self.childB)
+    return found
 end
 
 -- Fires onReposition for every MuxPane leaf in this split's subtree. Used after

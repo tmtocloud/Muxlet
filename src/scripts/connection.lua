@@ -140,7 +140,7 @@ end
 -- Each tab gets its own _connScreen inside _tabViewport, sibling of tab.content.
 -- Only the active tab's conn screen is ever visible at one time.
 
-function MuxPane:_buildTabConnScreen(tab)
+function MuxSurface:_buildTabConnScreen(tab)
     if tab._connScreen then return end
     if not self._tabViewport then return end
     local theme = Mux.activeTheme()
@@ -155,7 +155,7 @@ function MuxPane:_buildTabConnScreen(tab)
 end
 
 -- Show conn screen for a tab (only when that tab is currently active).
-function MuxPane:_showTabConnScreen(tab, state)
+function MuxSurface:_showTabConnScreen(tab, state)
     if not self._tabViewport then return end
     if not tab._connScreen then self:_buildTabConnScreen(tab) end
     if not tab._connScreen then return end
@@ -171,7 +171,7 @@ function MuxPane:_showTabConnScreen(tab, state)
 end
 
 -- Hide a tab's conn screen and restore its content if the tab is active.
-function MuxPane:_hideTabConnScreen(tab)
+function MuxSurface:_hideTabConnScreen(tab)
     if not tab._connScreen then return end
     tab._connScreen:hide()
     if self._activeTabId == tab.id then
@@ -180,7 +180,7 @@ function MuxPane:_hideTabConnScreen(tab)
 end
 
 -- Called from _applyTabTheme in tabs.lua to keep colours in sync.
-function MuxPane:_refreshTabConnScreen(tab)
+function MuxSurface:_refreshTabConnScreen(tab)
     if not tab._connScreen then return end
     local theme = Mux.activeTheme()
     tab._connScreen:setStyleSheet(
@@ -219,7 +219,7 @@ function MuxPane:setConnectionAware(enabled)
     end
 end
 
-function MuxPane:setTabConnectionAware(tabId, enabled)
+function MuxSurface:setTabConnectionAware(tabId, enabled)
     if not self._tabsEnabled then return end
     local tab = self:_findTab(tabId)
     if not tab then return end
@@ -270,9 +270,9 @@ end
 -- Wrap the original function (defined in tabs.lua) so tab switches respect the
 -- current connection state without modifying tabs.lua.
 
-local _origActivateTabObj = MuxPane._activateTabObj
+local _origActivateTabObj = MuxSurface._activateTabObj
 
-function MuxPane:_activateTabObj(tab)
+function MuxSurface:_activateTabObj(tab)
     -- Before switching: hide the previous tab's conn screen if it was showing.
     if self._activeTabId and self._activeTabId ~= tab.id then
         local cur = self:_findTab(self._activeTabId)

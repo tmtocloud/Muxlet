@@ -26,8 +26,65 @@ Mux._tabGapPane         = nil    -- pane whose tabs are currently resized to sho
 -- tab bars without iterating only Mux._panes.
 Mux._tabHosts = Mux._tabHosts or {}
 
+-- MuxTab: a content surface that lives inside a host's tab viewport. Sibling of
+-- MuxPane under MuxSurface — it has content/name/lifecycle and can host sub-tabs,
+-- but none of a pane's chrome (no frame, titlebar, handles, or own placement).
+-- init builds the three widgets a tab owns (content container, its background, and
+-- the tab-bar label) and sets the shared surface fields. Host bookkeeping (inserting
+-- into _tabs, wiring the label, activating) stays in MuxSurface:addTab.
+MuxTab = Mux._class(MuxSurface)
+Mux.Tab = MuxTab
+
+function MuxTab:init(opts)
+    opts = opts or {}
+    local host  = opts.host
+    local tabId = opts.id
+    local theme = Mux.activeTheme()
+
+    self.id          = tabId
+    self.name        = opts.name
+    self.pane        = host        -- back-reference to the hosting surface
+    self.renamable   = true
+    self.closeable   = true
+    self.movable     = true
+    self.contentable = true
+    self.nameAlign   = "center"
+    -- As a host, this flag gates whether right-click context menus appear on the
+    -- tabs it contains (the same gate MuxPane:init sets). Without it, right-clicking
+    -- a sub-tab does nothing, since the sub-tab's host is a MuxTab, not a pane.
+    self.contextMenu = (opts.contextMenu ~= false)
+    -- _gid gives unique widget-name prefixes if this tab later hosts sub-tabs.
+    self._gid        = host._gid .. "_st" .. tabId
+
+    local content = Geyser.Container:new({
+        name = host._gid .. "_tc_" .. tabId,
+        x = "0%", y = "0%", width = "100%", height = "100%",
+    }, host._tabViewport)
+
+    local contentBg = Geyser.Label:new({
+        name = host._gid .. "_tcbg_" .. tabId,
+        x = "0%", y = "0%", width = "100%", height = "100%", fillBg = 1,
+    }, content)
+    contentBg:setStyleSheet(theme.contentCss or "")
+    MuxPane._echoTabPlaceholder(contentBg, self.name, host.id, tabId)
+    content:hide()
+
+    local label = Geyser.Label:new({
+        name = host._gid .. "_tl_" .. tabId,
+        sizePolicy = "Dynamic",
+        x = "0%", y = "0%", width = "50%", height = "100%", fillBg = 1,
+    }, host._tabBarBox)
+    label:setStyleSheet(theme.tabInactiveCss or "")
+    host:_echoTabLabel(label, self.name, false, false, theme)
+    if not host._isSubTabHost then host._tabBarBox:organize() end
+
+    self.label     = label
+    self.content   = content
+    self.contentBg = contentBg
+end
+
 -- nameAlign is an optional 6th arg ("left", "center", "right"); defaults to "center".
-function MuxPane:_echoTabLabel(label, name, isActive, isChosen, theme, nameAlign)
+function MuxSurface:_echoTabLabel(label, name, isActive, isChosen, theme, nameAlign)
     local tc
     if isChosen       then tc = theme.tabMovingTextColor   or "#ffaaaa"
     elseif isActive   then tc = theme.tabActiveTextColor   or "#e1e1f2"
@@ -72,13 +129,13 @@ function MuxPane._echoTabPlaceholder(contentBg, tabName, paneId, tabId)
         ps))
 end
 
-function MuxPane:_findTab(tabId)
+function MuxSurface:_findTab(tabId)
     for i, tab in ipairs(self._tabs or {}) do
         if tab.id == tabId then return tab, i end
     end
 end
 
-function MuxPane:getTab(tabId)
+function MuxSurface:getTab(tabId)
     return self:_findTab(tabId)
 end
 
@@ -93,7 +150,7 @@ end
 -- Mirrors ATW's makeSpace(). excludeId skips the dragged tab so the other n-1
 -- visible tabs fill n slots (preserving tab width), giving a clean same-bar preview.
 -- Caller must call _clearDragSpace() to restore via organize() when done.
-function MuxPane:_makeDragSpace(insertIdx, excludeId)
+function MuxSurface:_makeDragSpace(insertIdx, excludeId)
     local box  = self._tabBarBox
     local barW = box:get_width()
 
@@ -121,7 +178,7 @@ end
 
 -- Also re-echoes all tab labels because resize()/move() calls can clear label
 -- HTML in some Mudlet builds.
-function MuxPane:_clearDragSpace()
+function MuxSurface:_clearDragSpace()
     if not self._tabBarBox then return end
     self._tabBarBox:organize()
     if Mux._tabGapPane == self then Mux._tabGapPane = nil end
@@ -217,7 +274,7 @@ end
 
 -- excludeId: skip this tab when counting slots (same-pane drag: dragged tab excluded).
 -- Uses ATW-style round-to-nearest so the gap tracks the cursor midpoint, not edge.
-function MuxPane:_calcInsertIdx(gx, excludeId)
+function MuxSurface:_calcInsertIdx(gx, excludeId)
     local box  = self._tabBarBox
     local bx   = box:get_x()
     local bw   = box:get_width()
@@ -297,7 +354,7 @@ local function getOrCreateOverlay(pane)
 end
 
 -- Hides or shows the add-tab button AND resizes the HBox to reclaim the space.
-function MuxPane:_setAddTabBtnVisible(visible)
+function MuxSurface:_setAddTabBtnVisible(visible)
     if not self._addTabBtn or not self._tabBarBox then return end
     if self._isSubTabHost then
         -- Sub-tab bars manage their own HBox width via _resizeSubTabBar;
@@ -322,7 +379,7 @@ end
 -- wide and then re-organize so each tab gets a fixed pixel width.  Sub-tab
 -- dividers land at absolute pixel positions unrelated to the parent bar's
 -- percentage-based dividers, so they never form a visual grid.
-function MuxPane:_resizeSubTabBar()
+function MuxSurface:_resizeSubTabBar()
     if not self._isSubTabHost or not self._tabBarBox then return end
     local theme = Mux.activeTheme()
     local tabW  = theme.subTabWidth or 80
@@ -382,7 +439,7 @@ local function buildTabInfrastructure(host)
     getOrCreateOverlay(host)
 end
 
-function MuxPane:enableTabs(opts)
+function MuxSurface:enableTabs(opts)
     opts = opts or {}
     -- Tab objects (sub-tab hosts) have a .pane back-reference; panes do not.
     -- Sub-tab hosts use a different code path for infrastructure setup.
@@ -424,7 +481,7 @@ function MuxPane:enableTabs(opts)
     Mux._log("MuxPane tabs enabled: %s (subHost=%s)", self.id or self._gid, tostring(isSubTabHost))
 end
 
-function MuxPane:disableTabs()
+function MuxSurface:disableTabs()
     if not self._tabsEnabled then return end
     self._tabsEnabled = false
     Mux._tabHosts[self._gid] = nil
@@ -437,7 +494,7 @@ function MuxPane:disableTabs()
     Mux._log("MuxPane tabs disabled: %s", self.id or self._gid)
 end
 
-function MuxPane:_hideTabBar()
+function MuxSurface:_hideTabBar()
     if self._tabBar      then self._tabBar:hide()      end
     if self._tabViewport then self._tabViewport:hide() end
     self.contentBg:show()
@@ -449,53 +506,21 @@ function MuxPane:_hideTabBar()
     end
 end
 
-function MuxPane:_collapseIfDone()
+function MuxSurface:_collapseIfDone()
     if self._tabsEnabled then return end
     if self._tabs and #self._tabs > 0 then return end
     self:_hideTabBar()
 end
 
-function MuxPane:addTab(name, pos)
+function MuxSurface:addTab(name, pos)
     if not self._tabsEnabled then self:enableTabs(); return end
 
-    local theme = Mux.activeTheme()
     local tabId = Mux._newId("tab")
     name = name or string.format("Tab %d", #self._tabs + 1)
     pos  = pos  or (#self._tabs + 1)
 
-    local content = Geyser.Container:new({
-        name = self._gid .. "_tc_" .. tabId,
-        x = "0%", y = "0%", width = "100%", height = "100%",
-    }, self._tabViewport)
+    local tab = MuxTab:new({ host = self, id = tabId, name = name })
 
-    local contentBg = Geyser.Label:new({
-        name = self._gid .. "_tcbg_" .. tabId,
-        x = "0%", y = "0%", width = "100%", height = "100%", fillBg = 1,
-    }, content)
-    contentBg:setStyleSheet(theme.contentCss or "")
-    MuxPane._echoTabPlaceholder(contentBg, name, self.id, tabId)
-    content:hide()
-
-    local label = Geyser.Label:new({
-        name = self._gid .. "_tl_" .. tabId,
-        sizePolicy = "Dynamic",
-        x = "0%", y = "0%", width = "50%", height = "100%", fillBg = 1,
-    }, self._tabBarBox)
-    label:setStyleSheet(theme.tabInactiveCss or "")
-    self:_echoTabLabel(label, name, false, false, theme)
-    if not self._isSubTabHost then self._tabBarBox:organize() end
-
-    local tab = {
-        id = tabId, name = name, pane = self,
-        label = label, content = content, contentBg = contentBg,
-        renamable = true, closeable = true, movable = true, contentable = true,
-        nameAlign = "center",
-        -- _gid provides unique widget name prefixes if this tab later hosts sub-tabs.
-        _gid = self._gid .. "_st" .. tabId,
-    }
-    -- Give tab objects the MuxPane method table so callers can do tab:enableTabs(),
-    -- tab:addTab(), etc. to build a nested tab bar inside this tab.
-    setmetatable(tab, { __index = MuxPane })
     table.insert(self._tabs, pos, tab)
     if pos < #self._tabs then self:_syncHBoxOrder() end
     if self._isSubTabHost then self:_resizeSubTabBar() end
@@ -508,7 +533,7 @@ function MuxPane:addTab(name, pos)
     return tab
 end
 
-function MuxPane:removeTab(tabId)
+function MuxSurface:removeTab(tabId)
     local tab, idx = self:_findTab(tabId)
     if not tab then return end
     if tab.closeable == false then Mux._warn("Tab '%s' is not closeable", tab.name); return end
@@ -560,7 +585,7 @@ end
 
 -- Shows a confirmation popup before closing a tab.
 -- Silently ignores non-closeable tabs. Calls removeTab on confirm.
-function MuxPane:_confirmCloseTab(tab)
+function MuxSurface:_confirmCloseTab(tab)
     if not tab or tab.closeable == false then return end
     local doConfirm = Mux.settings.get("mux", "confirmTabClose")
     if doConfirm == nil then doConfirm = true end
@@ -579,12 +604,12 @@ function MuxPane:_confirmCloseTab(tab)
     Mux._applyContent(confirmD, "mux_close_tab_confirm")
 end
 
-function MuxPane:activateTab(tabId)
+function MuxSurface:activateTab(tabId)
     local tab = self:_findTab(tabId)
     if tab then self:_activateTabObj(tab) end
 end
 
-function MuxPane:_activateTabObj(tab)
+function MuxSurface:_activateTabObj(tab)
     local theme = Mux.activeTheme()
     if self._activeTabId and self._activeTabId ~= tab.id then
         local cur = self:_findTab(self._activeTabId)
@@ -610,7 +635,7 @@ function MuxPane:_activateTabObj(tab)
     Mux._scheduleAutoSave()
 end
 
-function MuxPane:renameTab(tabId, newName)
+function MuxSurface:renameTab(tabId, newName)
     local tab = self:_findTab(tabId)
     if not tab then return end
     if not tab.renamable then return end
@@ -627,7 +652,7 @@ function MuxPane:renameTab(tabId, newName)
 end
 
 -- Sets the name alignment for a tab and immediately refreshes its label.
-function MuxPane:setTabNameAlign(tabId, align)
+function MuxSurface:setTabNameAlign(tabId, align)
     local tab = self:_findTab(tabId)
     if not tab then return end
     tab.nameAlign = align
@@ -641,7 +666,7 @@ end
 -- on all labels). Use drag.clicked (set true only on mousedown, false on mouseup)
 -- to distinguish hover from drag. This is the same pattern ATW uses with
 -- Adjustable.TabWindow.clicked.
-function MuxPane:_wireTabLabel(tab)
+function MuxSurface:_wireTabLabel(tab)
     local pane = self
     local drag = { clicked = false, active = false, startX = 0, startY = 0, middleCloseFired = false }
 
@@ -826,7 +851,7 @@ end
 
 Mux._cancelTabMove = Mux._resetOverlay
 
-function MuxPane:_reorderTab(fromIdx, toIdx)
+function MuxSurface:_reorderTab(fromIdx, toIdx)
     if fromIdx == toIdx then return end
     local tab = table.remove(self._tabs, fromIdx)
     table.insert(self._tabs, toIdx, tab)
@@ -835,15 +860,26 @@ function MuxPane:_reorderTab(fromIdx, toIdx)
     Mux._scheduleAutoSave()
 end
 
-function MuxPane:_syncHBoxOrder()
+function MuxSurface:_syncHBoxOrder()
     local box = self._tabBarBox
     for i = #box.windows, 1, -1 do box.windows[i] = nil end
     for i, tab in ipairs(self._tabs) do box.windows[i] = tab.label.name end
 end
 
-function MuxPane:_receiveTab(tab, fromPane, insertPos)
+function MuxSurface:_receiveTab(tab, fromPane, insertPos)
     if not tab.movable then return end
     if not self._tabsEnabled then self:enableTabs({ noDefaultTab = true }) end
+
+    -- A tab's properties dialog binds to its host at open time; moving the tab to a
+    -- new host would leave those bindings stale (toggles act on the old host). Close
+    -- any open properties dialog for this tab so the user gets a correctly-bound one
+    -- when they reopen it from the new host.
+    if tab._propertiesDialogs then
+        for _, dlg in pairs(tab._propertiesDialogs) do
+            if dlg and dlg.close then dlg:close() end
+        end
+        tab._propertiesDialogs = nil
+    end
 
     local _, srcIdx = fromPane:_findTab(tab.id)
     if not srcIdx then return end
@@ -918,7 +954,7 @@ function MuxPane:_receiveTab(tab, fromPane, insertPos)
     Mux._log("_receiveTab: '%s' → '%s' pos=%d", tab.name, self.id, insertPos)
 end
 
-function MuxPane:_showTabContextMenu(tab, gx, gy)
+function MuxSurface:_showTabContextMenu(tab, gx, gy)
     local menu  = Mux._contextMenu
     local theme = Mux.activeTheme()
     menu.itemHeight = theme.contextMenuItemHeight or 28
@@ -961,7 +997,7 @@ function MuxPane:_showTabContextMenu(tab, gx, gy)
     end
 end
 
-function MuxPane:_serializeTabs()
+function MuxSurface:_serializeTabs()
     if not self._tabsEnabled or not self._tabs or #self._tabs == 0 then return nil end
     local tabs = {}
     for _, tab in ipairs(self._tabs) do
@@ -993,7 +1029,27 @@ function MuxPane:_serializeTabs()
     return tabs, activeTabName
 end
 
-function MuxPane:_applyTabTheme()
+-- Returns this surface's transferable state (name, active content, capability
+-- flags, and any sub-tabs) as a plain table. This is the seam for a future
+-- "tear a tab out into a real pane" feature: capture a tab's state, build a
+-- MuxPane from it, and discard the tab. Not used yet — kept minimal on purpose.
+function MuxSurface:_captureState()
+    local state = {
+        name           = self.name,
+        _activeContent = self._activeContent,
+        renamable      = self.renamable   ~= false,
+        closeable      = self.closeable    ~= false,
+        movable        = self.movable      ~= false,
+        contentable    = self.contentable  ~= false,
+        nameAlign      = self.nameAlign,
+    }
+    if self._tabsEnabled then
+        state.tabs, state.activeTabName = self:_serializeTabs()
+    end
+    return state
+end
+
+function MuxSurface:_applyTabTheme()
     if not self._tabsEnabled or not self._tabs then return end
     local theme = Mux.activeTheme()
     if self._tabBar    then self._tabBar:setStyleSheet(theme.tabBarCss or "") end

@@ -13,18 +13,32 @@ function Mux.currentTheme()  return Mux._activeThemeName end
 -- border — panes are styled by their resting frame (grey panes, gold dialogs)
 -- and edited directly from the UI.
 function Mux.raisePane(pane)
-    if pane and pane.floating then pane:raise() end
+    if pane and pane.floating then
+        Mux._raiseSeq = (Mux._raiseSeq or 0) + 1
+        pane._raiseSeq = Mux._raiseSeq
+        pane:raise()
+    end
 end
 
 function Mux.raiseFloatingPanes()
     -- Raise non-dialog floats first, then dialogs, so dialog overlays (incl.
     -- close confirmations) always sit above ordinary floats and a zoomed pane.
+    -- Within each group, raise in ascending _raiseSeq order so the most recently
+    -- created/activated window ends up on top. (Iterating Mux._panes with pairs()
+    -- has no defined order, which is why a newly opened dialog could otherwise land
+    -- beneath an older one.)
+    local floats, dialogs = {}, {}
     for _, pane in pairs(Mux._panes) do
-        if pane.floating and not pane.overlay then pane:raise() end
+        if pane.floating then
+            if pane.overlay then dialogs[#dialogs + 1] = pane
+            else                 floats[#floats + 1]   = pane end
+        end
     end
-    for _, pane in pairs(Mux._panes) do
-        if pane.floating and pane.overlay then pane:raise() end
-    end
+    local function bySeq(a, b) return (a._raiseSeq or 0) < (b._raiseSeq or 0) end
+    table.sort(floats,  bySeq)
+    table.sort(dialogs, bySeq)
+    for _, p in ipairs(floats)  do p:raise() end
+    for _, p in ipairs(dialogs) do p:raise() end
 end
 
 -- Called after a zoom so that popup dialogs remain above the zoomed pane.

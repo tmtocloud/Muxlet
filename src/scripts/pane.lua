@@ -22,7 +22,7 @@
 --   Embed: outer:changeContainer(slot)   → "0%","0%" move      → reposition()
 --   All children cascade automatically via Geyser's reposition() chain.
 
-MuxPane = Mux._class()
+MuxPane = Mux._class(MuxSurface)
 Mux.Pane = MuxPane
 
 local borderInset = 2   -- px gap so the 2px CSS border on frame is visible all around
@@ -1016,7 +1016,7 @@ end
 --   • tabs enabled (content goes into individual tabs)
 --   • tabs disabled but tab bar still has tabs being dragged out
 -- Only restored when the bar has fully collapsed (no tabs, tabs disabled).
-function MuxPane:_contentEnabled()
+function MuxSurface:_contentEnabled()
     if not self.contentable then return false end
     if self._tabsEnabled then return false end
     if self._tabs and #self._tabs > 0 then return false end
@@ -1025,7 +1025,7 @@ end
 
 -- Placeholder shown on contentBg until real content is attached.
 -- Any user widget placed as a sibling naturally renders above it.
-function MuxPane:_updatePlaceholder()
+function MuxSurface:_updatePlaceholder()
     if not self.contentBg then return end
     if self._activeContent  then return end
     if self.consoleBorders then return end
