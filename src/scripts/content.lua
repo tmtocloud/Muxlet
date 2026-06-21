@@ -181,6 +181,29 @@ function Mux._applyContent(target, contentName)
     Mux._scheduleAutoSave()
 end
 
+-- Remove whatever content is active on a target, returning it to its empty
+-- placeholder state.  Mirrors the teardown _applyContent does before replacing,
+-- but leaves the slot empty rather than applying something new.
+function Mux._removeContent(target)
+    if not target or not target._activeContent then return end
+    local name = target._activeContent
+    local def  = Mux._content[name]
+    if def then
+        if def.singleton and def._activeTargetRef == target then def._activeTargetRef = nil end
+        if type(def.remove) == "function" then pcall(def.remove, target) end
+    end
+    if target.content and target.content.children then
+        for _, child in ipairs(target.content.children) do
+            if type(child.hide) == "function" then pcall(child.hide, child) end
+        end
+    end
+    target._activeContent = nil
+    if target.contentBg and type(target.contentBg.show) == "function" then
+        pcall(target.contentBg.show, target.contentBg)
+    end
+    Mux._scheduleAutoSave()
+end
+
 --- Return an alphabetically sorted list of user-visible registered content names.
 -- Content registered with internal=true is excluded; it is used by Muxlet
 -- system UI and should not appear in the Content Library context menu.

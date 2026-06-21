@@ -1,27 +1,21 @@
 -- Muxlet — Button Grid content
 --
 -- A registered, user-addable content type: a configurable grid of buttons.  Each
--- button runs either a raw command string (send/expandAlias) or a registered
--- action (Mux.runAction).  Users add the content to a pane, enter edit mode to
--- add/configure buttons, then leave edit mode to use them.
+-- button runs a raw command string (expandAlias) or a registered action
+-- (Mux.runAction).  Add it to a pane, click ⚙ to edit, configure buttons, click
+-- ⚙ again to use them.  Config persists per host pane id to mux_buttongrids.json
+-- (stable once the workspace is saved).
 --
--- PHASE 1 (this build): view mode, an edit mode with a per-button property editor
--- (label, colours, font, width, and action binding via a picker of registered
--- actions OR a raw command), grid settings (columns/gap/row height), and
--- per-instance persistence.  Layout is auto-flow: buttons fill left-to-right,
--- wrapping by column count, each spanning `width` columns.
--- PHASE 2 (next): drag-to-place / drag-to-span grid-snap editing.
---
--- PERSISTENCE: each grid's config is keyed by the host pane id in
--- Muxlet_persistent/mux_buttongrids.json.  A pane's id is stable once the
--- workspace is saved (the "lock it in place" step), so saved layouts round-trip
--- across reloads.  Config is written immediately on every edit.
+-- Layout is auto-flow: buttons fill left-to-right, wrapping by column count, each
+-- spanning `width` columns.  Independent horizontal/vertical gaps.  Buttons
+-- reflow to fit their container on resize.
 
-local STATE_BY_TARGET = {}                                  -- target.id -> { editing, widgets, gen }
+local STATE_BY_TARGET = {}
 local STORE_FILE      = Mux._persistentDir .. "/mux_buttongrids.json"
-local STORE           = nil                                 -- paneId -> config (lazy-loaded)
+local STORE           = nil
+local DEFAULT_ROW_H   = 44
 
-local DEFAULT_ROW_H = 44
+local SHAPE_RADIUS = { square = 0, rounded = 6, pill = 999 }
 
 -- ── Persistence ───────────────────────────────────────────────────────────────
 
@@ -29,12 +23,11 @@ local function loadStore()
     if STORE then return STORE end
     STORE = {}
     if io.exists(STORE_FILE) then
-        local ok = pcall(function()
+        pcall(function()
             local f = io.open(STORE_FILE, "r"); local raw = f:read("*all"); f:close()
             local data = yajl.to_value(raw)
             if type(data) == "table" then STORE = data end
         end)
-        if not ok and Mux._err then Mux._err("button store load failed") end
     end
     return STORE
 end
@@ -49,10 +42,10 @@ end
 
 local function defaultConfig()
     return {
-        cols = 2, gap = 5, rowH = DEFAULT_ROW_H,
+        cols = 1, gapX = 5, gapY = 5, rowH = DEFAULT_ROW_H,
         buttons = {
-            { label = "Edit me", width = 2, bg = "#1c2a4e", fg = "#96c8ff", fontSize = 12,
-              action = { type = "command", text = "" } },
+            { label = "Hello World", width = 1, bg = "#1c2a4e", fg = "#96c8ff", fontSize = 12,
+              shape = "rounded", action = { type = "command", text = "Hello World" } },
         },
     }
 end
@@ -61,9 +54,11 @@ local function configFor(paneId)
     local store = loadStore()
     if not store[paneId] then store[paneId] = defaultConfig() end
     local c = store[paneId]
-    c.cols    = c.cols    or 2
-    c.gap     = c.gap     or 5
-    c.rowH    = c.rowH    or DEFAULT_ROW_H
+    c.cols = c.cols or 1
+    if c.gap and not c.gapX then c.gapX = c.gap; c.gapY = c.gap end
+    c.gapX = c.gapX or 5
+    c.gapY = c.gapY or 5
+    c.rowH = c.rowH or DEFAULT_ROW_H
     c.buttons = c.buttons or {}
     return c
 end
@@ -71,10 +66,9 @@ end
 -- ── Layout (auto-flow) ──────────────────────────────────────────────────────────
 
 local function layoutRects(cfg, W)
-    local cols  = math.max(1, cfg.cols)
-    local gap   = cfg.gap
-    local rowH  = cfg.rowH
-    local cellW = (W - gap * (cols + 1)) / cols
+    local cols = math.max(1, cfg.cols)
+    local gapX, gapY, rowH = cfg.gapX, cfg.gapY, cfg.rowH
+    local cellW = (W - gapX * (cols + 1)) / cols
     if cellW < 1 then cellW = 1 end
     local rects, r, c = {}, 0, 0
     for i, btn in ipairs(cfg.buttons) do
@@ -82,17 +76,16 @@ local function layoutRects(cfg, W)
         if c + span > cols then r = r + 1; c = 0 end
         rects[#rects + 1] = {
             index = i, btn = btn,
-            x = math.floor(gap + c * (cellW + gap)),
-            y = gap + r * (rowH + gap),
-            w = math.floor(span * cellW + (span - 1) * gap),
+            x = math.floor(gapX + c * (cellW + gapX)),
+            y = gapY + r * (rowH + gapY),
+            w = math.floor(span * cellW + (span - 1) * gapX),
             h = rowH,
         }
         c = c + span
         if c >= cols then r = r + 1; c = 0 end
     end
     local rowsUsed = r + (c > 0 and 1 or 0)
-    local totalH   = gap + rowsUsed * (rowH + gap)
-    return rects, totalH
+    return rects, gapY + rowsUsed * (rowH + gapY)
 end
 
 -- ── Button appearance / behaviour ────────────────────────────────────────────────
@@ -100,28 +93,29 @@ end
 local function buttonCss(btn, editing)
     local bg = btn.bg or "#1c2a4e"
     local fg = btn.fg or "#96c8ff"
+    local radius = SHAPE_RADIUS[btn.shape or "rounded"] or 6
     local border = editing and "border:1px dashed rgba(255,210,90,0.9);"
                             or "border:1px solid rgba(255,255,255,0.10);"
     return string.format([[
-        QLabel { background:%s; color:%s; %s border-radius:5px;
+        QLabel { background:%s; color:%s; %s border-radius:%dpx;
                  font-size:%dpx; font-weight:bold; qproperty-alignment:AlignCenter;
                  font-family:"Segoe UI","Helvetica",sans-serif; }
         QLabel::hover { background:%s; }
-    ]], bg, fg, border, btn.fontSize or 12, bg)
+    ]], bg, fg, border, radius, btn.fontSize or 12, bg)
 end
 
-local function runButton(btn, target)
+local function runButton(btn)
     local a = btn.action or {}
     if a.type == "action" and a.actionId then
-        Mux.runAction(a.actionId, { target = target, source = "button" })
+        Mux.runAction(a.actionId, { source = "button" })
     elseif a.type == "command" and a.text and a.text ~= "" then
-        expandAlias(a.text, false)
+        expandAlias(a.text)
     end
 end
 
 -- ── Render ───────────────────────────────────────────────────────────────────────
 
-local clearWidgets, render, openButtonEditor, openGridSettings   -- forward decls
+local clearWidgets, render, openButtonEditor, openGridSettings
 
 clearWidgets = function(st)
     for _, w in ipairs(st.widgets or {}) do
@@ -131,10 +125,11 @@ clearWidgets = function(st)
 end
 
 render = function(target)
-    local st  = STATE_BY_TARGET[target.id]
+    local st = STATE_BY_TARGET[target.id]
     if not st then return end
+    local C = target.content
+    if not (C and C.get_width) then return end
     local cfg = configFor(target.id)
-    local C   = target.content
     local g   = target._gid
     local W   = C:get_width(); if W < 50 then W = 300 end
     clearWidgets(st)
@@ -154,7 +149,7 @@ render = function(target)
             lbl:setClickCallback(function() openButtonEditor(target, idx) end)
         else
             local b = btn
-            lbl:setClickCallback(function() runButton(b, target) end)
+            lbl:setClickCallback(function() runButton(b) end)
             local a = btn.action or {}
             if a.type == "command" and a.text and a.text ~= "" then lbl:setToolTip(a.text)
             elseif a.type == "action" and a.actionId then
@@ -165,36 +160,30 @@ render = function(target)
         st.widgets[#st.widgets + 1] = lbl
     end
 
-    -- Edit-mode toggle (always present, top-right corner).
     local gear = Geyser.Label:new({ name = g .. "_bgear_" .. gen, x = "-26", y = 2, width = 22, height = 22 }, C)
     gear:setStyleSheet(st.editing
         and [[QLabel{background:rgba(255,210,90,0.92);color:#222;border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}]]
         or  [[QLabel{background:rgba(40,44,60,0.7);color:rgba(200,205,225,0.9);border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}QLabel::hover{background:rgba(60,66,88,0.9);}]])
     gear:echo("<center>⚙</center>")
     gear:setToolTip(st.editing and "Exit edit mode" or "Edit buttons")
-    gear:setClickCallback(function()
-        st.editing = not st.editing
-        render(target)
-    end)
+    gear:setClickCallback(function() st.editing = not st.editing; render(target) end)
     st.widgets[#st.widgets + 1] = gear
 
     if st.editing then
         local _, usedH = layoutRects(cfg, W)
         local by = usedH + 4
-        local add = Geyser.Label:new({ name = g .. "_badd_" .. gen, x = cfg.gap, y = by, width = 120, height = 26 }, C)
+        local add = Geyser.Label:new({ name = g .. "_badd_" .. gen, x = cfg.gapX, y = by, width = 120, height = 26 }, C)
         add:setStyleSheet([[QLabel{background:rgba(40,90,50,0.9);color:#cfe;border:1px solid rgba(90,170,110,0.6);
             border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(55,115,65,0.95);}]])
         add:echo("<center>＋ Add Button</center>")
         add:setClickCallback(function()
             cfg.buttons[#cfg.buttons + 1] = { label = "Button", width = 1, bg = "#1c2a4e", fg = "#96c8ff",
-                fontSize = 12, action = { type = "command", text = "" } }
-            saveStore()
-            render(target)
-            openButtonEditor(target, #cfg.buttons)
+                fontSize = 12, shape = "rounded", action = { type = "command", text = "" } }
+            saveStore(); render(target); openButtonEditor(target, #cfg.buttons)
         end)
         st.widgets[#st.widgets + 1] = add
 
-        local gset = Geyser.Label:new({ name = g .. "_bgset_" .. gen, x = cfg.gap + 128, y = by, width = 120, height = 26 }, C)
+        local gset = Geyser.Label:new({ name = g .. "_bgset_" .. gen, x = cfg.gapX + 128, y = by, width = 120, height = 26 }, C)
         gset:setStyleSheet([[QLabel{background:rgba(40,50,80,0.9);color:#cde;border:1px solid rgba(90,110,170,0.6);
             border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(55,68,110,0.95);}]])
         gset:echo("<center>⚙ Grid Settings</center>")
@@ -203,7 +192,10 @@ render = function(target)
     end
 end
 
--- ── Editors (dialogs) ─────────────────────────────────────────────────────────────
+-- ── Button editor (dialog) ────────────────────────────────────────────────────────
+-- Live preview on every change (no disk write); persisted on Done / close.
+-- Action is a dropdown with hover descriptions; text fields have no per-field
+-- Apply button (Enter commits, Done saves).  Dialog sizes to fit — no scrolling.
 
 openButtonEditor = function(target, idx)
     local cfg = configFor(target.id)
@@ -211,91 +203,152 @@ openButtonEditor = function(target, idx)
     if not btn then return end
     btn.action = btn.action or { type = "command", text = "" }
 
+    local W   = 400
+    local BAR = 40
     local key = "mux_btn_editor_" .. target.id
-    local d = Mux.createDialog({ title = "Edit Button", width = 380, height = 430, singleton = key, contextMenu = false })
+    local d = Mux.createDialog({ title = "Edit Button", width = W, height = 480, singleton = key, contextMenu = false })
     if not d then return end
     if d.contentBg then d.contentBg:echo(""); d.contentBg:hide() end
 
-    -- Action options: registered actions, presented as "[group] name".
-    local actionOpts = { { value = "", label = "— pick an action —" } }
-    for _, a in ipairs(Mux.listActions()) do
-        actionOpts[#actionOpts + 1] = { value = a.id, label = string.format("[%s] %s", a.group, a.name) }
+    local cw = d.content:get_width(); if cw < 50 then cw = W end
+    local function getContentPos() return d.content:get_x(), d.content:get_y() end
+    local function preview() render(target) end   -- live, no save (item 5)
+
+    local function actionOptions()
+        local opts = { { value = "", label = "— pick an action —", desc = "No action bound." } }
+        for _, a in ipairs(Mux.listActions()) do
+            opts[#opts + 1] = { value = a.id, label = string.format("[%s] %s", a.group, a.name), desc = a.desc }
+        end
+        return opts
     end
 
-    local function persist() saveStore(); render(target) end
+    local function buildRows()
+        local rows = {
+            { label = "Label", type = "text",
+              readFn = function() return btn.label or "" end,
+              writeFn = function(v) btn.label = v; preview() end },
+            { label = "Action Type", type = "segmentedControl",
+              options = { { value = "command", label = "Command" }, { value = "action", label = "Action" } },
+              readFn = function() return btn.action.type or "command" end,
+              writeFn = function(v) btn.action.type = v; preview(); d._beRebuild() end },
+        }
+        if (btn.action.type or "command") == "command" then
+            rows[#rows + 1] = { label = "Command", type = "text",
+                desc = "Sent as if typed (and echoed to the console). Press Enter to apply.",
+                readFn = function() return btn.action.text or "" end,
+                writeFn = function(v) btn.action.text = v; preview() end }
+        else
+            rows[#rows + 1] = { label = "Action", type = "array", display = "dropdown",
+                desc = "Runs a registered action. Hover an option for what it does. Packages "
+                    .. "register actions (e.g. fed2-tools' Open Galaxy); see Mux.registerAction.",
+                options = actionOptions(),
+                readFn = function() return btn.action.actionId or "" end,
+                writeFn = function(v) btn.action.actionId = (v ~= "" and v or nil); preview() end }
+        end
+        rows[#rows + 1] = { label = "Shape", type = "segmentedControl",
+            options = { { value = "square", label = "Square" }, { value = "rounded", label = "Rounded" }, { value = "pill", label = "Pill" } },
+            readFn = function() return btn.shape or "rounded" end,
+            writeFn = function(v) btn.shape = v; preview() end }
+        rows[#rows + 1] = { label = "Width (columns)", type = "number", min = 1, max = math.max(1, cfg.cols),
+            readFn = function() return btn.width or 1 end,
+            writeFn = function(v) btn.width = v; preview() end }
+        rows[#rows + 1] = { label = "Font Size", type = "number", min = 6, max = 32,
+            readFn = function() return btn.fontSize or 12 end,
+            writeFn = function(v) btn.fontSize = v; preview() end }
+        rows[#rows + 1] = { label = "Background", type = "text", desc = "CSS colour, e.g. #1c2a4e",
+            readFn = function() return btn.bg or "#1c2a4e" end,
+            writeFn = function(v) btn.bg = v; preview() end }
+        rows[#rows + 1] = { label = "Text Colour", type = "text", desc = "CSS colour, e.g. #96c8ff",
+            readFn = function() return btn.fg or "#96c8ff" end,
+            writeFn = function(v) btn.fg = v; preview() end }
+        return rows
+    end
 
-    local rows = {
-        { label = "Label", type = "text",
-          readFn = function() return btn.label or "" end,
-          writeFn = function(v) btn.label = v; persist() end },
-        { label = "Action Type", type = "segmentedControl",
-          options = { { value = "command", label = "Command" }, { value = "action", label = "Action" } },
-          readFn = function() return btn.action.type or "command" end,
-          writeFn = function(v) btn.action.type = v; persist() end },
-        { label = "Command", type = "text", desc = "Sent as if typed (used when Action Type = Command)",
-          readFn = function() return btn.action.text or "" end,
-          writeFn = function(v) btn.action.text = v; persist() end },
-        { label = "Action", type = "choiceCycler", desc = "Registered action (used when Action Type = Action)",
-          options = actionOpts, widgetWidth = 200,
-          readFn = function() return btn.action.actionId or "" end,
-          writeFn = function(v) btn.action.actionId = (v ~= "" and v or nil); persist() end },
-        { label = "Width (columns)", type = "number", min = 1, max = 8,
-          readFn = function() return btn.width or 1 end,
-          writeFn = function(v) btn.width = v; persist() end },
-        { label = "Font Size", type = "number", min = 6, max = 32,
-          readFn = function() return btn.fontSize or 12 end,
-          writeFn = function(v) btn.fontSize = v; persist() end },
-        { label = "Background", type = "text", desc = "CSS colour, e.g. #1c2a4e",
-          readFn = function() return btn.bg or "#1c2a4e" end,
-          writeFn = function(v) btn.bg = v; persist() end },
-        { label = "Text Colour", type = "text", desc = "CSS colour, e.g. #96c8ff",
-          readFn = function() return btn.fg or "#96c8ff" end,
-          writeFn = function(v) btn.fg = v; persist() end },
-    }
+    local function fitDialog(formH)
+        local contentH = formH + BAR
+        d.floatH = contentH + 30                      -- + titlebar allowance
+        if d.outer then d.outer:resize(d.floatW or W, d.floatH) end
+    end
 
-    local cw = d.content:get_width(); if cw < 50 then cw = 376 end
-    local formH = Mux.ui.formHeight(rows)
-    local form = Geyser.Label:new({ name = d._gid .. "_be_form", x = 0, y = 0, width = cw, height = formH }, d.content)
-    form:setStyleSheet("background:rgba(18,18,26,1);border:none;")
-    Mux.ui.buildForm(form, rows, { width = cw, prefix = d._gid .. "_be" })
+    local formGen, formHost = 0, nil
+    d._beRebuild = function()
+        if formHost then if formHost.delete then formHost:delete() else formHost:hide() end end
+        formGen = formGen + 1
+        local rows = buildRows()
+        local fh   = Mux.ui.formHeight(rows)
+        formHost = Geyser.Label:new({ name = d._gid .. "_be_form" .. formGen, x = 0, y = 0, width = cw, height = fh }, d.content)
+        formHost:setStyleSheet("background:rgba(18,18,26,1);border:none;")
+        Mux.ui.buildForm(formHost, rows, {
+            width = cw, prefix = d._gid .. "_be" .. formGen,
+            hideApply = true, getContentScreenPos = getContentPos,
+        })
+        fitDialog(fh)
+    end
+    d._beRebuild()
 
-    local del = Geyser.Label:new({ name = d._gid .. "_be_del", x = 8, y = "-32", width = 100, height = 26 }, d.content)
+    -- Fixed bottom bar (anchored to dialog bottom).
+    local bar = Geyser.Label:new({ name = d._gid .. "_be_bar", x = 0, y = "-40", width = "100%", height = BAR }, d.content)
+    bar:setStyleSheet("background:rgba(14,15,22,1);border:none;border-top:1px solid rgba(255,255,255,0.08);")
+    local del = Geyser.Label:new({ name = d._gid .. "_be_del", x = 8, y = 7, width = 80, height = 26 }, bar)
     del:setStyleSheet([[QLabel{background:rgba(120,40,40,0.9);color:#fdd;border:1px solid rgba(180,80,80,0.6);
         border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(150,55,55,0.95);}]])
     del:echo("<center>🗑 Delete</center>")
-    del:setClickCallback(function()
-        table.remove(cfg.buttons, idx)
-        saveStore(); render(target); d:close()
-    end)
+    del:setClickCallback(function() table.remove(cfg.buttons, idx); saveStore(); render(target); d.onClose = nil; d:close() end)
 
-    local done = Geyser.Label:new({ name = d._gid .. "_be_done", x = "-108", y = "-32", width = 100, height = 26 }, d.content)
+    local test = Geyser.Label:new({ name = d._gid .. "_be_test", x = 94, y = 7, width = 70, height = 26 }, bar)
+    test:setStyleSheet([[QLabel{background:rgba(40,50,80,0.9);color:#cde;border:1px solid rgba(90,110,170,0.6);
+        border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(55,68,110,0.95);}]])
+    test:echo("<center>▶ Test</center>")
+    test:setToolTip("Run this button's action now (you can't click it in the grid while editing)")
+    test:setClickCallback(function() runButton(btn) end)
+
+    local done = Geyser.Label:new({ name = d._gid .. "_be_done", x = "-88", y = 7, width = 80, height = 26 }, bar)
     done:setStyleSheet([[QLabel{background:rgba(40,90,50,0.9);color:#cfe;border:1px solid rgba(90,170,110,0.6);
         border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(55,115,65,0.95);}]])
     done:echo("<center>Done</center>")
-    done:setClickCallback(function() d:close() end)
+    done:setClickCallback(function() saveStore(); d:close() end)
+
+    d.onClose = function() saveStore() end   -- persist edits if closed via ✕
 end
 
 openGridSettings = function(target)
     local cfg = configFor(target.id)
     local key = "mux_grid_settings_" .. target.id
-    local d = Mux.createDialog({ title = "Grid Settings", width = 360, height = 200, singleton = key, contextMenu = false })
+    local d = Mux.createDialog({ title = "Grid Settings", width = 360, height = 260, singleton = key, contextMenu = false })
     if not d then return end
     if d.contentBg then d.contentBg:echo(""); d.contentBg:hide() end
-
-    local function persist() saveStore(); render(target) end
+    local function preview() render(target) end
     local rows = {
         { label = "Columns", type = "number", min = 1, max = 8,
-          readFn = function() return cfg.cols end,  writeFn = function(v) cfg.cols = v; persist() end },
-        { label = "Gap (px)", type = "number", min = 0, max = 24,
-          readFn = function() return cfg.gap end,   writeFn = function(v) cfg.gap = v; persist() end },
+          readFn = function() return cfg.cols end, writeFn = function(v) cfg.cols = v; preview() end },
+        { label = "Horizontal Gap (px)", type = "number", min = 0, max = 24,
+          readFn = function() return cfg.gapX end, writeFn = function(v) cfg.gapX = v; preview() end },
+        { label = "Vertical Gap (px)", type = "number", min = 0, max = 24,
+          readFn = function() return cfg.gapY end, writeFn = function(v) cfg.gapY = v; preview() end },
         { label = "Row Height (px)", type = "number", min = 20, max = 120, step = 2,
-          readFn = function() return cfg.rowH end,  writeFn = function(v) cfg.rowH = v; persist() end },
+          readFn = function() return cfg.rowH end, writeFn = function(v) cfg.rowH = v; preview() end },
     }
     local cw = d.content:get_width(); if cw < 50 then cw = 356 end
     local form = Geyser.Label:new({ name = d._gid .. "_gs_form", x = 0, y = 0, width = cw, height = Mux.ui.formHeight(rows) }, d.content)
     form:setStyleSheet("background:rgba(18,18,26,1);border:none;")
-    Mux.ui.buildForm(form, rows, { width = cw, prefix = d._gid .. "_gs" })
+    Mux.ui.buildForm(form, rows, { width = cw, prefix = d._gid .. "_gs", hideApply = true })
+    d.onClose = function() saveStore() end
 end
+
+-- ── Resize reflow (item 6) ──────────────────────────────────────────────────────
+-- Embedded/split resizes raise sysWindowResizeEvent; re-lay-out all live grids
+-- (coalesced) so buttons re-fit their container.
+local resizePending = false
+registerAnonymousEventHandler("sysWindowResizeEvent", function()
+    if resizePending then return end
+    resizePending = true
+    tempTimer(0.1, function()
+        resizePending = false
+        for _, st in pairs(STATE_BY_TARGET) do
+            if st.target and st.target.content then render(st.target) end
+        end
+    end)
+end)
 
 -- ── Content registration ──────────────────────────────────────────────────────────
 
@@ -305,9 +358,10 @@ Mux.registerContent("mux_buttons", {
     singleton   = false,
     apply = function(target)
         if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
-        STATE_BY_TARGET[target.id] = STATE_BY_TARGET[target.id] or { editing = false, widgets = {}, gen = 0 }
-        -- Defer so target.content has its final width before we size buttons.
-        tempTimer(0.05, function() render(target) end)
+        local st = STATE_BY_TARGET[target.id] or { editing = false, widgets = {}, gen = 0 }
+        st.target = target
+        STATE_BY_TARGET[target.id] = st
+        render(target)
     end,
     remove = function(target)
         local st = STATE_BY_TARGET[target.id]

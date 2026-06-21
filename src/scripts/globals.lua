@@ -527,9 +527,11 @@ function Mux._showContentLibrary(pane)
     local dlgH      = math.min(#contentNames * LIB_ROW_H + 26, 500)
     local innerH    = dlgH - 26
 
+    local paneLabel = pane.name or pane.id or "pane"
     local dlg = Mux.createDialog({
-        title = "Content Library",
+        title = "Content Library — " .. paneLabel,
         width = dlgW, height = dlgH,
+        singleton = "mux_contentlib_" .. (pane.id or paneLabel),
         contextMenu = false,
     })
     if dlg.contentBg then dlg.contentBg:echo(""); dlg.contentBg:hide() end
@@ -555,9 +557,11 @@ function Mux._showContentLibrary(pane)
         local isEven   = (i % 2 == 0)
         local yOff     = (i - 1) * LIB_ROW_H
 
-        -- Singleton already deployed elsewhere — grey out the entire row.
+        -- State for THIS pane: active here (removable), held by a singleton
+        -- elsewhere (greyed/locked), or free to add.
+        local isHere = (pane._activeContent == contentName)
         local isLocked = def and def.singleton
-            and def._activeTargetRef
+            and def._activeTargetRef and def._activeTargetRef ~= pane
             and def._activeTargetRef._activeContent == contentName
 
         local rowBg = Geyser.Label:new({
@@ -618,11 +622,21 @@ function Mux._showContentLibrary(pane)
             or  "background:transparent;color:#c6d2ee;font-size:11px;font-weight:bold;")
         nameLbl:rawEcho(dispName)
 
-        -- Add / Active button
+        -- Add / Remove / Active button
         local addBtn = Geyser.Label:new({
             name=pfx.."r"..i.."ab", x=contentW-82, y=yOff+13, width=72, height=26, fillBg=1,
         }, list)
-        if isLocked then
+        local capName = contentName
+        local function refresh() dlg:close(); Mux._showContentLibrary(pane) end
+        if isHere then
+            addBtn:setStyleSheet([[
+                QLabel{background:rgba(120,40,40,0.9);color:#fdd;font-size:9px;font-weight:bold;
+                       border:1px solid rgba(180,80,80,0.55);border-radius:4px;}
+                QLabel::hover{background:rgba(150,55,55,0.95);}
+            ]])
+            addBtn:rawEcho("<center>Remove</center>")
+            addBtn:setClickCallback(function() Mux._removeContent(pane); refresh() end)
+        elseif isLocked then
             addBtn:setStyleSheet([[
                 QLabel{background:rgba(22,24,34,0.80);color:#3a4458;font-size:9px;font-weight:bold;
                        border:1px solid rgba(40,45,60,0.45);border-radius:4px;}
@@ -635,15 +649,13 @@ function Mux._showContentLibrary(pane)
                 QLabel::hover{background:rgba(38,90,55,0.95);border-color:rgba(60,145,80,0.7);}
             ]])
             addBtn:rawEcho("<center>+ Add</center>")
-
-            local capName = contentName
-            local function applyAndClose()
+            local function applyAndRefresh()
                 Mux._applyContent(pane, capName)
-                dlg:close()
+                refresh()
             end
-            addBtn:setClickCallback(applyAndClose)
-            nameLbl:setClickCallback(applyAndClose)
-            rowBg:setClickCallback(applyAndClose)
+            addBtn:setClickCallback(applyAndRefresh)
+            nameLbl:setClickCallback(applyAndRefresh)
+            rowBg:setClickCallback(applyAndRefresh)
         end
     end
 

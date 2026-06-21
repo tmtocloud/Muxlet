@@ -37,6 +37,7 @@ function Mux.registerAction(id, def)
     def.id    = id
     def.name  = def.name  or id
     def.group = def.group or "General"
+    def.desc  = def.desc  or ""
     Mux.actions[id] = def
     if Mux._log then Mux._log("Registered action: %s (%s)", id, def.group) end
     raiseEvent("muxActionsChanged", id)
@@ -58,7 +59,7 @@ end
 function Mux.listActions()
     local out = {}
     for id, def in pairs(Mux.actions) do
-        out[#out + 1] = { id = id, name = def.name, group = def.group, icon = def.icon }
+        out[#out + 1] = { id = id, name = def.name, group = def.group, icon = def.icon, desc = def.desc }
     end
     table.sort(out, function(a, b)
         if a.group == b.group then return a.name:lower() < b.name:lower() end
@@ -81,5 +82,26 @@ function Mux.runAction(id, ctx)
     if not ok and Mux._err then Mux._err("action '%s' failed: %s", id, tostring(err)) end
     return ok
 end
+
+-- ── Built-in actions ──────────────────────────────────────────────────────────
+-- A small generic set so the action picker is populated out of the box and the
+-- end-to-end path is demonstrable before any package registers its own.  Each
+-- carries a `desc` shown on hover in the action picker.
+Mux.registerAction("mux.reconnect", {
+    name = "Reconnect", group = "Muxlet", icon = "🔌",
+    desc = "Reconnect to the current game server.",
+    run = function() reconnect() end,
+})
+Mux.registerAction("mux.clearConsole", {
+    name = "Clear Console", group = "Muxlet", icon = "🧹",
+    desc = "Clear the main console window.",
+    run = function() clearWindow() end,
+})
+Mux.registerAction("mux.demoEcho", {
+    name = "Demo — Echo to Console", group = "Muxlet", icon = "💬",
+    desc = "Example action. Prints a line to the console to show a button is wired "
+        .. "to a registered action (vs a raw command). Safe to ignore or rebind.",
+    run = function() Mux._echo("\n<cyan>[Muxlet]<reset> Demo action ran — a button is bound to a registered action.\n") end,
+})
 
 if Mux._log then Mux._log("action registry loaded") end

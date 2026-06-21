@@ -255,8 +255,9 @@ function Mux.ui.buildForm(parent, specs, opts)
 
         -- ── Wide text row ─────────────────────────────────────────────────────
         if isWide then
-            local availW  = formW - padL - padR - resetW - resetGap
-            local inputW  = availW - applyW - inputGap
+            local availW    = formW - padL - padR - resetW - resetGap
+            local hideApply = opts.hideApply
+            local inputW    = hideApply and availW or (availW - applyW - inputGap)
 
             local nl = Geyser.Label:new({name=uid.."_n", x=padL, y=6, width=availW, height=14}, row)
             nl:setStyleSheet(css.rowLabel)
@@ -272,12 +273,6 @@ function Mux.ui.buildForm(parent, specs, opts)
             input:setStyleSheet(css.textInput)
             input:print(tostring(spec.readFn() or ""))
 
-            local aBtn = Geyser.Label:new({name=uid.."_a", x=padL+inputW+inputGap, y=36, width=applyW, height=widgetH}, row)
-            aBtn:setStyleSheet(css.applyBtn)
-            aBtn:echo(string.format(
-                "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
-                css.widgetFg))
-
             local function commit()
                 local text = input:getText()
                 if not text or text == "" then return end
@@ -285,7 +280,14 @@ function Mux.ui.buildForm(parent, specs, opts)
                 input:print(tostring(spec.readFn() or ""))
             end
             input:setAction(commit)
-            aBtn:setClickCallback(commit)
+            if not hideApply then
+                local aBtn = Geyser.Label:new({name=uid.."_a", x=padL+inputW+inputGap, y=36, width=applyW, height=widgetH}, row)
+                aBtn:setStyleSheet(css.applyBtn)
+                aBtn:echo(string.format(
+                    "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
+                    css.widgetFg))
+                aBtn:setClickCallback(commit)
+            end
             refreshFns[i] = function() input:print(tostring(spec.readFn() or "")) end
 
             if showReset then
@@ -448,6 +450,7 @@ function Mux.ui.buildForm(parent, specs, opts)
                             css.widgetFg, tostring(choice.label)))
                         opt:show(); opt:raise()
                         local captured = choice
+                        if choice.desc and choice.desc ~= "" then opt:setToolTip(choice.desc, 6) end
                         opt:setClickCallback(function()
                             spec.writeFn(captured.value)
                             refresh()
