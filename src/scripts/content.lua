@@ -225,6 +225,33 @@ function Mux._relayoutContent(target)
     pcall(def.resize, target)
 end
 
+-- Optional per-instance content persistence.  A content type may implement
+--   serialize(target) -> table        capture this instance's config/state
+--   restore(target, data)             reapply it (called after apply on load)
+-- When serialize is present, Muxlet stores the returned table inside the
+-- workspace beside the pane's activeContent, so the content's state travels with
+-- the workspace (export/import, multiple workspaces, session restore) for free.
+-- Content that prefers its own storage simply omits these.  Returns nil when the
+-- content has no serialize hook, so callers can skip writing an empty key.
+function Mux._serializeContent(target)
+    if not target or not target._activeContent then return nil end
+    local def = Mux._content[target._activeContent]
+    if not (def and type(def.serialize) == "function") then return nil end
+    local ok, data = pcall(def.serialize, target)
+    if ok and type(data) == "table" then return data end
+    return nil
+end
+
+-- Reapply previously-serialized state to a target whose content has just been
+-- (re)applied.  No-op unless the active content implements restore().
+function Mux._restoreContent(target, data)
+    if not target or type(data) ~= "table" or not target._activeContent then return end
+    local def = Mux._content[target._activeContent]
+    if def and type(def.restore) == "function" then
+        pcall(def.restore, target, data)
+    end
+end
+
 --- Return an alphabetically sorted list of user-visible registered content names.
 -- Content registered with internal=true is excluded; it is used by Muxlet
 -- system UI and should not appear in the Content Library context menu.

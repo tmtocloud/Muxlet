@@ -170,11 +170,13 @@ function Mux.applyWorkspace(name)
                     if p._pendingContent then
                         if Mux._content and Mux._content[p._pendingContent] and Mux._applyContent then
                             Mux._applyContent(p, p._pendingContent, true)
+                            if Mux._restoreContent then Mux._restoreContent(p, p._pendingContentState) end
                         elseif Mux._warn then
                             Mux._warn("applyWorkspace: content '%s' not registered for floating pane '%s'",
                                 p._pendingContent, p.id)
                         end
                         p._pendingContent = nil
+                        p._pendingContentState = nil
                     end
                 end
             end
@@ -191,8 +193,10 @@ function Mux.applyWorkspace(name)
                         p._pendingContent, p.id)
                 elseif Mux._applyContent then
                     Mux._applyContent(p, p._pendingContent, true)
+                    if Mux._restoreContent then Mux._restoreContent(p, p._pendingContentState) end
                 end
                 p._pendingContent = nil
+                p._pendingContentState = nil
             end
         end
         local wasIR = Mux._inResize
@@ -248,6 +252,8 @@ local function serializeNode(obj)
     if obj.nameAlign and obj.nameAlign ~= "left" then node.nameAlign = obj.nameAlign end
     if obj._connectionAware then node.connectionAware  = true end
     if obj._activeContent   then node.activeContent   = obj._activeContent end
+    local cstate = Mux._serializeContent and Mux._serializeContent(obj)
+    if cstate then node.contentState = cstate end
     if obj.floating then
         node.floating = true
         node.floatX   = obj.floatX
@@ -444,6 +450,7 @@ local function restoreTabsOnPane(p, node)
                 if savedContent and Mux._content and Mux._content[savedContent] then
                     if Mux._applyContent then
                         pcall(Mux._applyContent, tab, savedContent, true)
+                        if Mux._restoreContent then Mux._restoreContent(tab, tabDef.contentState) end
                     end
                 end
                 if tabDef.connectionAware and p.setTabConnectionAware then
@@ -511,6 +518,7 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
         -- so all pane geometry is settled before the content apply() function runs.
         if node.activeContent then
             p._pendingContent = node.activeContent
+            p._pendingContentState = node.contentState
         end
 
         if node.tabs and #node.tabs > 0 then

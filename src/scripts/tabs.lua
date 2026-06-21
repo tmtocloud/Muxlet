@@ -1009,6 +1009,7 @@ function MuxSurface:_serializeTabs()
             contentable = tab.contentable ~= false,
             nameAlign      = tab.nameAlign,
             _activeContent = tab._activeContent,
+            contentState   = Mux._serializeContent and Mux._serializeContent(tab) or nil,
         }
         if tab._connectionAware          then tabEntry.connectionAware  = true  end
         if tab.tabsLocked                then tabEntry.tabsLocked       = true  end

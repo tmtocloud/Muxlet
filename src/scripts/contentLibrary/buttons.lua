@@ -3,16 +3,15 @@
 -- A registered, user-addable content type: a configurable grid of buttons.  Each
 -- button runs a raw command string (expandAlias) or a registered action
 -- (Mux.runAction).  Add it to a pane, click ⚙ to edit, configure buttons, click
--- ⚙ again to use them.  Config persists per host pane id to mux_buttongrids.json
--- (stable once the workspace is saved).
+-- ⚙ again to use them.  Config persists through Muxlet's content serialize/restore
+-- hook, so each grid travels inside the workspace that owns its pane.
 --
 -- Layout is auto-flow: buttons fill left-to-right, wrapping by column count, each
 -- spanning `width` columns.  Independent horizontal/vertical gaps.  Buttons
 -- reflow to fit their container on resize.
 
 local STATE_BY_TARGET = {}
-local STORE_FILE      = Mux._persistentDir .. "/mux_buttongrids.json"
-local STORE           = nil
+local CONFIG          = {}     -- per-pane config (by pane id); persisted via the workspace
 local DEFAULT_ROW_H   = 44
 local MIN_ROW_H       = 18    -- floor when filling vertically
 local EDIT_STRIP      = 34    -- bottom strip reserved for edit controls
@@ -20,26 +19,12 @@ local EDIT_STRIP      = 34    -- bottom strip reserved for edit controls
 local SHAPE_RADIUS = { square = 0, rounded = 6, pill = 999 }
 
 -- ── Persistence ───────────────────────────────────────────────────────────────
+-- No side file: config lives in memory and is persisted through the content
+-- serialize/restore hook (see the registration block below).  Mutations call
+-- scheduleSave() to debounce a workspace autosave.
 
-local function loadStore()
-    if STORE then return STORE end
-    STORE = {}
-    if io.exists(STORE_FILE) then
-        pcall(function()
-            local f = io.open(STORE_FILE, "r"); local raw = f:read("*all"); f:close()
-            local data = yajl.to_value(raw)
-            if type(data) == "table" then STORE = data end
-        end)
-    end
-    return STORE
-end
-
-local function saveStore()
-    loadStore()
-    local ok, err = pcall(function()
-        local f = io.open(STORE_FILE, "w"); f:write(yajl.to_string(STORE)); f:close()
-    end)
-    if not ok and Mux._err then Mux._err("button store save failed: %s", tostring(err)) end
+local function scheduleSave()
+    if Mux._scheduleAutoSave then Mux._scheduleAutoSave() end
 end
 
 local function defaultConfig()
@@ -53,9 +38,8 @@ local function defaultConfig()
 end
 
 local function configFor(paneId)
-    local store = loadStore()
-    if not store[paneId] then store[paneId] = defaultConfig() end
-    local c = store[paneId]
+    local c = CONFIG[paneId]
+    if not c then c = defaultConfig(); CONFIG[paneId] = c end
     c.cols = c.cols or 1
     if c.gap and not c.gapX then c.gapX = c.gap; c.gapY = c.gap end
     c.gapX = c.gapX or 5
@@ -197,7 +181,7 @@ render = function(target)
         add:setClickCallback(function()
             cfg.buttons[#cfg.buttons + 1] = { label = "Button", width = 1, bg = "#1c2a4e", fg = "#96c8ff",
                 fontSize = 12, shape = "rounded", action = { type = "command", text = "" } }
-            saveStore(); render(target); openButtonEditor(target, #cfg.buttons)
+            scheduleSave(); render(target); openButtonEditor(target, #cfg.buttons)
         end)
         st.widgets[#st.widgets + 1] = add
 
@@ -312,7 +296,7 @@ openButtonEditor = function(target, idx)
     del:setStyleSheet([[QLabel{background:rgba(120,40,40,0.9);color:#fdd;border:1px solid rgba(180,80,80,0.6);
         border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(150,55,55,0.95);}]])
     del:echo("<center>🗑 Delete</center>")
-    del:setClickCallback(function() table.remove(cfg.buttons, idx); saveStore(); render(target); d.onClose = nil; d:close() end)
+    del:setClickCallback(function() table.remove(cfg.buttons, idx); scheduleSave(); render(target); d.onClose = nil; d:close() end)
 
     local test = Geyser.Label:new({ name = d._gid .. "_be_test", x = 94, y = 7, width = 70, height = 26 }, bar)
     test:setStyleSheet([[QLabel{background:rgba(40,50,80,0.9);color:#cde;border:1px solid rgba(90,110,170,0.6);
@@ -331,7 +315,7 @@ openButtonEditor = function(target, idx)
     done:echo("<center>Done</center>")
     done:setClickCallback(function()
         if d._beForm and d._beForm.commitAll then d._beForm.commitAll() end
-        saveStore(); d.onClose = nil; d:close()
+        scheduleSave(); d.onClose = nil; d:close()
     end)
 
     d.onClose = function()                       -- ✕ discards every edit made since opening
@@ -365,7 +349,7 @@ openGridSettings = function(target)
     local form = Geyser.Label:new({ name = d._gid .. "_gs_form", x = 0, y = 0, width = cw, height = Mux.ui.formHeight(rows) }, d.content)
     form:setStyleSheet("background:rgba(18,18,26,1);border:none;")
     Mux.ui.buildForm(form, rows, { width = cw, prefix = d._gid .. "_gs", hideApply = true })
-    d.onClose = function() saveStore() end
+    d.onClose = function() scheduleSave() end
 end
 
 -- ── Content registration ──────────────────────────────────────────────────────────
@@ -385,9 +369,19 @@ Mux.registerContent("mux_buttons", {
         local st = STATE_BY_TARGET[target.id]
         if st then clearWidgets(st) end
         STATE_BY_TARGET[target.id] = nil
+        CONFIG[target.id] = nil       -- a manual remove resets config; restore re-seeds it on load
     end,
     resize = function(target)        -- framework calls this when the container resizes
         render(target)
+    end,
+    serialize = function(target)      -- persist this grid inside the workspace
+        return configFor(target.id)
+    end,
+    restore = function(target, data)  -- reapply saved grid on workspace load
+        if type(data) == "table" then
+            CONFIG[target.id] = data
+            render(target)
+        end
     end,
 })
 

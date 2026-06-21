@@ -478,12 +478,46 @@ Mux.registerContent("my_hud", {
     remove = function(target)
         hideWindow(target.id .. "_hud_lbl")
     end,
+
+    -- Optional. Called whenever the container's pixel size changes (window
+    -- resize, split-divider drag, embed/float, float-edge drag). Use it to
+    -- re-flow pixel-positioned widgets so they track the pane. Muxlet only
+    -- calls this when the size actually changed, so it is safe and cheap.
+    resize = function(target)
+        -- e.g. recompute widths from target.content:get_width() and redraw
+    end,
+
+    -- Optional pair. Per-instance persistence: if serialize is present, Muxlet
+    -- stores the returned table inside the workspace next to this pane's
+    -- activeContent, and calls restore(target, data) right after re-applying the
+    -- content on load. Your content's config then travels with the workspace
+    -- (export/import, multiple workspaces, session restore) at no extra cost.
+    serialize = function(target)
+        return { -- any plain table (will be JSON-encoded)
+            note = target._myNote,
+        }
+    end,
+    restore = function(target, data)
+        target._myNote = data.note
+        -- redraw with the restored state
+    end,
 })
 ```
 
 > **Text colour in content widgets:** Use `rawEcho` instead of `echo` when the label's text colour is controlled by `setStyleSheet`. Geyser's `echo` wraps content in a `<div style="color: #ffffff;">` that overrides the stylesheet colour. `rawEcho` bypasses that wrapper and lets the Qt stylesheet take effect.
 
 Set `singleton = true` to allow only one active instance at a time. If the user tries to open it in a second pane, a dialog tells them where it is currently open and the apply is aborted.
+
+#### Content lifecycle & persistence
+
+Two different things persist, and they have different owners:
+
+- **Which content sits on a pane/tab** — the content's *id*. This is workspace/layout state, and **Muxlet owns it**. You never save it yourself; it round-trips with the workspace automatically.
+- **A content instance's own configuration/state** — **the content owns it**, and persists it by implementing the optional `serialize`/`restore` pair above. Because the data is stored *inside the workspace*, it survives session restore, travels on export/import, and stays correct across multiple workspaces — without a side file keyed by pane id (which would not travel with the workspace and could collide on recycled ids).
+
+This is opt-in. Content that wants different behaviour (shared state, an external file, app-global config) simply omits `serialize`/`restore` and manages its own storage. The built-in **Button Grid** uses the hook — it's the reference example of a "universal" content type that persists correctly through the workspace.
+
+The full optional lifecycle, in call order: `apply(target)` → [`resize(target)` on every size change] → `remove(target)` when replaced/removed; and on load, `apply(target)` → `restore(target, data)`.
 
 #### Applying content programmatically
 
@@ -519,6 +553,118 @@ Use the resulting id in a workspace definition:
 ```lua
 { type = "pane", id = "vitals", name = "Vitals", activeContent = "gmcp:char.vitals" }
 ```
+
+#### Built-in: Button Grid
+
+`mux_buttons` is pre-registered and always available in the Content Library menu. It's a configurable, auto-flowing grid of buttons; each button runs either a raw command (sent via `expandAlias`) or a registered **action** (see below). Click the ⚙ to enter edit mode, add/edit buttons (label, colours via the colour picker, shape, column span, font size), set grid options (columns, gaps, fill vs fixed row height), then click ⚙ again to use them. The grid reflows to fit its pane on resize, and its configuration persists with the workspace via the `serialize`/`restore` hook.
+
+```lua
+{ type = "pane", id = "bar", name = "Quick Buttons", activeContent = "mux_buttons" }
+```
+
+---
+
+### Actions
+
+Actions are named, serialisable units of behaviour. They decouple *what a control does* from *the control itself*, so a button (or any future UI — context-menu entries, command palettes) can reference behaviour by a stable string id rather than capturing a closure. Register from any package:
+
+```lua
+Mux.registerAction("mypkg.heal", {
+    name  = "Quick Heal",                 -- shown in pickers
+    group = "Combat",                     -- grouping label
+    icon  = "✚",                          -- optional glyph
+    desc  = "Cast the strongest heal you can afford.",  -- shown on hover
+    run   = function(ctx) send("cast 'heal'") end,      -- ctx = { source = ... }
+})
+```
+
+Registry API:
+
+```lua
+Mux.runAction("mypkg.heal", { source = "button" })  -- invoke by id
+Mux.listActions()    -- → { {id, name, group, icon, desc}, … }, sorted
+Mux.getAction(id)    -- → the definition, or nil
+Mux.unregisterAction(id)
+```
+
+Muxlet ships a few generic built-ins (`mux.reconnect`, `mux.clearConsole`, `mux.demoEcho`) so the action picker is populated out of the box. Anything you register appears automatically in the Button Grid's action dropdown, with `desc` shown on hover.
+
+---
+
+### UI Widgets (forms & components)
+
+Muxlet includes a small widget toolkit under `Mux.ui` so package authors can build configuration UIs that match Muxlet's look and behaviour. There are two layers: **`buildForm`** (a labelled-row form builder) and the **standalone components** it's composed from (usable directly in your own dialogs).
+
+#### `Mux.ui.buildForm(parent, rows, opts)`
+
+Builds a vertical form of labelled rows into a Geyser container and returns a handle.
+
+```lua
+local form = Mux.ui.buildForm(dialog.content, {
+    { label = "Enabled",  type = "toggle",
+      readFn = function() return cfg.enabled end,
+      writeFn = function(v) cfg.enabled = v end },
+
+    { label = "Name",     type = "text",            -- commits on Enter
+      readFn = function() return cfg.name end,
+      writeFn = function(v) cfg.name = v end },
+
+    { label = "Size",     type = "number", min = 6, max = 32, step = 1,
+      readFn = function() return cfg.size end,
+      writeFn = function(v) cfg.size = v end },
+
+    { label = "Mode",     type = "segmentedControl",
+      options = { { value = "a", label = "A" }, { value = "b", label = "B" } },
+      readFn = function() return cfg.mode end,
+      writeFn = function(v) cfg.mode = v end },
+
+    { label = "Target",   type = "array", display = "dropdown",
+      options = { { value = "x", label = "X", desc = "hover text" }, … },
+      readFn = function() return cfg.target end,
+      writeFn = function(v) cfg.target = v end },
+
+    { label = "Colour",   type = "color",           -- swatch + hex + presets
+      readFn = function() return cfg.colour end,
+      writeFn = function(v) cfg.colour = v end },
+}, {
+    width    = 320,
+    prefix   = "mypkg_form",
+    hideApply = true,                 -- text rows commit on Enter only, no Apply button
+    getContentScreenPos = function() return dialog.content:get_x(), dialog.content:get_y() end, -- needed for dropdowns
+})
+```
+
+Row types: `toggle` (checkbox), `text` (string), `number` (stepper), `array` (with `display = "cycler" | "segmented" | "dropdown"`), `color`, and `readOnly`. Each row supplies `readFn`/`writeFn`; optional `desc` shows a sub-label (and hover text on dropdown options). `segmentedControl` and `choiceCycler` are aliases for `array` with the matching display.
+
+The returned handle:
+
+```lua
+form.totalHeight   -- pixel height of the built form
+form.refresh(i)    -- re-read row i from its readFn
+form.refreshAll()  -- re-read every row
+form.commitAll()   -- flush all text inputs through their writeFn (use before "Save")
+form.closeDropdown()
+```
+
+`commitAll()` is the key to a clean Save button: text fields commit on Enter, so call `form.commitAll()` from your dialog's Save/Done handler to capture anything typed-but-not-Entered. Use `Mux.ui.formHeight(rows, opts)` to size a dialog to its form before building.
+
+#### Standalone components
+
+Each control is (progressively) available as a self-contained component you can drop into your own UI without a form. They take `(parent, opts)` and return a handle with `read`, `set`, `commit`, `refresh`, `container`, and `height`. The colour picker is the first fully extracted:
+
+```lua
+local picker = Mux.ui.colorField(dialog.content, {
+    x = 10, y = 10, width = 260,
+    value = "#1c2a4e",
+    onChange = function(hex) applyColour(hex) end,
+    -- swatches = { "#…", … },   -- optional; defaults to Mux.ui.COLOR_PRESETS
+})
+picker.read()        -- current hex
+picker.set("#fff")   -- set programmatically
+picker.commit()      -- flush the hex input (e.g. on Save)
+```
+
+`buildForm`'s `color` row uses this exact component internally — the model the rest of the controls are moving toward, so every widget is independently useful.
 
 ---
 
