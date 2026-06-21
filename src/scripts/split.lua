@@ -295,6 +295,7 @@ function MuxSplit:_notifyReposition()
         if not node then return end
         if node.outer then                       -- MuxPane leaf
             if node.onReposition then node.onReposition(node) end
+            if Mux._relayoutContent then Mux._relayoutContent(node) end
         else                                     -- nested MuxSplit
             walk(node.childA)
             walk(node.childB)

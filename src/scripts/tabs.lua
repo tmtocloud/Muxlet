@@ -1007,6 +1007,7 @@ function MuxSurface:_serializeTabs()
             closeable   = tab.closeable   ~= false,
             movable     = tab.movable     ~= false,
             contentable = tab.contentable ~= false,
+            nameAlign      = tab.nameAlign,
             _activeContent = tab._activeContent,
         }
         if tab._connectionAware          then tabEntry.connectionAware  = true  end

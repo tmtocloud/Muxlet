@@ -32,6 +32,7 @@ panes = setmetatable({}, {
 function Mux._notifyAllReposition()
     for _, p in pairs(Mux._panes) do
         if p.onReposition then p.onReposition(p) end
+        if Mux._relayoutContent then Mux._relayoutContent(p) end
     end
 end
 
@@ -649,13 +650,13 @@ function Mux._showContentLibrary(pane)
                 QLabel::hover{background:rgba(38,90,55,0.95);border-color:rgba(60,145,80,0.7);}
             ]])
             addBtn:rawEcho("<center>+ Add</center>")
-            local function applyAndRefresh()
+            local function applyAndClose()
                 Mux._applyContent(pane, capName)
-                refresh()
+                dlg:close()
             end
-            addBtn:setClickCallback(applyAndRefresh)
-            nameLbl:setClickCallback(applyAndRefresh)
-            rowBg:setClickCallback(applyAndRefresh)
+            addBtn:setClickCallback(applyAndClose)
+            nameLbl:setClickCallback(applyAndClose)
+            rowBg:setClickCallback(applyAndClose)
         end
     end
 

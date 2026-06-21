@@ -105,15 +105,17 @@ end
 -- a dialog tells the user where it is currently open.
 -- Tracking uses a direct object reference (def._activeTargetRef) so it works
 -- correctly for both panes and tabs without a registry lookup.
-function Mux._applyContent(target, contentName)
+function Mux._applyContent(target, contentName, force)
     local def = Mux._content[contentName]
     if not def then
         Mux._warn("_applyContent: unknown content '%s'", contentName)
         return
     end
 
-    -- Block non-internal content on targets where contentable is false.
-    if target.contentable == false and not def.internal then
+    -- Block USER-initiated content on targets where contentable is false.  The
+    -- workspace restore passes force=true to reinstate a pane's OWN saved content:
+    -- locking a pane's content must not cause that content to be dropped on reload.
+    if target.contentable == false and not def.internal and not force then
         return
     end
 
@@ -202,6 +204,25 @@ function Mux._removeContent(target)
         pcall(target.contentBg.show, target.contentBg)
     end
     Mux._scheduleAutoSave()
+end
+
+-- Notify a target's active content that its container geometry changed, so
+-- pixel-laid-out content can re-flow to fit.  This is the single contract behind
+-- "content scales with its pane/tab": the framework calls it on every geometry
+-- change (window resize, split drag, embed/float, float-resize) and content types
+-- opt in by declaring an optional `resize(target)` callback in registerContent.
+-- Size-gated so it is cheap to call from hot reposition paths — the content's
+-- resize runs only when the content area's pixel size actually changed.
+function Mux._relayoutContent(target)
+    if not target or not target._activeContent or not target.content then return end
+    local def = Mux._content[target._activeContent]
+    if not (def and type(def.resize) == "function") then return end
+    local C = target.content
+    if not C.get_width then return end
+    local w, h = C:get_width(), C:get_height()
+    if target._lastContentW == w and target._lastContentH == h then return end
+    target._lastContentW, target._lastContentH = w, h
+    pcall(def.resize, target)
 end
 
 --- Return an alphabetically sorted list of user-visible registered content names.

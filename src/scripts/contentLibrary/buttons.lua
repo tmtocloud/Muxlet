@@ -14,6 +14,8 @@ local STATE_BY_TARGET = {}
 local STORE_FILE      = Mux._persistentDir .. "/mux_buttongrids.json"
 local STORE           = nil
 local DEFAULT_ROW_H   = 44
+local MIN_ROW_H       = 18    -- floor when filling vertically
+local EDIT_STRIP      = 34    -- bottom strip reserved for edit controls
 
 local SHAPE_RADIUS = { square = 0, rounded = 6, pill = 999 }
 
@@ -42,7 +44,7 @@ end
 
 local function defaultConfig()
     return {
-        cols = 1, gapX = 5, gapY = 5, rowH = DEFAULT_ROW_H,
+        cols = 1, gapX = 5, gapY = 5, rowH = DEFAULT_ROW_H, vsizing = "fill",
         buttons = {
             { label = "Hello World", width = 1, bg = "#1c2a4e", fg = "#96c8ff", fontSize = 12,
               shape = "rounded", action = { type = "command", text = "Hello World" } },
@@ -59,33 +61,49 @@ local function configFor(paneId)
     c.gapX = c.gapX or 5
     c.gapY = c.gapY or 5
     c.rowH = c.rowH or DEFAULT_ROW_H
+    c.vsizing = c.vsizing or "fill"
     c.buttons = c.buttons or {}
     return c
 end
 
 -- ── Layout (auto-flow) ──────────────────────────────────────────────────────────
 
-local function layoutRects(cfg, W)
+local function layoutRects(cfg, W, H, editing)
     local cols = math.max(1, cfg.cols)
-    local gapX, gapY, rowH = cfg.gapX, cfg.gapY, cfg.rowH
-    local cellW = (W - gapX * (cols + 1)) / cols
-    if cellW < 1 then cellW = 1 end
-    local rects, r, c = {}, 0, 0
+    local gapX, gapY = cfg.gapX, cfg.gapY
+    -- Pass 1: assign each button a grid cell (col/row/span) — independent of rowH.
+    local cells, r, c = {}, 0, 0
     for i, btn in ipairs(cfg.buttons) do
         local span = math.max(1, math.min(btn.width or 1, cols))
         if c + span > cols then r = r + 1; c = 0 end
-        rects[#rects + 1] = {
-            index = i, btn = btn,
-            x = math.floor(gapX + c * (cellW + gapX)),
-            y = gapY + r * (rowH + gapY),
-            w = math.floor(span * cellW + (span - 1) * gapX),
-            h = rowH,
-        }
+        cells[#cells + 1] = { index = i, btn = btn, col = c, row = r, span = span }
         c = c + span
         if c >= cols then r = r + 1; c = 0 end
     end
-    local rowsUsed = r + (c > 0 and 1 or 0)
-    return rects, gapY + rowsUsed * (rowH + gapY)
+    local rowsUsed = math.max(1, r + (c > 0 and 1 or 0))
+    -- Vertical sizing: "fill" derives row height from the container (mirrors how
+    -- columns fill width); "fixed" keeps the configured rowH.
+    local rowH
+    if cfg.vsizing == "fixed" then
+        rowH = cfg.rowH or DEFAULT_ROW_H
+    else
+        local availH = (H or 0) - (editing and EDIT_STRIP or 0)
+        rowH = math.floor((availH - gapY * (rowsUsed + 1)) / rowsUsed)
+        if rowH < MIN_ROW_H then rowH = MIN_ROW_H end
+    end
+    local cellW = (W - gapX * (cols + 1)) / cols
+    if cellW < 1 then cellW = 1 end
+    local rects = {}
+    for _, cell in ipairs(cells) do
+        rects[#rects + 1] = {
+            index = cell.index, btn = cell.btn,
+            x = math.floor(gapX + cell.col * (cellW + gapX)),
+            y = math.floor(gapY + cell.row * (rowH + gapY)),
+            w = math.floor(cell.span * cellW + (cell.span - 1) * gapX),
+            h = rowH,
+        }
+    end
+    return rects, gapY + rowsUsed * (rowH + gapY), rowsUsed
 end
 
 -- ── Button appearance / behaviour ────────────────────────────────────────────────
@@ -131,12 +149,13 @@ render = function(target)
     if not (C and C.get_width) then return end
     local cfg = configFor(target.id)
     local g   = target._gid
-    local W   = C:get_width(); if W < 50 then W = 300 end
+    local W   = C:get_width();  if W < 50 then W = 300 end
+    local H   = C:get_height(); if H < 30 then H = 120 end
     clearWidgets(st)
     st.gen = (st.gen or 0) + 1
     local gen = st.gen
 
-    local rects = layoutRects(cfg, W)
+    local rects = layoutRects(cfg, W, H, st.editing)
     for _, rc in ipairs(rects) do
         local btn = rc.btn
         local lbl = Geyser.Label:new({ name = string.format("%s_bg%d_%d", g, gen, rc.index),
@@ -170,8 +189,7 @@ render = function(target)
     st.widgets[#st.widgets + 1] = gear
 
     if st.editing then
-        local _, usedH = layoutRects(cfg, W)
-        local by = usedH + 4
+        local by = H - EDIT_STRIP + 5
         local add = Geyser.Label:new({ name = g .. "_badd_" .. gen, x = cfg.gapX, y = by, width = 120, height = 26 }, C)
         add:setStyleSheet([[QLabel{background:rgba(40,90,50,0.9);color:#cfe;border:1px solid rgba(90,170,110,0.6);
             border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(55,115,65,0.95);}]])
@@ -278,7 +296,7 @@ openButtonEditor = function(target, idx)
         local fh   = Mux.ui.formHeight(rows)
         formHost = Geyser.Label:new({ name = d._gid .. "_be_form" .. formGen, x = 0, y = 0, width = cw, height = fh }, d.content)
         formHost:setStyleSheet("background:rgba(18,18,26,1);border:none;")
-        Mux.ui.buildForm(formHost, rows, {
+        d._beForm = Mux.ui.buildForm(formHost, rows, {
             width = cw, prefix = d._gid .. "_be" .. formGen,
             hideApply = true, getContentScreenPos = getContentPos,
         })
@@ -299,22 +317,32 @@ openButtonEditor = function(target, idx)
     test:setStyleSheet([[QLabel{background:rgba(40,50,80,0.9);color:#cde;border:1px solid rgba(90,110,170,0.6);
         border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(55,68,110,0.95);}]])
     test:echo("<center>▶ Test</center>")
-    test:setToolTip("Run this button's action now (you can't click it in the grid while editing)")
-    test:setClickCallback(function() runButton(btn) end)
+    test:setToolTip("Run this button's action now, using the current values above "
+        .. "(the grid is in edit mode, so clicking the real button won't fire it)")
+    test:setClickCallback(function()
+        if d._beForm and d._beForm.commitAll then d._beForm.commitAll() end
+        runButton(btn)
+    end)
 
     local done = Geyser.Label:new({ name = d._gid .. "_be_done", x = "-88", y = 7, width = 80, height = 26 }, bar)
     done:setStyleSheet([[QLabel{background:rgba(40,90,50,0.9);color:#cfe;border:1px solid rgba(90,170,110,0.6);
         border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(55,115,65,0.95);}]])
     done:echo("<center>Done</center>")
-    done:setClickCallback(function() saveStore(); d:close() end)
+    done:setClickCallback(function()
+        if d._beForm and d._beForm.commitAll then d._beForm.commitAll() end
+        saveStore(); d:close()
+    end)
 
-    d.onClose = function() saveStore() end   -- persist edits if closed via ✕
+    d.onClose = function()                       -- persist edits if closed via ✕
+        if d._beForm and d._beForm.commitAll then pcall(d._beForm.commitAll) end
+        saveStore()
+    end
 end
 
 openGridSettings = function(target)
     local cfg = configFor(target.id)
     local key = "mux_grid_settings_" .. target.id
-    local d = Mux.createDialog({ title = "Grid Settings", width = 360, height = 260, singleton = key, contextMenu = false })
+    local d = Mux.createDialog({ title = "Grid Settings", width = 360, height = 340, singleton = key, contextMenu = false })
     if not d then return end
     if d.contentBg then d.contentBg:echo(""); d.contentBg:hide() end
     local function preview() render(target) end
@@ -325,7 +353,11 @@ openGridSettings = function(target)
           readFn = function() return cfg.gapX end, writeFn = function(v) cfg.gapX = v; preview() end },
         { label = "Vertical Gap (px)", type = "number", min = 0, max = 24,
           readFn = function() return cfg.gapY end, writeFn = function(v) cfg.gapY = v; preview() end },
-        { label = "Row Height (px)", type = "number", min = 20, max = 120, step = 2,
+        { label = "Vertical Sizing", type = "segmentedControl",
+          options = { { value = "fill", label = "Fill" }, { value = "fixed", label = "Fixed" } },
+          desc = "Fill stretches rows to the pane height; Fixed uses the row height below.",
+          readFn = function() return cfg.vsizing or "fill" end, writeFn = function(v) cfg.vsizing = v; preview() end },
+        { label = "Row Height (px, when Fixed)", type = "number", min = 20, max = 120, step = 2,
           readFn = function() return cfg.rowH end, writeFn = function(v) cfg.rowH = v; preview() end },
     }
     local cw = d.content:get_width(); if cw < 50 then cw = 356 end
@@ -334,21 +366,6 @@ openGridSettings = function(target)
     Mux.ui.buildForm(form, rows, { width = cw, prefix = d._gid .. "_gs", hideApply = true })
     d.onClose = function() saveStore() end
 end
-
--- ── Resize reflow (item 6) ──────────────────────────────────────────────────────
--- Embedded/split resizes raise sysWindowResizeEvent; re-lay-out all live grids
--- (coalesced) so buttons re-fit their container.
-local resizePending = false
-registerAnonymousEventHandler("sysWindowResizeEvent", function()
-    if resizePending then return end
-    resizePending = true
-    tempTimer(0.1, function()
-        resizePending = false
-        for _, st in pairs(STATE_BY_TARGET) do
-            if st.target and st.target.content then render(st.target) end
-        end
-    end)
-end)
 
 -- ── Content registration ──────────────────────────────────────────────────────────
 
@@ -367,6 +384,9 @@ Mux.registerContent("mux_buttons", {
         local st = STATE_BY_TARGET[target.id]
         if st then clearWidgets(st) end
         STATE_BY_TARGET[target.id] = nil
+    end,
+    resize = function(target)        -- framework calls this when the container resizes
+        render(target)
     end,
 })
 

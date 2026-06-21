@@ -242,6 +242,10 @@ function Mux.registerGmcpViewer(path)
             end
             if target[lblKey] then hideWindow(target[lblKey].name); target[lblKey] = nil end
         end,
+        resize = function(target)
+            local lbl = target["_gmcpvLbl_" .. safePath]
+            if lbl then lbl:echo(buildViewerHtml(path, gmcpGet(path))) end
+        end,
     })
 end
 
@@ -1302,6 +1306,12 @@ Mux.registerContent("gmcp_inspector", {
     singleton   = false,
     apply       = insApply,
     remove      = insRemove,
+    resize      = function(target)        -- re-fit body to the new container width
+        local st = _inspectors[target.id]
+        if not (st and st.bodyScroll) then return end
+        st.contentWidth = math.max(50, st.bodyScroll:get_width() - 17)
+        insDrawBody(st)
+    end,
 })
 
 -- ── Public API ────────────────────────────────────────────────────────────────

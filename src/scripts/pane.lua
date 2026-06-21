@@ -1687,6 +1687,7 @@ function MuxPane:_buildCornerHandles(theme)
             pane.outer:resize(newW, newH)
             pane.outer:reposition()
             pane:_checkOverflow()
+            if Mux._relayoutContent then Mux._relayoutContent(pane) end
         end)
 
         lbl:setReleaseCallback(function(event)

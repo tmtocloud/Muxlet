@@ -204,6 +204,7 @@ function Mux.ui.buildForm(parent, specs, opts)
 
     local activeDropdown = nil
     local refreshFns     = {}
+    local commitFns      = {}
     local yPos           = 0
 
     local function closeDropdown()
@@ -280,6 +281,7 @@ function Mux.ui.buildForm(parent, specs, opts)
                 input:print(tostring(spec.readFn() or ""))
             end
             input:setAction(commit)
+            commitFns[i] = commit
             if not hideApply then
                 local aBtn = Geyser.Label:new({name=uid.."_a", x=padL+inputW+inputGap, y=36, width=applyW, height=widgetH}, row)
                 aBtn:setStyleSheet(css.applyBtn)
@@ -531,6 +533,7 @@ function Mux.ui.buildForm(parent, specs, opts)
                 end
                 input:setAction(commit)
                 aBtn:setClickCallback(commit)
+                commitFns[i] = commit
                 refreshFns[i] = function() input:print(tostring(spec.readFn() or "")) end
 
             -- ── Segmented control (N connected buttons, one highlighted) ──────
@@ -619,5 +622,6 @@ function Mux.ui.buildForm(parent, specs, opts)
         closeDropdown = closeDropdown,
         refresh       = function(idx) if refreshFns[idx] then refreshFns[idx]() end end,
         refreshAll    = function() for _, fn in pairs(refreshFns) do fn() end end,
+        commitAll     = function() for _, fn in pairs(commitFns) do fn() end end,
     }
 end

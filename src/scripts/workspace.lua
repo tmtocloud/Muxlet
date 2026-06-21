@@ -164,9 +164,22 @@ function Mux.applyWorkspace(name)
                 if p then
                     if fd.id then paneMap[fd.id] = p end
                     p:_detachToFloat()
+                    -- Apply restored content HERE: floating panes are rebuilt after
+                    -- the embedded content-apply pass below has already run, so their
+                    -- _pendingContent would otherwise never be applied.
+                    if p._pendingContent then
+                        if Mux._content and Mux._content[p._pendingContent] and Mux._applyContent then
+                            Mux._applyContent(p, p._pendingContent, true)
+                        elseif Mux._warn then
+                            Mux._warn("applyWorkspace: content '%s' not registered for floating pane '%s'",
+                                p._pendingContent, p.id)
+                        end
+                        p._pendingContent = nil
+                    end
                 end
             end
             Mux.raiseFloatingPanes()
+            if Mux._notifyAllReposition then Mux._notifyAllReposition() end
         end)
     end
 
@@ -177,7 +190,7 @@ function Mux.applyWorkspace(name)
                     Mux._warn("applyWorkspace: content '%s' not registered for pane '%s'",
                         p._pendingContent, p.id)
                 elseif Mux._applyContent then
-                    Mux._applyContent(p, p._pendingContent)
+                    Mux._applyContent(p, p._pendingContent, true)
                 end
                 p._pendingContent = nil
             end
@@ -223,7 +236,16 @@ local function serializeNode(obj)
     if not obj.propertiesButton  then node.propertiesButton  = false end
     if obj.tabsLocked            then node.tabsLocked         = true  end
     if not obj.convertible       then node.convertible       = false end
-    if not obj.movable        then node.movable            = false end
+    if not obj.movable           then node.movable            = false end
+    if not obj.closeable         then node.closeable          = false end
+    if not obj.minimizable       then node.minimizable        = false end
+    if not obj.splittable        then node.splittable         = false end
+    if not obj.swappable         then node.swappable          = false end
+    if not obj.zoomable          then node.zoomable           = false end
+    if not obj.contextMenu       then node.contextMenu        = false end
+    if not obj.insertable        then node.insertable         = false end
+    if obj.showSettingsInMenu    then node.showSettingsInMenu = true  end
+    if obj.nameAlign and obj.nameAlign ~= "left" then node.nameAlign = obj.nameAlign end
     if obj._connectionAware then node.connectionAware  = true end
     if obj._activeContent   then node.activeContent   = obj._activeContent end
     if obj.floating then
@@ -417,10 +439,11 @@ local function restoreTabsOnPane(p, node)
                 end
                 if tabDef.tabsLocked                then tab.tabsLocked       = true  end
                 if tabDef.propertiesButton == false then tab.propertiesButton = false end
+                if tabDef.nameAlign                 then tab.nameAlign        = tabDef.nameAlign end
                 local savedContent = tabDef.activeContent or tabDef._activeContent
                 if savedContent and Mux._content and Mux._content[savedContent] then
                     if Mux._applyContent then
-                        pcall(Mux._applyContent, tab, savedContent)
+                        pcall(Mux._applyContent, tab, savedContent, true)
                     end
                 end
                 if tabDef.connectionAware and p.setTabConnectionAware then
@@ -463,12 +486,19 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             tabsLocked       = node.tabsLocked or false,
             convertible      = node.convertible ~= false,
             movable          = node.movable ~= false,
+            closeable        = node.closeable ~= false,
+            minimizable      = node.minimizable ~= false,
+            zoomable         = node.zoomable ~= false,
+            contextMenu      = node.contextMenu ~= false,
+            insertable       = node.insertable ~= false,
+            showSettingsInMenu = node.showSettingsInMenu or false,
+            nameAlign        = node.nameAlign or "left",
             floatX           = node.floatX or 100,
             floatY           = node.floatY or 100,
             floatW           = node.floatW or 400,
             floatH           = node.floatH or 300,
-            splittable       = node.splittable,
-            swappable        = node.swappable,
+            splittable       = node.splittable ~= false,
+            swappable        = node.swappable ~= false,
         })
         p._paneSpace = paneSpace
         if node.id then paneMap[node.id] = p end
