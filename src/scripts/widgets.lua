@@ -160,6 +160,7 @@ end
 
 function Mux.ui.specHeight(spec, opts)
     opts = opts or {}
+    if spec.type == "color" then return opts.colorRowHeight or 92 end
     if isWideSpec(spec) then
         return opts.textRowHeight or 64
     end
@@ -174,6 +175,77 @@ function Mux.ui.formHeight(specs, opts)
     return total
 end
 
+-- ── Standalone widget: colour field ───────────────────────────────────────────
+-- Reusable on its own (Mux.ui.colorField) or as a buildForm row (type="color").
+-- Renders a live preview swatch + hex entry + a strip of clickable presets.
+-- Returns a handle: container/height/read/set/commit/refresh.  This is the model
+-- for buildForm's widgets generally — self-contained components a package author
+-- can drop into their own dialogs, which buildForm merely lays out in rows.
+Mux.ui.COLOR_PRESETS = {
+    "#1c2a4e", "#23395d", "#2e7d32", "#7b1fa2", "#b71c1c", "#e65100",
+    "#f9a825", "#00838f", "#455a64", "#e0e0e0", "#0b0d14", "#96c8ff",
+}
+
+function Mux.ui.colorField(parent, opts)
+    opts = opts or {}
+    local value    = opts.value or "#000000"
+    local onChange = opts.onChange or function() end
+    local swatches = opts.swatches or Mux.ui.COLOR_PRESETS
+    local x, y     = opts.x or 0, opts.y or 0
+    local width    = opts.width or 240
+    local prefix   = opts.prefix or ("muxcf_" .. tostring(math.random(1, 1000000000)))
+    local SW, GAP, INPUTH = 18, 4, 26
+    local perRow   = math.max(1, math.floor((width + GAP) / (SW + GAP)))
+    local rows     = math.max(1, math.ceil(#swatches / perRow))
+    local height   = INPUTH + 6 + rows * (SW + GAP)
+
+    local cont = Geyser.Label:new({ name = prefix.."_c", x = x, y = y, width = width, height = height }, parent)
+    cont:setStyleSheet("background:transparent;border:none;")
+
+    local preview = Geyser.Label:new({ name = prefix.."_pv", x = 0, y = 0, width = INPUTH, height = INPUTH }, cont)
+    local function setPreview(hex)
+        preview:setStyleSheet(string.format(
+            "background:%s;border:1px solid rgba(255,255,255,0.25);border-radius:3px;", hex))
+    end
+
+    local input = Geyser.CommandLine:new({ name = prefix.."_i", x = INPUTH + 6, y = 0,
+        width = math.max(40, width - INPUTH - 6), height = INPUTH }, cont)
+    input:setStyleSheet("background:rgba(0,0,0,0.35);color:#dde;border:1px solid rgba(255,255,255,0.15);border-radius:3px;")
+
+    local function apply(hex, fromInput)
+        if not hex or hex == "" then return end
+        value = hex
+        setPreview(hex)
+        if not fromInput then input:print(hex) end
+        onChange(hex)
+    end
+
+    setPreview(value)
+    input:print(value)
+    input:setAction(function() apply(input:getText(), true) end)
+
+    local sy = INPUTH + 6
+    for i, hex in ipairs(swatches) do
+        local r, c = math.floor((i - 1) / perRow), (i - 1) % perRow
+        local s = Geyser.Label:new({ name = prefix.."_s"..i,
+            x = c * (SW + GAP), y = sy + r * (SW + GAP), width = SW, height = SW }, cont)
+        s:setStyleSheet(string.format(
+            "background:%s;border:1px solid rgba(255,255,255,0.18);border-radius:3px;", hex))
+        s:setToolTip(hex)
+        local captured = hex
+        s:setClickCallback(function() apply(captured, false) end)
+    end
+
+    return {
+        container = cont,
+        height    = height,
+        read      = function() return value end,
+        set       = function(hex) apply(hex, false) end,
+        commit    = function() apply(input:getText(), true) end,
+        refresh   = function() input:print(value); setPreview(value) end,
+    }
+end
+
 -- ── buildForm ─────────────────────────────────────────────────────────────────
 
 function Mux.ui.buildForm(parent, specs, opts)
@@ -186,6 +258,7 @@ function Mux.ui.buildForm(parent, specs, opts)
     local prefix   = opts.prefix      or "muxui"
     local rowH     = opts.rowHeight   or 42
     local textH    = opts.textRowHeight or 64
+    local colorH   = opts.colorRowHeight or 92
     local widgetW  = opts.widgetWidth  or 110
     local widgetH  = opts.widgetHeight or 24
     local padL     = opts.padLeft      or 10
@@ -236,8 +309,9 @@ function Mux.ui.buildForm(parent, specs, opts)
             end
         end
 
-        local isWide = (specType == "string") and (specDisplay == "text") and not isReadOnly
-        local thisH  = isWide and textH or rowH
+        local isColor = (specType == "color")
+        local isWide  = (specType == "string") and (specDisplay == "text") and not isReadOnly
+        local thisH   = isColor and colorH or (isWide and textH or rowH)
         local uid    = prefix .. "_w" .. i
 
         -- Per-row widget width override (e.g. wider segmented controls).
@@ -254,8 +328,30 @@ function Mux.ui.buildForm(parent, specs, opts)
         local thisNameW = thisWidgetX - padL - 24
         local hasDesc  = spec.desc and spec.desc ~= ""
 
+        -- ── Colour field (delegates to the standalone Mux.ui.colorField) ──────
+        if isColor then
+            local availW = formW - padL - padR
+            local nl = Geyser.Label:new({name=uid.."_n", x=padL, y=6, width=availW, height=14}, row)
+            nl:setStyleSheet(css.rowLabel)
+            nl:rawEcho(spec.label)
+            local topY = 22
+            if hasDesc then
+                local dl = Geyser.Label:new({name=uid.."_d", x=padL, y=20, width=availW, height=13}, row)
+                dl:setStyleSheet(css.rowDesc)
+                dl:rawEcho(spec.desc)
+                topY = 34
+            end
+            local cf = Mux.ui.colorField(row, {
+                x = padL, y = topY, width = availW,
+                value = tostring(spec.readFn() or "#000000"),
+                onChange = function(hex) spec.writeFn(hex) end,
+                prefix = uid.."_cf",
+            })
+            commitFns[i]  = cf.commit
+            refreshFns[i] = cf.refresh
+
         -- ── Wide text row ─────────────────────────────────────────────────────
-        if isWide then
+        elseif isWide then
             local availW    = formW - padL - padR - resetW - resetGap
             local hideApply = opts.hideApply
             local inputW    = hideApply and availW or (availW - applyW - inputGap)

@@ -220,6 +220,7 @@ openButtonEditor = function(target, idx)
     local btn = cfg.buttons[idx]
     if not btn then return end
     btn.action = btn.action or { type = "command", text = "" }
+    local snapshot = yajl.to_value(yajl.to_string(btn))   -- deep copy; ✕ reverts to this
 
     local W   = 400
     local BAR = 40
@@ -273,10 +274,10 @@ openButtonEditor = function(target, idx)
         rows[#rows + 1] = { label = "Font Size", type = "number", min = 6, max = 32,
             readFn = function() return btn.fontSize or 12 end,
             writeFn = function(v) btn.fontSize = v; preview() end }
-        rows[#rows + 1] = { label = "Background", type = "text", desc = "CSS colour, e.g. #1c2a4e",
+        rows[#rows + 1] = { label = "Background", type = "color", desc = "Button background colour",
             readFn = function() return btn.bg or "#1c2a4e" end,
             writeFn = function(v) btn.bg = v; preview() end }
-        rows[#rows + 1] = { label = "Text Colour", type = "text", desc = "CSS colour, e.g. #96c8ff",
+        rows[#rows + 1] = { label = "Text Colour", type = "color", desc = "Button text colour",
             readFn = function() return btn.fg or "#96c8ff" end,
             writeFn = function(v) btn.fg = v; preview() end }
         return rows
@@ -330,12 +331,12 @@ openButtonEditor = function(target, idx)
     done:echo("<center>Done</center>")
     done:setClickCallback(function()
         if d._beForm and d._beForm.commitAll then d._beForm.commitAll() end
-        saveStore(); d:close()
+        saveStore(); d.onClose = nil; d:close()
     end)
 
-    d.onClose = function()                       -- persist edits if closed via ✕
-        if d._beForm and d._beForm.commitAll then pcall(d._beForm.commitAll) end
-        saveStore()
+    d.onClose = function()                       -- ✕ discards every edit made since opening
+        cfg.buttons[idx] = snapshot
+        render(target)
     end
 end
 
