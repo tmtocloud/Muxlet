@@ -2,6 +2,7 @@
   {"name": "globals"},
   {"name": "settings"},
   {"name": "content"},
+  {"name": "actions"},
   {"name": "update"},
   {"name": "theme"},
   {"name": "pane"},
@@ -14,7 +15,7 @@
   {"name": "widgets"},
   {"name": "welcome"},
   {"name": "workspace"},
-  {"name": "content_builtins"},
+  {"name": "contentLibrary"},
   {"name": "properties"},
   {"name": "devmode"},
   {"name": "themes"}
