@@ -48,6 +48,9 @@
 
 Mux.ui = Mux.ui or {}
 
+-- Registry of custom form-row widget types (see Mux.ui.registerWidget below).
+Mux.ui._widgets = Mux.ui._widgets or {}
+
 -- ── Style defaults (used when theme.ui.styles[name] is absent) ────────────────
 
 local defaultStyles = {
@@ -160,6 +163,8 @@ end
 
 function Mux.ui.specHeight(spec, opts)
     opts = opts or {}
+    local cw = Mux.ui._widgets[spec.type]
+    if cw then return cw.rowHeight or opts.rowHeight or 42 end
     if spec.type == "color" then return opts.colorRowHeight or 92 end
     if isWideSpec(spec) then
         return opts.textRowHeight or 64
@@ -246,6 +251,41 @@ function Mux.ui.colorField(parent, opts)
     }
 end
 
+-- ── Custom widget registry ────────────────────────────────────────────────────
+-- Register a custom form-row widget type.  Once registered, any buildForm spec
+-- whose `type` matches `wtype` renders via your builder instead of a built-in.
+--
+--   Mux.ui.registerWidget("slider", function(parent, o) ... end, { rowHeight = 50 })
+--
+-- The builder is called as builder(parent, o) where `o` carries:
+--   x, y, width, height   widget area on the right of the row.  The row label is
+--                         already drawn to the left and (if enabled) a reset icon
+--                         to the right — you only fill this rectangle.
+--   value                 current value (spec.readFn() result, or nil)
+--   onChange              call with a new value to persist it (wraps spec.writeFn)
+--   spec                  the original row spec (label, desc, options, min, max…)
+--   css                   resolved theme style table (widgetBg, widgetFg, styleCss…)
+--   uid                   unique id base for naming child widgets ("..._w3")
+--   closeDropdown         closes any open form dropdown overlay (call before opening
+--                         your own popup so only one floats at a time)
+--   getScreenPos          opts.getContentScreenPos passthrough — returns the form's
+--                         absolute (x,y); needed to position floating overlays
+--
+-- The builder MAY return { commit = fn, refresh = fn } (either optional); both get
+-- wired into the form handle's commitAll()/refreshAll().
+--
+-- opts.rowHeight sets the row height for this type (defaults to the form rowHeight).
+-- Use a unique type name; this is for adding new widgets, not overriding built-ins.
+function Mux.ui.registerWidget(wtype, builder, opts)
+    assert(type(wtype)   == "string",   "registerWidget: type must be a string")
+    assert(type(builder) == "function", "registerWidget: builder must be a function")
+    Mux.ui._widgets[wtype] = { build = builder, rowHeight = opts and opts.rowHeight }
+end
+
+function Mux.ui.unregisterWidget(wtype)
+    Mux.ui._widgets[wtype] = nil
+end
+
 -- ── buildForm ─────────────────────────────────────────────────────────────────
 
 function Mux.ui.buildForm(parent, specs, opts)
@@ -309,9 +349,10 @@ function Mux.ui.buildForm(parent, specs, opts)
             end
         end
 
+        local customW = Mux.ui._widgets[specType]
         local isColor = (specType == "color")
         local isWide  = (specType == "string") and (specDisplay == "text") and not isReadOnly
-        local thisH   = isColor and colorH or (isWide and textH or rowH)
+        local thisH   = (customW and customW.rowHeight) or (isColor and colorH or (isWide and textH or rowH))
         local uid    = prefix .. "_w" .. i
 
         -- Per-row widget width override (e.g. wider segmented controls).
@@ -431,8 +472,23 @@ function Mux.ui.buildForm(parent, specs, opts)
                 hi:setOnLeave(function() hi:setStyleSheet(css.helpIcon) end)
             end
 
+            -- ── Custom registered widget ──────────────────────────────────────
+            if customW then
+                local handle = customW.build(row, {
+                    x = thisWidgetX, y = wy, width = thisWidgetW, height = widgetH,
+                    value    = spec.readFn and spec.readFn() or nil,
+                    onChange = spec.writeFn or function() end,
+                    spec = spec, css = css, uid = uid,
+                    closeDropdown = closeDropdown,
+                    getScreenPos  = opts.getContentScreenPos,
+                })
+                if type(handle) == "table" then
+                    if handle.commit  then commitFns[i]  = handle.commit  end
+                    if handle.refresh then refreshFns[i] = handle.refresh end
+                end
+
             -- ── Checkbox (bool, two-state toggle) ─────────────────────────────
-            if specDisplay == "checkbox" then
+            elseif specDisplay == "checkbox" then
                 local trueOpt  = { value = true,  label = spec.trueLabel  or "TRUE",  style = "on"  }
                 local falseOpt = { value = false,  label = spec.falseLabel or "FALSE", style = "off" }
                 local choices  = spec.options or { trueOpt, falseOpt }

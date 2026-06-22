@@ -666,6 +666,33 @@ picker.commit()      -- flush the hex input (e.g. on Save)
 
 `buildForm`'s `color` row uses this exact component internally — the model the rest of the controls are moving toward, so every widget is independently useful.
 
+#### Extending `buildForm` with custom widget types
+
+The form builder is extensible: register a new row type and any spec with that `type` renders through your builder instead of a built-in. This lets a package add purpose-built controls (sliders, key-capture fields, mini colour grids…) that still get the form's label, description, reset icon, alternating-row styling, and `commitAll`/`refreshAll` plumbing for free.
+
+```lua
+Mux.ui.registerWidget("slider", function(parent, o)
+    -- o.x/o.y/o.width/o.height = the widget area (label is already drawn to the
+    -- left, reset icon to the right — you just fill this rectangle).
+    local bar = Geyser.Label:new({
+        name = o.uid .. "_sl", x = o.x, y = o.y, width = o.width, height = o.height,
+    }, parent)
+    local function refresh()
+        local v = o.spec.readFn()
+        bar:echo(("<center>%s</center>"):format(tostring(v)))
+    end
+    refresh()
+    bar:setClickCallback(function()
+        o.closeDropdown()                 -- close any open form dropdown first
+        o.onChange((o.spec.readFn() or 0) + (o.spec.step or 1))
+        refresh()
+    end)
+    return { refresh = refresh }          -- commit/refresh both optional
+end, { rowHeight = 48 })                   -- rowHeight optional (default = form rowHeight)
+```
+
+The builder receives `parent` plus an options table: `x, y, width, height` (the widget rectangle), `value` (current `readFn()` result), `onChange` (persists a new value), and `spec, css, uid, closeDropdown, getScreenPos` for styling, naming, dropdown coordination, and positioning floating overlays. Return `{ commit, refresh }` (either optional) to hook into the form handle. Use a unique type name — this is for adding new widgets rather than overriding the built-ins. `Mux.ui.unregisterWidget(type)` removes one.
+
 ---
 
 ### Themes

@@ -75,8 +75,7 @@ function MuxPane:init(opts)
     if opts.showTitlebar ~= nil then
         self.titlebarVisible = opts.showTitlebar
     else
-        local def = Mux.settings and Mux.settings.get("mux", "default_titlebar")
-        self.titlebarVisible = (def ~= false)
+        self.titlebarVisible = true
     end
 
     -- Saved pixel geometry used when the pane is floating.
@@ -1081,8 +1080,7 @@ function MuxPane:split(direction, ratio)
 
     direction = direction or "v"
     if not ratio then
-        local pct = Mux.settings and Mux.settings.get("mux", "default_split_ratio")
-        ratio = pct and (pct / 100) or 0.5
+        ratio = 0.5
     end
 
     if self._split then

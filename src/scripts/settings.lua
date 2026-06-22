@@ -879,18 +879,6 @@ Mux.settings.register("mux", "debug", {
     default     = false,
 })
 
-Mux.settings.register("mux", "default_titlebar", {
-    description = "Show titlebars on newly created panes by default",
-    default     = true,
-})
-
-Mux.settings.register("mux", "default_split_ratio", {
-    description = "Default split point for new splits, as a percentage (10–90)",
-    default     = 50,
-    min         = 10,
-    max         = 90,
-})
-
 Mux.settings.register("mux", "live_resize_max_panes", {
     description = "Live-resize panes while dragging a split handle only when the affected area holds at most this many panes; above it, drag a preview line and apply on release (instant regardless of pane count). Set high to always resize live, or 1 to always preview",
     default     = 2,
@@ -955,6 +943,24 @@ Mux.settings.register("mux", "compact_titlebar", {
     description = "Hide all titlebar buttons — use right-click menu instead",
     default     = false,
 })
+
+-- Explicit display order for the Muxlet/General tab.  Registration order would
+-- otherwise decide this; listing it here keeps the tab curated.  update_* are
+-- registered later (update.lua) — pre-listing them positions them without
+-- duplicating (register() skips keys already present in the order list).
+Mux.settings._order["mux"] = {
+    "welcome_shown",
+    "auto_start",
+    "compact_titlebar",
+    "confirmPaneClose",
+    "confirmTabClose",
+    "live_resize_max_panes",
+    "reset_workspace",
+    "update_check_enabled",
+    "update_check_remind_skip",
+    "theme",
+    "debug",
+}
 
 Mux.settings.onChange("mux", "compact_titlebar", function()
     for _, pane in pairs(Mux._panes or {}) do
