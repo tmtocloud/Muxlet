@@ -14,7 +14,6 @@ local STATE_BY_TARGET = {}
 local CONFIG          = {}     -- per-pane config (by pane id); persisted via the workspace
 local DEFAULT_ROW_H   = 44
 local MIN_ROW_H       = 18    -- floor when filling vertically
-local EDIT_STRIP      = 34    -- bottom strip reserved for edit controls
 
 local SHAPE_RADIUS = { square = 0, rounded = 6, pill = 999 }
 
@@ -71,7 +70,7 @@ local function layoutRects(cfg, W, H, editing)
     if cfg.vsizing == "fixed" then
         rowH = cfg.rowH or DEFAULT_ROW_H
     else
-        local availH = (H or 0) - (editing and EDIT_STRIP or 0)
+        local availH = (H or 0)
         rowH = math.floor((availH - gapY * (rowsUsed + 1)) / rowsUsed)
         if rowH < MIN_ROW_H then rowH = MIN_ROW_H end
     end
@@ -145,7 +144,8 @@ render = function(target)
         local lbl = Geyser.Label:new({ name = string.format("%s_bg%d_%d", g, gen, rc.index),
             x = rc.x, y = rc.y, width = rc.w, height = rc.h }, C)
         lbl:setStyleSheet(buttonCss(btn, st.editing))
-        lbl:echo("<center>" .. (btn.label or "") .. "</center>")
+        lbl:echo(string.format('<center><span style="color:%s;">%s</span></center>',
+            btn.fg or "#96c8ff", btn.label or ""))
         local idx = rc.index
         if st.editing then
             lbl:setToolTip("Click to edit this button")
@@ -163,34 +163,36 @@ render = function(target)
         st.widgets[#st.widgets + 1] = lbl
     end
 
+    -- Edit affordances live in the top-right corner as small overlay icons. They
+    -- don't reserve layout space, so the grid shown while editing is exactly the
+    -- locked-in result. The resting gear is faint and brightens on hover.
     local gear = Geyser.Label:new({ name = g .. "_bgear_" .. gen, x = "-26", y = 2, width = 22, height = 22 }, C)
     gear:setStyleSheet(st.editing
         and [[QLabel{background:rgba(255,210,90,0.92);color:#222;border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}]]
-        or  [[QLabel{background:rgba(40,44,60,0.7);color:rgba(200,205,225,0.9);border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}QLabel::hover{background:rgba(60,66,88,0.9);}]])
+        or  [[QLabel{background:rgba(40,44,60,0.30);color:rgba(200,205,225,0.45);border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}QLabel::hover{background:rgba(60,66,88,0.92);color:rgba(225,230,250,0.95);}]])
     gear:echo("<center>⚙</center>")
     gear:setToolTip(st.editing and "Exit edit mode" or "Edit buttons")
     gear:setClickCallback(function() st.editing = not st.editing; render(target) end)
     st.widgets[#st.widgets + 1] = gear
 
     if st.editing then
-        local by = H - EDIT_STRIP + 5
-        local add = Geyser.Label:new({ name = g .. "_badd_" .. gen, x = cfg.gapX, y = by, width = 120, height = 26 }, C)
-        add:setStyleSheet([[QLabel{background:rgba(40,90,50,0.9);color:#cfe;border:1px solid rgba(90,170,110,0.6);
-            border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(55,115,65,0.95);}]])
-        add:echo("<center>＋ Add Button</center>")
-        add:setClickCallback(function()
+        local addI = Geyser.Label:new({ name = g .. "_badd_" .. gen, x = "-52", y = 2, width = 22, height = 22 }, C)
+        addI:setStyleSheet([[QLabel{background:rgba(40,90,50,0.92);color:#cfe;border-radius:4px;qproperty-alignment:AlignCenter;font-size:15px;font-weight:bold;}QLabel::hover{background:rgba(55,115,65,0.96);}]])
+        addI:echo("<center>＋</center>")
+        addI:setToolTip("Add button")
+        addI:setClickCallback(function()
             cfg.buttons[#cfg.buttons + 1] = { label = "Button", width = 1, bg = "#1c2a4e", fg = "#96c8ff",
                 fontSize = 12, shape = "rounded", action = { type = "command", text = "" } }
             scheduleSave(); render(target); openButtonEditor(target, #cfg.buttons)
         end)
-        st.widgets[#st.widgets + 1] = add
+        st.widgets[#st.widgets + 1] = addI
 
-        local gset = Geyser.Label:new({ name = g .. "_bgset_" .. gen, x = cfg.gapX + 128, y = by, width = 120, height = 26 }, C)
-        gset:setStyleSheet([[QLabel{background:rgba(40,50,80,0.9);color:#cde;border:1px solid rgba(90,110,170,0.6);
-            border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(55,68,110,0.95);}]])
-        gset:echo("<center>⚙ Grid Settings</center>")
-        gset:setClickCallback(function() openGridSettings(target) end)
-        st.widgets[#st.widgets + 1] = gset
+        local setI = Geyser.Label:new({ name = g .. "_bgset_" .. gen, x = "-78", y = 2, width = 22, height = 22 }, C)
+        setI:setStyleSheet([[QLabel{background:rgba(40,50,80,0.92);color:#cde;border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}QLabel::hover{background:rgba(55,68,110,0.96);}]])
+        setI:echo("<center>▦</center>")
+        setI:setToolTip("Grid settings")
+        setI:setClickCallback(function() openGridSettings(target) end)
+        st.widgets[#st.widgets + 1] = setI
     end
 end
 

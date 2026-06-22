@@ -286,7 +286,405 @@ function Mux.ui.unregisterWidget(wtype)
     Mux.ui._widgets[wtype] = nil
 end
 
+-- ── Built-in widget builders ──────────────────────────────────────────────────
+-- Each form control is a discrete builder rather than an inline branch, so the
+-- set is open: buildForm dispatches to one of these by render key, custom types
+-- registered via Mux.ui.registerWidget slot in beside them, and any single
+-- control can be swapped without touching the others.
+--
+-- A builder is build(parent, c) -> { commit?, refresh? } where `c` carries the
+-- row geometry, data (spec/value/onChange), themed `css`, and helpers. There are
+-- two layout classes:
+--   "inline"  buildForm draws the label (+ help icon) and the reset icon; the
+--             builder only fills the widget rectangle at c.x / c.y / c.width / c.height.
+--   "block"   the builder owns the whole row (label, widget, and its own reset if any).
+-- Custom widgets are always inline (see Mux.ui.registerWidget).
+
+-- ── Colour field (block) — delegates to the standalone Mux.ui.colorField ──────
+local function w_color(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local availW = c.formW - c.padL - c.padR
+    local nl = Geyser.Label:new({name=uid.."_n", x=c.padL, y=6, width=availW, height=14}, row)
+    nl:setStyleSheet(css.rowLabel)
+    nl:rawEcho(spec.label)
+    local topY = 22
+    if c.hasDesc then
+        local dl = Geyser.Label:new({name=uid.."_d", x=c.padL, y=20, width=availW, height=13}, row)
+        dl:setStyleSheet(css.rowDesc)
+        dl:rawEcho(spec.desc)
+        topY = 34
+    end
+    local cf = Mux.ui.colorField(row, {
+        x = c.padL, y = topY, width = availW,
+        value = tostring(spec.readFn() or "#000000"),
+        onChange = function(hex) spec.writeFn(hex) end,
+        prefix = uid.."_cf",
+    })
+    return { commit = cf.commit, refresh = cf.refresh }
+end
+
+-- ── Wide text row (block) — full-width input, label above ─────────────────────
+local function w_wideText(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local availW    = c.formW - c.padL - c.padR - c.resetW - c.resetGap
+    local hideApply = c.hideApply
+    local inputW    = hideApply and availW or (availW - c.applyW - c.inputGap)
+
+    local nl = Geyser.Label:new({name=uid.."_n", x=c.padL, y=6, width=availW, height=14}, row)
+    nl:setStyleSheet(css.rowLabel)
+    nl:rawEcho(spec.label)
+
+    if c.hasDesc then
+        local dl = Geyser.Label:new({name=uid.."_d", x=c.padL, y=20, width=availW, height=13}, row)
+        dl:setStyleSheet(css.rowDesc)
+        dl:rawEcho(spec.desc)
+    end
+
+    local input = Geyser.CommandLine:new({name=uid.."_i", x=c.padL, y=36, width=inputW, height=c.height}, row)
+    input:setStyleSheet(css.textInput)
+    input:print(tostring(spec.readFn() or ""))
+
+    local function commit()
+        local text = input:getText()
+        if not text or text == "" then return end
+        spec.writeFn(text)
+        input:print(tostring(spec.readFn() or ""))
+    end
+    input:setAction(commit)
+
+    if not hideApply then
+        local aBtn = Geyser.Label:new({name=uid.."_a", x=c.padL+inputW+c.inputGap, y=36, width=c.applyW, height=c.height}, row)
+        aBtn:setStyleSheet(css.applyBtn)
+        aBtn:echo(string.format(
+            "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
+            css.widgetFg))
+        aBtn:setClickCallback(commit)
+    end
+
+    if c.showReset then
+        local ri = Geyser.Label:new({name=uid.."_rst", x=c.resetX, y=6, width=c.resetW, height=c.height}, row)
+        ri:setStyleSheet(css.resetIcon)
+        ri:echo("<center><span style='color:rgba(140,145,165,0.55);font-size:11px;'>↺</span></center>")
+        ri:setClickCallback(function() c.closeDropdown(); c.onReset(c.i, spec) end)
+    end
+
+    return { commit = commit, refresh = function() input:print(tostring(spec.readFn() or "")) end }
+end
+
+-- ── Read-only row (block) — label left, value right ───────────────────────────
+local function w_readOnly(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local vCenter = math.floor((c.rowH - 20) / 2)
+    local nl = Geyser.Label:new({name=uid.."_n", x=c.padL, y=vCenter, width=c.thisNameW+24, height=20}, row)
+    nl:setStyleSheet(css.rowLabel)
+    nl:rawEcho(spec.label)
+
+    local valW = c.width + c.resetW + c.resetGap
+    local vl = Geyser.Label:new({name=uid.."_v", x=c.x, y=vCenter, width=valW, height=20}, row)
+    vl:setStyleSheet(css.rowDesc)
+    vl:rawEcho(string.format("<center>%s</center>", tostring(spec.readFn() or "")))
+    return { refresh = function()
+        vl:rawEcho(string.format("<center>%s</center>", tostring(spec.readFn() or "")))
+    end }
+end
+
+-- ── Checkbox (inline) — bool, two-state toggle ────────────────────────────────
+local function w_checkbox(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local trueOpt  = { value = true,  label = spec.trueLabel  or "TRUE",  style = "on"  }
+    local falseOpt = { value = false, label = spec.falseLabel or "FALSE", style = "off" }
+    local choices  = spec.options or { trueOpt, falseOpt }
+
+    local btn = Geyser.Label:new({name=uid.."_cb", x=c.x, y=c.y, width=c.width, height=c.height}, row)
+    local function refresh()
+        local v = spec.readFn()
+        local chosen = choices[1]
+        for _, o in ipairs(choices) do
+            if o.value == v then chosen = o; break end
+        end
+        local s = chosen.style or "on"
+        btn:setStyleSheet(css.styleCss[s] or css.styleCss.on)
+        btn:echo(string.format(
+            "<center><span style='color:%s;font-size:10px;font-weight:bold;'>%s</span></center>",
+            css.styleFg[s] or css.styleFg.on, chosen.label))
+    end
+    refresh()
+    btn:setClickCallback(function()
+        c.closeDropdown()
+        spec.writeFn(not spec.readFn())
+        refresh()
+    end)
+    return { refresh = refresh }
+end
+
+-- ── Cycler (inline) — array/bool, N-state cycling button ──────────────────────
+local function w_cycler(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local choices = spec.options or {
+        { value = true,  label = "TRUE",  style = "on"  },
+        { value = false, label = "FALSE", style = "off" },
+    }
+    local btn = Geyser.Label:new({name=uid.."_cyc", x=c.x, y=c.y, width=c.width, height=c.height}, row)
+    local function refresh()
+        local v = spec.readFn()
+        local chosen = choices[1]
+        for _, ch in ipairs(choices) do
+            if ch.value == v then chosen = ch; break end
+        end
+        local s = chosen.style or "on"
+        btn:setStyleSheet(css.styleCss[s] or css.styleCss.on)
+        btn:echo(string.format(
+            "<center><span style='color:%s;font-size:10px;font-weight:bold;'>%s</span></center>",
+            css.styleFg[s] or css.styleFg.on, chosen.label))
+    end
+    refresh()
+    btn:setClickCallback(function()
+        c.closeDropdown()
+        local v = spec.readFn()
+        local curIdx = 1
+        for ci, ch in ipairs(choices) do
+            if ch.value == v then curIdx = ci; break end
+        end
+        spec.writeFn(choices[(curIdx % #choices) + 1].value)
+        refresh()
+    end)
+    return { refresh = refresh }
+end
+
+-- ── Dropdown (inline) — array, floating overlay panel ─────────────────────────
+local function w_dropdown(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local choices = spec.options or {}
+    local ovName  = uid .. "_dov"
+    local overlay = nil
+
+    local btn = Geyser.Label:new({name=uid.."_dd", x=c.x, y=c.y, width=c.width, height=c.height}, row)
+    btn:setStyleSheet(css.widgetBtn)
+
+    local function destroyOverlay()
+        if overlay then
+            overlay:hide()
+            for ci = 1, #choices do
+                local n = ovName .. "_o" .. ci
+                if Geyser.windowList[n] then Geyser.windowList[n]:hide() end
+            end
+            if c.getActive() == overlay then c.setActive(nil) end
+            overlay = nil
+        end
+    end
+
+    local capturedRowY = c.yPos
+
+    local function refresh()
+        local v = spec.readFn()
+        local dispLabel = tostring(v or "")
+        for _, ch in ipairs(choices) do
+            if ch.value == v then dispLabel = ch.label; break end
+        end
+        if #dispLabel > 16 then dispLabel = dispLabel:sub(1, 15) .. "…" end
+        btn:echo(string.format(
+            "<center><span style='color:%s;font-size:10px;'>%s ▾</span></center>",
+            css.widgetFg, dispLabel))
+    end
+    refresh()
+
+    local function openOverlay()
+        if not c.getScreenPos then return end
+        local cx, cy  = c.getScreenPos()
+        local absBtnX = cx + c.x
+        local absBtnY = cy + capturedRowY + c.y + c.height
+        overlay = Geyser.Label:new({
+            name=ovName, x=absBtnX, y=absBtnY,
+            width=c.width, height=#choices * c.height,
+        }, Geyser)
+        overlay:setStyleSheet(css.dropdownPanel)
+        overlay:show(); overlay:raise()
+        for ci, choice in ipairs(choices) do
+            local opt = Geyser.Label:new({
+                name=ovName.."_o"..ci, x=0, y=(ci-1)*c.height,
+                width=c.width, height=c.height,
+            }, overlay)
+            opt:setStyleSheet(css.dropdownOpt)
+            opt:echo(string.format(
+                "<span style='color:%s;font-size:10px;'>  %s</span>",
+                css.widgetFg, tostring(choice.label)))
+            opt:show(); opt:raise()
+            local captured = choice
+            if choice.desc and choice.desc ~= "" then opt:setToolTip(choice.desc, 6) end
+            opt:setClickCallback(function()
+                spec.writeFn(captured.value)
+                refresh()
+                destroyOverlay()
+            end)
+        end
+        c.setActive(overlay)
+    end
+
+    btn:setClickCallback(function()
+        if c.getActive() then
+            local was = (c.getActive() == overlay)
+            c.closeDropdown()
+            destroyOverlay()
+            if was then return end
+        end
+        openOverlay()
+    end)
+    return { refresh = refresh }
+end
+
+-- ── Stepper (inline) — number, − value + ──────────────────────────────────────
+local function w_stepper(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local step = spec.step or 1
+    local minV = spec.min  or 0
+    local maxV = spec.max  or 100
+    local bw   = c.stepBtnW
+    local vw   = c.width - bw * 2 - 4
+    local sc   = css.widgetFg
+
+    local minus = Geyser.Label:new({name=uid.."_sm", x=c.x,             y=c.y, width=bw, height=c.height}, row)
+    local vl    = Geyser.Label:new({name=uid.."_sv", x=c.x+bw+2,        y=c.y, width=vw, height=c.height}, row)
+    local plus  = Geyser.Label:new({name=uid.."_sp", x=c.x+bw+2+vw+2,   y=c.y, width=bw, height=c.height}, row)
+
+    minus:setStyleSheet(css.stepperBtn)
+    minus:echo(string.format("<center><span style='color:%s;font-size:13px;font-weight:bold;'>−</span></center>", sc))
+    vl:setStyleSheet(css.stepperVal)
+    plus:setStyleSheet(css.stepperBtn)
+    plus:echo(string.format("<center><span style='color:%s;font-size:13px;font-weight:bold;'>+</span></center>", sc))
+
+    local function refresh()
+        vl:echo(string.format(
+            "<center><span style='color:%s;font-size:11px;font-weight:bold;'>%s</span></center>",
+            sc, tostring(spec.readFn())))
+    end
+    refresh()
+
+    minus:setClickCallback(function()
+        c.closeDropdown()
+        spec.writeFn(math.max(minV, (spec.readFn() or minV) - step))
+        refresh()
+    end)
+    plus:setClickCallback(function()
+        c.closeDropdown()
+        spec.writeFn(math.min(maxV, (spec.readFn() or minV) + step))
+        refresh()
+    end)
+    return { refresh = refresh }
+end
+
+-- ── Inline text (inline) — number/string without wide layout ──────────────────
+local function w_text(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local inW = c.width - c.applyW - c.inputGap
+    local input = Geyser.CommandLine:new({name=uid.."_i", x=c.x, y=c.y, width=inW, height=c.height}, row)
+    input:setStyleSheet(css.textInput)
+    input:print(tostring(spec.readFn() or ""))
+
+    local aBtn = Geyser.Label:new({name=uid.."_a", x=c.x+inW+c.inputGap, y=c.y, width=c.applyW, height=c.height}, row)
+    aBtn:setStyleSheet(css.applyBtn)
+    aBtn:echo(string.format(
+        "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
+        css.widgetFg))
+
+    local function commit()
+        c.closeDropdown()
+        local text = input:getText()
+        if not text or text == "" then return end
+        spec.writeFn(text)
+        input:print(tostring(spec.readFn() or ""))
+    end
+    input:setAction(commit)
+    aBtn:setClickCallback(commit)
+    return { commit = commit, refresh = function() input:print(tostring(spec.readFn() or "")) end }
+end
+
+-- ── Segmented control (inline) — N connected buttons, one highlighted ─────────
+local function w_segmented(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local choices = spec.options or {}
+    local n       = #choices
+    if n == 0 then return {} end
+
+    local segW  = math.floor(c.width / n)
+    local lastW = c.width - segW * (n - 1)  -- last segment absorbs rounding remainder
+    local ui    = (Mux.activeTheme and Mux.activeTheme() or {}).ui or {}
+    local wBg   = ui.widgetBg     or "rgb(38,38,58)"
+    local wFg   = ui.widgetFg     or "#d8d8f0"
+    local wBd   = ui.widgetBorder or "rgba(255,255,255,0.22)"
+    local wHv   = ui.widgetHoverBg or "rgb(55,55,80)"
+    local selBg = (ui.styles and ui.styles.on and ui.styles.on.bg)     or "rgb(30,70,40)"
+    local selFg = (ui.styles and ui.styles.on and ui.styles.on.fg)     or "#88ee88"
+    local selBd = (ui.styles and ui.styles.on and ui.styles.on.border) or "rgba(80,180,80,0.5)"
+    local selHv = (ui.styles and ui.styles.on and ui.styles.on.hover)  or "rgb(40,90,50)"
+
+    local function segCss(isSelected, pos)
+        local r = pos == 1 and "border-radius:3px 0 0 3px;"
+               or pos == n and "border-radius:0 3px 3px 0;"
+               or              "border-radius:0;"
+        if isSelected then
+            return string.format(
+                "QLabel{background:%s;color:%s;font-size:10px;font-weight:bold;border:1px solid %s;%s}"
+                .. "QLabel::hover{background:%s;}",
+                selBg, selFg, selBd, r, selHv)
+        else
+            return string.format(
+                "QLabel{background:%s;color:%s;font-size:10px;border:1px solid %s;%s}"
+                .. "QLabel::hover{background:%s;}",
+                wBg, wFg, wBd, r, wHv)
+        end
+    end
+
+    local segs = {}
+    for ci, choice in ipairs(choices) do
+        local sx = c.x + (ci - 1) * segW
+        local sw = (ci == n) and lastW or segW
+        local seg = Geyser.Label:new({
+            name=uid.."_sg"..ci, x=sx, y=c.y, width=sw, height=c.height, fillBg=1,
+        }, row)
+        segs[ci] = { widget = seg, choice = choice, pos = ci }
+    end
+
+    local function refresh()
+        local v = spec.readFn()
+        for _, s in ipairs(segs) do
+            local isSel = (s.choice.value == v)
+            s.widget:setStyleSheet(segCss(isSel, s.pos))
+            s.widget:echo(string.format(
+                "<center><span style='color:%s;font-size:10px;font-weight:bold;'>%s</span></center>",
+                isSel and selFg or wFg, s.choice.label))
+        end
+    end
+    refresh()
+
+    for _, s in ipairs(segs) do
+        local captured = s.choice
+        s.widget:setClickCallback(function()
+            c.closeDropdown()
+            spec.writeFn(captured.value)
+            refresh()
+        end)
+    end
+    return { refresh = refresh }
+end
+
+-- Built-in render-key registry.  buildForm resolves each row to one of these (or
+-- to a custom Mux.ui._widgets type).  Authors may override an entry to restyle a
+-- control globally; `layout` is "inline" unless stated.
+Mux.ui._builtins = {
+    color     = { build = w_color,     layout = "block" },
+    wideText  = { build = w_wideText,  layout = "block" },
+    readOnly  = { build = w_readOnly,  layout = "block" },
+    checkbox  = { build = w_checkbox },
+    cycler    = { build = w_cycler },
+    dropdown  = { build = w_dropdown },
+    stepper   = { build = w_stepper },
+    text      = { build = w_text },
+    segmented = { build = w_segmented },
+}
+
 -- ── buildForm ─────────────────────────────────────────────────────────────────
+-- A thin layout shell: per row it resolves a builder (built-in or custom),
+-- renders the shared chrome for inline rows, and delegates control creation.
 
 function Mux.ui.buildForm(parent, specs, opts)
     opts = opts or {}
@@ -294,12 +692,11 @@ function Mux.ui.buildForm(parent, specs, opts)
     local theme    = Mux.activeTheme() or {}
     local css      = deriveCss(theme.ui or theme.settingsUi)
 
-    local formW    = opts.width       or (parent:get_width() > 50 and parent:get_width() or 400)
-    local prefix   = opts.prefix      or "muxui"
-    local rowH     = opts.rowHeight   or 42
+    local formW    = opts.width        or (parent:get_width() > 50 and parent:get_width() or 400)
+    local prefix   = opts.prefix       or "muxui"
+    local rowH     = opts.rowHeight    or 42
     local textH    = opts.textRowHeight or 64
     local colorH   = opts.colorRowHeight or 92
-    local widgetW  = opts.widgetWidth  or 110
     local widgetH  = opts.widgetHeight or 24
     local padL     = opts.padLeft      or 10
     local padR     = opts.padRight     or 6
@@ -307,13 +704,10 @@ function Mux.ui.buildForm(parent, specs, opts)
     local inputGap = 3
     local stepBtnW = 26
 
-    local showReset   = opts.showReset and opts.onReset
-    local resetW      = showReset and 20 or 0
-    local resetGap    = showReset and 8  or 0
-
-    local widgetX = formW - widgetW - padR - resetW - resetGap
-    local resetX  = formW - resetW - padR
-    local nameW   = widgetX - padL - 24  -- 24 reserved for help-icon slot
+    local showReset = opts.showReset and opts.onReset
+    local resetW    = showReset and 20 or 0
+    local resetGap  = showReset and 8  or 0
+    local resetX    = formW - resetW - padR
 
     local activeDropdown = nil
     local refreshFns     = {}
@@ -327,14 +721,50 @@ function Mux.ui.buildForm(parent, specs, opts)
         end
     end
 
+    -- Shared chrome for inline rows: label (+ help icon) on the left.
+    local function renderInlineLabel(row, uid, spec, hasDesc, thisNameW)
+        local vCenter = math.floor((rowH - 20) / 2)
+        local nameX   = hasDesc and padL + 22 or padL
+        local nameW2  = hasDesc and thisNameW or thisNameW + 22
+        local nl = Geyser.Label:new({name=uid.."_n", x=nameX, y=vCenter, width=nameW2, height=20}, row)
+        nl:setStyleSheet(css.rowLabel)
+        nl:rawEcho(spec.label)
+        if hasDesc then
+            local hi = Geyser.Label:new({
+                name=uid.."_hi", x=padL, y=vCenter+2, width=16, height=16, fillBg=1,
+            }, row)
+            hi:setStyleSheet(css.helpIcon)
+            hi:rawEcho("<center>i</center>")
+            hi:setToolTip(spec.desc, 6)
+            hi:setOnEnter(function() hi:setStyleSheet(css.helpIconHover) end)
+            hi:setOnLeave(function() hi:setStyleSheet(css.helpIcon) end)
+        end
+    end
+
+    -- Shared chrome for inline rows: reset-to-default icon on the right.
+    local function renderInlineReset(row, uid, spec, i, wy)
+        if not showReset then return end
+        local ri = Geyser.Label:new({name=uid.."_rst", x=resetX, y=wy, width=resetW, height=widgetH}, row)
+        ri:setStyleSheet(css.resetIcon)
+        ri:echo("<center><span style='color:rgba(140,145,165,0.55);font-size:11px;'>↺</span></center>")
+        ri:setClickCallback(function() closeDropdown(); opts.onReset(i, spec) end)
+    end
+
+    local function wire(i, handle)
+        if type(handle) == "table" then
+            if handle.commit  then commitFns[i]  = handle.commit  end
+            if handle.refresh then refreshFns[i] = handle.refresh end
+        end
+    end
+
     for i, spec in ipairs(specs) do
         -- ── Resolve type aliases ──────────────────────────────────────────────
         local specType    = spec.type
         local specDisplay = spec.display
         local isReadOnly  = spec.readOnly
 
-        if specType == "toggle"           then specType = "bool";   specDisplay = specDisplay or "checkbox"
-        elseif specType == "choiceCycler"  then specType = "array"; specDisplay = specDisplay or "cycler"
+        if specType == "toggle"            then specType = "bool";   specDisplay = specDisplay or "checkbox"
+        elseif specType == "choiceCycler"  then specType = "array";  specDisplay = specDisplay or "cycler"
         elseif specType == "segmentedControl" then specType = "array"; specDisplay = specDisplay or "segmented"
         elseif specType == "readOnly"      then specType = "string"; isReadOnly  = true
         elseif specType == "text"          then specType = "string"
@@ -353,7 +783,7 @@ function Mux.ui.buildForm(parent, specs, opts)
         local isColor = (specType == "color")
         local isWide  = (specType == "string") and (specDisplay == "text") and not isReadOnly
         local thisH   = (customW and customW.rowHeight) or (isColor and colorH or (isWide and textH or rowH))
-        local uid    = prefix .. "_w" .. i
+        local uid     = prefix .. "_w" .. i
 
         -- Per-row widget width override (e.g. wider segmented controls).
         local thisWidgetW = resolveWidgetW(spec, opts)
@@ -365,405 +795,47 @@ function Mux.ui.buildForm(parent, specs, opts)
         }, parent)
         row:setStyleSheet(i % 2 == 1 and css.odd or css.even)
 
-        local wy       = math.floor((thisH - widgetH) / 2)
+        local wy        = math.floor((thisH - widgetH) / 2)
         local thisNameW = thisWidgetX - padL - 24
-        local hasDesc  = spec.desc and spec.desc ~= ""
+        local hasDesc   = spec.desc and spec.desc ~= ""
 
-        -- ── Colour field (delegates to the standalone Mux.ui.colorField) ──────
-        if isColor then
-            local availW = formW - padL - padR
-            local nl = Geyser.Label:new({name=uid.."_n", x=padL, y=6, width=availW, height=14}, row)
-            nl:setStyleSheet(css.rowLabel)
-            nl:rawEcho(spec.label)
-            local topY = 22
-            if hasDesc then
-                local dl = Geyser.Label:new({name=uid.."_d", x=padL, y=20, width=availW, height=13}, row)
-                dl:setStyleSheet(css.rowDesc)
-                dl:rawEcho(spec.desc)
-                topY = 34
-            end
-            local cf = Mux.ui.colorField(row, {
-                x = padL, y = topY, width = availW,
-                value = tostring(spec.readFn() or "#000000"),
-                onChange = function(hex) spec.writeFn(hex) end,
-                prefix = uid.."_cf",
-            })
-            commitFns[i]  = cf.commit
-            refreshFns[i] = cf.refresh
+        -- ── Resolve builder + layout ──────────────────────────────────────────
+        local def
+        if     isColor     then def = Mux.ui._builtins.color
+        elseif isWide      then def = Mux.ui._builtins.wideText
+        elseif isReadOnly  then def = Mux.ui._builtins.readOnly
+        elseif customW     then def = customW                 -- custom: inline
+        else                    def = Mux.ui._builtins[specDisplay]
+        end
+        local builder = def and def.build
+        local layout  = (def and def.layout) or "inline"
 
-        -- ── Wide text row ─────────────────────────────────────────────────────
-        elseif isWide then
-            local availW    = formW - padL - padR - resetW - resetGap
-            local hideApply = opts.hideApply
-            local inputW    = hideApply and availW or (availW - applyW - inputGap)
+        local ctx = {
+            -- widget rectangle (inline) / row reference points (block)
+            x = thisWidgetX, y = wy, width = thisWidgetW, height = widgetH, wy = wy,
+            -- full-row geometry for block builders
+            formW = formW, padL = padL, padR = padR, rowH = rowH,
+            resetX = resetX, resetW = resetW, resetGap = resetGap,
+            applyW = applyW, inputGap = inputGap, stepBtnW = stepBtnW,
+            hasDesc = hasDesc, hideApply = opts.hideApply, thisNameW = thisNameW,
+            -- data
+            spec = spec, css = css, uid = uid, i = i, yPos = yPos,
+            value = spec.readFn and spec.readFn() or nil,
+            onChange = spec.writeFn or function() end,
+            -- helpers
+            closeDropdown = closeDropdown,
+            getScreenPos = opts.getContentScreenPos,
+            getActive = function() return activeDropdown end,
+            setActive = function(o) activeDropdown = o end,
+            onReset = opts.onReset, showReset = showReset,
+        }
 
-            local nl = Geyser.Label:new({name=uid.."_n", x=padL, y=6, width=availW, height=14}, row)
-            nl:setStyleSheet(css.rowLabel)
-            nl:rawEcho(spec.label)
-
-            if hasDesc then
-                local dl = Geyser.Label:new({name=uid.."_d", x=padL, y=20, width=availW, height=13}, row)
-                dl:setStyleSheet(css.rowDesc)
-                dl:rawEcho(spec.desc)
-            end
-
-            local input = Geyser.CommandLine:new({name=uid.."_i", x=padL, y=36, width=inputW, height=widgetH}, row)
-            input:setStyleSheet(css.textInput)
-            input:print(tostring(spec.readFn() or ""))
-
-            local function commit()
-                local text = input:getText()
-                if not text or text == "" then return end
-                spec.writeFn(text)
-                input:print(tostring(spec.readFn() or ""))
-            end
-            input:setAction(commit)
-            commitFns[i] = commit
-            if not hideApply then
-                local aBtn = Geyser.Label:new({name=uid.."_a", x=padL+inputW+inputGap, y=36, width=applyW, height=widgetH}, row)
-                aBtn:setStyleSheet(css.applyBtn)
-                aBtn:echo(string.format(
-                    "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
-                    css.widgetFg))
-                aBtn:setClickCallback(commit)
-            end
-            refreshFns[i] = function() input:print(tostring(spec.readFn() or "")) end
-
-            if showReset then
-                local ri = Geyser.Label:new({name=uid.."_rst", x=resetX, y=6, width=resetW, height=widgetH}, row)
-                ri:setStyleSheet(css.resetIcon)
-                ri:echo("<center><span style='color:rgba(140,145,165,0.55);font-size:11px;'>↺</span></center>")
-                ri:setClickCallback(function() closeDropdown(); opts.onReset(i, spec) end)
-            end
-
-        -- ── Read-only row ─────────────────────────────────────────────────────
-        elseif isReadOnly then
-            local vCenter = math.floor((rowH - 20) / 2)
-            local nl = Geyser.Label:new({name=uid.."_n", x=padL, y=vCenter, width=thisNameW+24, height=20}, row)
-            nl:setStyleSheet(css.rowLabel)
-            nl:rawEcho(spec.label)
-
-            local valW = thisWidgetW + resetW + resetGap
-            local vl = Geyser.Label:new({name=uid.."_v", x=thisWidgetX, y=vCenter, width=valW, height=20}, row)
-            vl:setStyleSheet(css.rowDesc)
-            vl:rawEcho(string.format("<center>%s</center>", tostring(spec.readFn() or "")))
-            refreshFns[i] = function()
-                vl:rawEcho(string.format("<center>%s</center>", tostring(spec.readFn() or "")))
-            end
-
-        -- ── Standard interactive row ──────────────────────────────────────────
+        if layout == "block" then
+            if builder then wire(i, builder(row, ctx)) end
         else
-            local vCenter = math.floor((rowH - 20) / 2)
-            local nameX   = hasDesc and padL + 22 or padL
-            local nameW2   = hasDesc and thisNameW or thisNameW + 22
-
-            local nl = Geyser.Label:new({name=uid.."_n", x=nameX, y=vCenter, width=nameW2, height=20}, row)
-            nl:setStyleSheet(css.rowLabel)
-            nl:rawEcho(spec.label)
-
-            if hasDesc then
-                local hi = Geyser.Label:new({
-                    name=uid.."_hi", x=padL, y=vCenter+2, width=16, height=16, fillBg=1,
-                }, row)
-                hi:setStyleSheet(css.helpIcon)
-                hi:rawEcho("<center>i</center>")
-                hi:setToolTip(spec.desc, 6)
-                hi:setOnEnter(function() hi:setStyleSheet(css.helpIconHover) end)
-                hi:setOnLeave(function() hi:setStyleSheet(css.helpIcon) end)
-            end
-
-            -- ── Custom registered widget ──────────────────────────────────────
-            if customW then
-                local handle = customW.build(row, {
-                    x = thisWidgetX, y = wy, width = thisWidgetW, height = widgetH,
-                    value    = spec.readFn and spec.readFn() or nil,
-                    onChange = spec.writeFn or function() end,
-                    spec = spec, css = css, uid = uid,
-                    closeDropdown = closeDropdown,
-                    getScreenPos  = opts.getContentScreenPos,
-                })
-                if type(handle) == "table" then
-                    if handle.commit  then commitFns[i]  = handle.commit  end
-                    if handle.refresh then refreshFns[i] = handle.refresh end
-                end
-
-            -- ── Checkbox (bool, two-state toggle) ─────────────────────────────
-            elseif specDisplay == "checkbox" then
-                local trueOpt  = { value = true,  label = spec.trueLabel  or "TRUE",  style = "on"  }
-                local falseOpt = { value = false,  label = spec.falseLabel or "FALSE", style = "off" }
-                local choices  = spec.options or { trueOpt, falseOpt }
-
-                local btn = Geyser.Label:new({name=uid.."_cb", x=thisWidgetX, y=wy, width=thisWidgetW, height=widgetH}, row)
-                local function refresh()
-                    local v   = spec.readFn()
-                    local chosen = choices[1]
-                    for _, o in ipairs(choices) do
-                        if o.value == v then chosen = o; break end
-                    end
-                    local s = chosen.style or "on"
-                    btn:setStyleSheet(css.styleCss[s] or css.styleCss.on)
-                    btn:echo(string.format(
-                        "<center><span style='color:%s;font-size:10px;font-weight:bold;'>%s</span></center>",
-                        css.styleFg[s] or css.styleFg.on, chosen.label))
-                end
-                refresh()
-                btn:setClickCallback(function()
-                    closeDropdown()
-                    spec.writeFn(not spec.readFn())
-                    refresh()
-                end)
-                refreshFns[i] = refresh
-
-            -- ── Cycler (array or bool, N-state cycling button) ────────────────
-            elseif specDisplay == "cycler" then
-                local choices = spec.options or {
-                    { value = true,  label = "TRUE",  style = "on"  },
-                    { value = false, label = "FALSE", style = "off" },
-                }
-                local btn = Geyser.Label:new({name=uid.."_cyc", x=thisWidgetX, y=wy, width=thisWidgetW, height=widgetH}, row)
-                local function refresh()
-                    local v      = spec.readFn()
-                    local chosen = choices[1]
-                    for _, c in ipairs(choices) do
-                        if c.value == v then chosen = c; break end
-                    end
-                    local s = chosen.style or "on"
-                    btn:setStyleSheet(css.styleCss[s] or css.styleCss.on)
-                    btn:echo(string.format(
-                        "<center><span style='color:%s;font-size:10px;font-weight:bold;'>%s</span></center>",
-                        css.styleFg[s] or css.styleFg.on, chosen.label))
-                end
-                refresh()
-                btn:setClickCallback(function()
-                    closeDropdown()
-                    local v      = spec.readFn()
-                    local curIdx = 1
-                    for ci, c in ipairs(choices) do
-                        if c.value == v then curIdx = ci; break end
-                    end
-                    spec.writeFn(choices[(curIdx % #choices) + 1].value)
-                    refresh()
-                end)
-                refreshFns[i] = refresh
-
-            -- ── Dropdown (array, floating overlay panel) ──────────────────────
-            elseif specDisplay == "dropdown" then
-                local choices = spec.options or {}
-                local ovName  = uid .. "_dov"
-                local overlay = nil
-
-                local btn = Geyser.Label:new({name=uid.."_dd", x=thisWidgetX, y=wy, width=thisWidgetW, height=widgetH}, row)
-                btn:setStyleSheet(css.widgetBtn)
-
-                local function destroyOverlay()
-                    if overlay then
-                        overlay:hide()
-                        for ci = 1, #choices do
-                            local n = ovName .. "_o" .. ci
-                            if Geyser.windowList[n] then Geyser.windowList[n]:hide() end
-                        end
-                        if activeDropdown == overlay then activeDropdown = nil end
-                        overlay = nil
-                    end
-                end
-
-                local capturedRowY = yPos
-
-                local function refresh()
-                    local v = spec.readFn()
-                    local dispLabel = tostring(v or "")
-                    for _, c in ipairs(choices) do
-                        if c.value == v then dispLabel = c.label; break end
-                    end
-                    if #dispLabel > 16 then dispLabel = dispLabel:sub(1, 15) .. "…" end
-                    btn:echo(string.format(
-                        "<center><span style='color:%s;font-size:10px;'>%s ▾</span></center>",
-                        css.widgetFg, dispLabel))
-                end
-                refresh()
-
-                local function openOverlay()
-                    if not opts.getContentScreenPos then return end
-                    local cx, cy    = opts.getContentScreenPos()
-                    local absBtnX   = cx + thisWidgetX
-                    local absBtnY   = cy + capturedRowY + wy + widgetH
-                    overlay = Geyser.Label:new({
-                        name=ovName, x=absBtnX, y=absBtnY,
-                        width=thisWidgetW, height=#choices * widgetH,
-                    }, Geyser)
-                    overlay:setStyleSheet(css.dropdownPanel)
-                    overlay:show(); overlay:raise()
-                    for ci, choice in ipairs(choices) do
-                        local opt = Geyser.Label:new({
-                            name=ovName.."_o"..ci, x=0, y=(ci-1)*widgetH,
-                            width=thisWidgetW, height=widgetH,
-                        }, overlay)
-                        opt:setStyleSheet(css.dropdownOpt)
-                        opt:echo(string.format(
-                            "<span style='color:%s;font-size:10px;'>  %s</span>",
-                            css.widgetFg, tostring(choice.label)))
-                        opt:show(); opt:raise()
-                        local captured = choice
-                        if choice.desc and choice.desc ~= "" then opt:setToolTip(choice.desc, 6) end
-                        opt:setClickCallback(function()
-                            spec.writeFn(captured.value)
-                            refresh()
-                            destroyOverlay()
-                        end)
-                    end
-                    activeDropdown = overlay
-                end
-
-                btn:setClickCallback(function()
-                    if activeDropdown then
-                        local was = (activeDropdown == overlay)
-                        closeDropdown()
-                        destroyOverlay()
-                        if was then return end
-                    end
-                    openOverlay()
-                end)
-                refreshFns[i] = refresh
-
-            -- ── Stepper (number, − value +) ───────────────────────────────────
-            elseif specDisplay == "stepper" then
-                local step = spec.step or 1
-                local minV = spec.min  or 0
-                local maxV = spec.max  or 100
-                local bw   = stepBtnW
-                local vw   = thisWidgetW - bw * 2 - 4
-                local sc   = css.widgetFg
-
-                local minus = Geyser.Label:new({name=uid.."_sm", x=thisWidgetX,              y=wy, width=bw, height=widgetH}, row)
-                local vl    = Geyser.Label:new({name=uid.."_sv", x=thisWidgetX+bw+2,         y=wy, width=vw, height=widgetH}, row)
-                local plus  = Geyser.Label:new({name=uid.."_sp", x=thisWidgetX+bw+2+vw+2,   y=wy, width=bw, height=widgetH}, row)
-
-                minus:setStyleSheet(css.stepperBtn)
-                minus:echo(string.format("<center><span style='color:%s;font-size:13px;font-weight:bold;'>−</span></center>", sc))
-                vl:setStyleSheet(css.stepperVal)
-                plus:setStyleSheet(css.stepperBtn)
-                plus:echo(string.format("<center><span style='color:%s;font-size:13px;font-weight:bold;'>+</span></center>", sc))
-
-                local function refresh()
-                    vl:echo(string.format(
-                        "<center><span style='color:%s;font-size:11px;font-weight:bold;'>%s</span></center>",
-                        sc, tostring(spec.readFn())))
-                end
-                refresh()
-
-                minus:setClickCallback(function()
-                    closeDropdown()
-                    spec.writeFn(math.max(minV, (spec.readFn() or minV) - step))
-                    refresh()
-                end)
-                plus:setClickCallback(function()
-                    closeDropdown()
-                    spec.writeFn(math.min(maxV, (spec.readFn() or minV) + step))
-                    refresh()
-                end)
-                refreshFns[i] = refresh
-
-            -- ── Inline text (number or string without wide layout) ────────────
-            elseif specDisplay == "text" then
-                local inW = thisWidgetW - applyW - inputGap
-                local input = Geyser.CommandLine:new({name=uid.."_i", x=thisWidgetX, y=wy, width=inW, height=widgetH}, row)
-                input:setStyleSheet(css.textInput)
-                input:print(tostring(spec.readFn() or ""))
-
-                local aBtn = Geyser.Label:new({name=uid.."_a", x=thisWidgetX+inW+inputGap, y=wy, width=applyW, height=widgetH}, row)
-                aBtn:setStyleSheet(css.applyBtn)
-                aBtn:echo(string.format(
-                    "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
-                    css.widgetFg))
-
-                local function commit()
-                    closeDropdown()
-                    local text = input:getText()
-                    if not text or text == "" then return end
-                    spec.writeFn(text)
-                    input:print(tostring(spec.readFn() or ""))
-                end
-                input:setAction(commit)
-                aBtn:setClickCallback(commit)
-                commitFns[i] = commit
-                refreshFns[i] = function() input:print(tostring(spec.readFn() or "")) end
-
-            -- ── Segmented control (N connected buttons, one highlighted) ──────
-            elseif specDisplay == "segmented" then
-                local choices = spec.options or {}
-                local n       = #choices
-                if n > 0 then
-                local segW    = math.floor(thisWidgetW / n)
-                -- Last segment absorbs rounding remainder.
-                local lastW   = thisWidgetW - segW * (n - 1)
-                local ui      = (Mux.activeTheme and Mux.activeTheme() or {}).ui or {}
-                local wBg     = ui.widgetBg    or "rgb(38,38,58)"
-                local wFg     = ui.widgetFg    or "#d8d8f0"
-                local wBd     = ui.widgetBorder or "rgba(255,255,255,0.22)"
-                local wHv     = ui.widgetHoverBg or "rgb(55,55,80)"
-                local selBg   = (ui.styles and ui.styles.on and ui.styles.on.bg) or "rgb(30,70,40)"
-                local selFg   = (ui.styles and ui.styles.on and ui.styles.on.fg) or "#88ee88"
-                local selBd   = (ui.styles and ui.styles.on and ui.styles.on.border) or "rgba(80,180,80,0.5)"
-                local selHv   = (ui.styles and ui.styles.on and ui.styles.on.hover) or "rgb(40,90,50)"
-
-                local function segCss(isSelected, pos)
-                    local r = pos == 1 and "border-radius:3px 0 0 3px;"
-                           or pos == n and "border-radius:0 3px 3px 0;"
-                           or              "border-radius:0;"
-                    if isSelected then
-                        return string.format(
-                            "QLabel{background:%s;color:%s;font-size:10px;font-weight:bold;border:1px solid %s;%s}"
-                            .. "QLabel::hover{background:%s;}",
-                            selBg, selFg, selBd, r, selHv)
-                    else
-                        return string.format(
-                            "QLabel{background:%s;color:%s;font-size:10px;border:1px solid %s;%s}"
-                            .. "QLabel::hover{background:%s;}",
-                            wBg, wFg, wBd, r, wHv)
-                    end
-                end
-
-                local segs = {}
-                for ci, choice in ipairs(choices) do
-                    local sx = thisWidgetX + (ci - 1) * segW
-                    local sw = (ci == n) and lastW or segW
-                    local seg = Geyser.Label:new({
-                        name=uid.."_sg"..ci, x=sx, y=wy, width=sw, height=widgetH, fillBg=1,
-                    }, row)
-                    segs[ci] = { widget = seg, choice = choice, pos = ci }
-                end
-
-                local function refresh()
-                    local v = spec.readFn()
-                    for _, s in ipairs(segs) do
-                        local isSel = (s.choice.value == v)
-                        s.widget:setStyleSheet(segCss(isSel, s.pos))
-                        s.widget:echo(string.format(
-                            "<center><span style='color:%s;font-size:10px;font-weight:bold;'>%s</span></center>",
-                            isSel and selFg or wFg, s.choice.label))
-                    end
-                end
-                refresh()
-
-                for _, s in ipairs(segs) do
-                    local captured = s.choice
-                    s.widget:setClickCallback(function()
-                        closeDropdown()
-                        spec.writeFn(captured.value)
-                        refresh()
-                    end)
-                end
-                refreshFns[i] = refresh
-                end  -- n > 0
-            end
-
-            -- ── Reset icon (non-wide rows) ────────────────────────────────────
-            if showReset then
-                local ri = Geyser.Label:new({name=uid.."_rst", x=resetX, y=wy, width=resetW, height=widgetH}, row)
-                ri:setStyleSheet(css.resetIcon)
-                ri:echo("<center><span style='color:rgba(140,145,165,0.55);font-size:11px;'>↺</span></center>")
-                ri:setClickCallback(function() closeDropdown(); opts.onReset(i, spec) end)
-            end
+            renderInlineLabel(row, uid, spec, hasDesc, thisNameW)
+            if builder then wire(i, builder(row, ctx)) end
+            renderInlineReset(row, uid, spec, i, wy)
         end
 
         yPos = yPos + thisH

@@ -214,6 +214,7 @@ function Mux.resizePaneToWidth(pane, pct)
         pane.floatW = targetPx
         pane.outer:resize(pane.floatW, pane.floatH)
         pane.outer:reposition()
+        if Mux._relayoutContent then Mux._relayoutContent(pane) end
         Mux._scheduleAutoSave()
         Mux._echo(string.format("\n<green>[Muxlet]<reset> Width set to %d%% (%dpx).\n", pct, targetPx))
         return
@@ -247,6 +248,7 @@ function Mux.resizePaneToHeight(pane, pct)
         pane.floatH = targetPx
         pane.outer:resize(pane.floatW, pane.floatH)
         pane.outer:reposition()
+        if Mux._relayoutContent then Mux._relayoutContent(pane) end
         Mux._scheduleAutoSave()
         Mux._echo(string.format("\n<green>[Muxlet]<reset> Height set to %d%% (%dpx).\n", pct, targetPx))
         return
