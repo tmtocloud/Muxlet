@@ -229,10 +229,17 @@ local function hexToHsv(hex)
     return h, (mx == 0) and 0 or (d / mx), mx
 end
 
--- A compact colour control: a swatch, a hex input (Enter commits), and a
--- brightness strip. The strip shows the current hue/saturation from dark to
--- light; clicking a cell sets that brightness (HSV value) while keeping the hue
--- and saturation. Pick a hue by typing a hex; fine-tune light/dark on the strip.
+-- Closes whichever colour wheel is currently open (only one can be), if any.
+-- Hosts that tear down (e.g. a dialog closing) call this so a wheel never lingers.
+function Mux.ui.closeColorWheel()
+    if Mux.ui._closeActiveWheel then Mux.ui._closeActiveWheel() end
+end
+
+-- A compact colour control: a swatch, a hex input (Enter commits), a colour
+-- wheel popup (click the swatch) for choosing hue/saturation, and a brightness
+-- strip for fine-tuning light/dark. The strip shows the current hue/saturation
+-- from dark to light; clicking a cell sets that brightness (HSV value) while
+-- keeping hue and saturation.
 function Mux.ui.colorField(parent, opts)
     opts = opts or {}
     local value    = opts.value or "#000000"
@@ -240,6 +247,7 @@ function Mux.ui.colorField(parent, opts)
     local x, y     = opts.x or 0, opts.y or 0
     local width    = opts.width or 240
     local prefix   = opts.prefix or ("muxcf_" .. tostring(math.random(1, 1000000000)))
+    local getScreenPos = opts.getScreenPos
     local INPUTH   = 26
     local STRIP_N  = 14
     local STRIP_H  = 18
@@ -309,6 +317,96 @@ function Mux.ui.colorField(parent, opts)
     input:print(value)
     input:setAction(function() apply(input:getText(), true) end)
     refreshStrip()
+
+    -- ── Hue/saturation wheel popup (click the swatch to open) ────────────────
+    -- Discrete colour cells (hue around, saturation by ring, value = 1) plus
+    -- greyscale and dark-shade strips. Each cell is an exact colour the user
+    -- clicks directly, so there's no in-label coordinate mapping to get wrong.
+    -- The brightness strip below then fine-tunes the chosen colour's value.
+    local POPW = 200
+    local wheelCells, wheelPanel, wheelScrim = {}, nil, nil
+
+    local function closeWheel()
+        if not (wheelPanel or wheelScrim) then return end
+        for _, w in ipairs(wheelCells) do if w.delete then w:delete() else w:hide() end end
+        if wheelPanel then if wheelPanel.delete then wheelPanel:delete() else wheelPanel:hide() end end
+        if wheelScrim then if wheelScrim.delete then wheelScrim:delete() else wheelScrim:hide() end end
+        wheelCells, wheelPanel, wheelScrim = {}, nil, nil
+        if Mux.ui._closeActiveWheel == closeWheel then Mux.ui._closeActiveWheel = nil end
+    end
+
+    local function addCell(px, py, sz, hex)
+        local cellLbl = Geyser.Label:new({ name = prefix .. "_wc" .. (#wheelCells + 1),
+            x = math.floor(px), y = math.floor(py), width = math.floor(sz), height = math.floor(sz) }, wheelPanel)
+        cellLbl:setStyleSheet(string.format(
+            "background:%s;border:1px solid rgba(0,0,0,0.35);border-radius:2px;", hex))
+        cellLbl:setToolTip(hex)
+        cellLbl:show(); cellLbl:raise()
+        local captured = hex
+        cellLbl:setClickCallback(function() apply(captured, false); closeWheel() end)
+        wheelCells[#wheelCells + 1] = cellLbl
+    end
+
+    local function openWheel()
+        if Mux.ui._closeActiveWheel then Mux.ui._closeActiveWheel() end   -- only one open anywhere
+        local host = getScreenPos and Geyser or parent
+
+        wheelScrim = Geyser.Label:new({ name = prefix .. "_wscrim", x = 0, y = 0, width = "100%", height = "100%" }, host)
+        wheelScrim:setStyleSheet("background:rgba(0,0,0,0.01);border:none;")
+        wheelScrim:show(); wheelScrim:raise()
+        wheelScrim:setClickCallback(closeWheel)
+
+        local px, py
+        if getScreenPos then
+            local ox, oy = getScreenPos()
+            px, py = ox + x, oy + y + INPUTH + 4
+        else
+            px, py = x, y + INPUTH + 4
+        end
+        local POPH = 220
+        wheelPanel = Geyser.Label:new({ name = prefix .. "_wheel",
+            x = math.floor(px), y = math.floor(py), width = POPW, height = POPH }, host)
+        wheelPanel:setStyleSheet("background:rgba(20,21,30,0.98);border:1px solid rgba(255,255,255,0.18);border-radius:6px;")
+        wheelPanel:show(); wheelPanel:raise()
+
+        local xb = Geyser.Label:new({ name = prefix .. "_wx", x = POPW - 20, y = 4, width = 16, height = 16 }, wheelPanel)
+        xb:setStyleSheet("background:transparent;color:rgba(210,210,225,0.85);qproperty-alignment:AlignCenter;font-size:12px;")
+        xb:echo("<center>✕</center>")
+        xb:show(); xb:raise()
+        xb:setClickCallback(closeWheel)
+        wheelCells[#wheelCells + 1] = xb
+
+        local cx, cy, cell = 100, 96, 14
+        addCell(cx - cell / 2, cy - cell / 2, cell, "#ffffff")
+        local rings = { { r = 20, s = 0.30 }, { r = 38, s = 0.55 }, { r = 56, s = 0.78 }, { r = 74, s = 1.0 } }
+        for _, ring in ipairs(rings) do
+            local sectors = math.max(6, math.floor(2 * math.pi * ring.r / (cell + 2)))
+            for j = 0, sectors - 1 do
+                local ang = (j / sectors) * 2 * math.pi
+                addCell(cx + ring.r * math.cos(ang) - cell / 2,
+                        cy + ring.r * math.sin(ang) - cell / 2,
+                        cell, hsvToHex((j / sectors) * 360, ring.s, 1))
+            end
+        end
+
+        local gsteps, gw = 10, math.floor((POPW - 20) / 10)
+        for k = 0, gsteps - 1 do
+            local g = math.floor(k / (gsteps - 1) * 255 + 0.5)
+            addCell(10 + k * gw, 180, gw - 2, string.format("#%02x%02x%02x", g, g, g))
+        end
+
+        local dh, dw = 12, math.floor((POPW - 20) / 12)
+        for k = 0, dh - 1 do
+            addCell(10 + k * dw, 198, dw - 2, hsvToHex(k * (360 / dh), 0.85, 0.5))
+        end
+
+        Mux.ui._closeActiveWheel = closeWheel
+    end
+
+    preview:setToolTip("Click to open the colour wheel")
+    preview:setClickCallback(function()
+        if wheelPanel then closeWheel() else openWheel() end
+    end)
 
     return {
         container = cont,

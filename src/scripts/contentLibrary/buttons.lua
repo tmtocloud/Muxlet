@@ -335,7 +335,7 @@ openButtonEditor = function(target, idx)
     del:setStyleSheet([[QLabel{background:rgba(120,40,40,0.9);color:#fdd;border:1px solid rgba(180,80,80,0.6);
         border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(150,55,55,0.95);}]])
     del:echo("<center>🗑 Delete</center>")
-    del:setClickCallback(function() table.remove(cfg.buttons, idx); clearEdit(); scheduleSave(); render(target); d.onClose = nil; d:close() end)
+    del:setClickCallback(function() table.remove(cfg.buttons, idx); clearEdit(); scheduleSave(); render(target); d.onClose = nil; Mux.ui.closeColorWheel(); d:close() end)
 
     local test = Geyser.Label:new({ name = d._gid .. "_be_test", x = 94, y = 7, width = 70, height = 26 }, bar)
     test:setStyleSheet([[QLabel{background:rgba(40,50,80,0.9);color:#cde;border:1px solid rgba(90,110,170,0.6);
@@ -354,10 +354,11 @@ openButtonEditor = function(target, idx)
     done:echo("<center>Done</center>")
     done:setClickCallback(function()
         if d._beForm and d._beForm.commitAll then d._beForm.commitAll() end
-        scheduleSave(); clearEdit(); d.onClose = nil; d:close(); render(target)
+        scheduleSave(); clearEdit(); d.onClose = nil; Mux.ui.closeColorWheel(); d:close(); render(target)
     end)
 
     d.onClose = function()                       -- ✕ discards every edit made since opening
+        Mux.ui.closeColorWheel()
         cfg.buttons[idx] = snapshot
         clearEdit()
         scheduleSave()                           -- persist the revert so no in-progress state survives
@@ -426,6 +427,14 @@ Mux.registerContent("mux_buttons", {
         render(target)
     end,
     remove = function(target)
+        -- Editor and Grid-Settings are top-level dialogs, so they outlive the pane
+        -- unless we close them here. remove() runs on manual removal and on pane
+        -- close (MuxPane:close calls def.remove), covering the killed-pane case.
+        Mux.ui.closeColorWheel()
+        for _, key in ipairs({ "mux_btn_editor_" .. target.id, "mux_grid_settings_" .. target.id }) do
+            local dlg = Mux.getDialog and Mux.getDialog(key)
+            if dlg then dlg.onClose = nil; if dlg.close then dlg:close() end end
+        end
         local st = STATE_BY_TARGET[target.id]
         if st then clearWidgets(st) end
         STATE_BY_TARGET[target.id] = nil
