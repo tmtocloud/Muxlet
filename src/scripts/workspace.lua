@@ -206,6 +206,7 @@ function Mux.applyWorkspace(name)
         local sw = Mux._settings_ui
         if sw and sw.window and sw.visible then sw.window:raise() end
         Mux.raiseFloatingPanes()
+        if Mux._resolveSavedAnchors then Mux._resolveSavedAnchors() end
         Mux._scheduleAutoSave()
     end)
 
@@ -260,6 +261,11 @@ local function serializeNode(obj)
         node.floatY   = obj.floatY
         node.floatW   = obj.floatW
         node.floatH   = obj.floatH
+    end
+    node.anchorable = obj.anchorable
+    if obj.anchor then
+        node.anchor   = obj.anchor
+        node.atAnchor = obj._atAnchor and true or false
     end
     if obj._serializeTabs then
         local tabs, activeTabName = obj:_serializeTabs()
@@ -514,6 +520,7 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             zoomable         = node.zoomable ~= false,
             contextMenu      = node.contextMenu ~= false,
             insertable       = node.insertable ~= false,
+            anchorable       = node.anchorable ~= false,
             showSettingsInMenu = node.showSettingsInMenu or false,
             nameAlign        = node.nameAlign or "left",
             floatX           = node.floatX or 100,
@@ -525,6 +532,10 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
         })
         p._paneSpace = paneSpace
         if node.id then paneMap[node.id] = p end
+        if node.anchor then
+            p._pendingAnchor   = node.anchor
+            p._pendingAtAnchor = node.atAnchor
+        end
 
         if node.connectionAware and p.setConnectionAware then
             p:setConnectionAware(true)

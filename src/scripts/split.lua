@@ -303,6 +303,7 @@ function MuxSplit:_notifyReposition()
     end
     walk(self.childA)
     walk(self.childB)
+    if Mux._reanchorAll then Mux._reanchorAll() end   -- anchored floats track split drags
 end
 
 function MuxSplit:_setRatio(r)

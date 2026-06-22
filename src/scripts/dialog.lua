@@ -216,37 +216,35 @@ end
 
 -- Picks a top-left corner for a new dialog. When the caller doesn't specify a
 -- position, dialogs would otherwise all open dead-center and stack on top of
--- each other. Instead, cascade diagonally: find the first centered-base slot
--- (stepping by `step` px) that isn't already occupied by a live dialog, so each
--- new dialog is visibly offset and closed dialogs free their slot for reuse.
+-- each other. Instead, cascade diagonally by SLOT INDEX: each open dialog claims
+-- the slot index equal to its own offset-from-centre in `step` units, and the
+-- new dialog takes the first free index. Indexing by offset-from-own-centre
+-- (rather than absolute position) makes the cascade size-independent, so a tab
+-- Properties dialog tiles off an open pane Properties dialog even though they're
+-- different heights. Off-diagonal (explicitly-positioned) dialogs are ignored,
+-- and closing a dialog frees its slot for reuse.
 local function _dialogCascadePos(w, h, sw, sh)
     local baseX = math.floor((sw - w) / 2)
     local baseY = math.floor((sh - h) / 2)
+    local step, maxSteps = 30, 12
 
-    local occupied = {}
+    local taken = {}
     for _, p in pairs(Mux._panes) do
         if p._dialog and p.outer then
-            occupied[#occupied + 1] = { x = p.outer:get_x(), y = p.outer:get_y() }
+            local pw, ph = p.outer:get_width(), p.outer:get_height()
+            local pcx    = math.floor((sw - pw) / 2)
+            local pcy    = math.floor((sh - ph) / 2)
+            local idxX   = math.floor((p.outer:get_x() - pcx) / step + 0.5)
+            local idxY   = math.floor((p.outer:get_y() - pcy) / step + 0.5)
+            if idxX == idxY and idxX >= 0 then taken[idxX] = true end  -- on the cascade diagonal
         end
     end
 
-    local step, tol, maxSteps = 30, 14, 10
-    local x, y = baseX, baseY
-    for k = 0, maxSteps do
-        x, y = baseX + k * step, baseY + k * step
-        local clash = false
-        for _, o in ipairs(occupied) do
-            if math.abs(o.x - x) < tol and math.abs(o.y - y) < tol then
-                clash = true
-                break
-            end
-        end
-        if not clash then break end
-    end
+    local k = 0
+    while taken[k] and k < maxSteps do k = k + 1 end
 
-    -- Keep the dialog fully on screen even after cascading.
-    x = Mux._clamp(x, 0, math.max(0, sw - w))
-    y = Mux._clamp(y, 0, math.max(0, sh - h))
+    local x = Mux._clamp(baseX + k * step, 0, math.max(0, sw - w))
+    local y = Mux._clamp(baseY + k * step, 0, math.max(0, sh - h))
     return x, y
 end
 

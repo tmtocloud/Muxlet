@@ -34,6 +34,7 @@ function Mux._notifyAllReposition()
         if p.onReposition then p.onReposition(p) end
         if Mux._relayoutContent then Mux._relayoutContent(p) end
     end
+    if Mux._reanchorAll then Mux._reanchorAll() end
 end
 
 -- User-facing IDs (pane_N, split_N, ps_N) recycle freed numbers via _idFree.
@@ -484,6 +485,18 @@ function Mux._showContextMenu(pane, globalX, globalY)
     if pane.floating and pane.convertible then
         if #items > 0 then items[#items+1] = { sep=true } end
         items[#items+1] = { text="Embed Pane", fn=function() pane:embed() end }
+    end
+
+    -- Anchoring (floating + anchorable). Arm mode applies to the next drag;
+    -- return/remove appear once an anchor exists.
+    if pane.floating and pane.anchorable then
+        if #items > 0 then items[#items+1] = { sep=true } end
+        items[#items+1] = { text="⚓  Anchor mode (drag to set)",
+            fn=function() pane:armAnchorMode(true) end }
+        if pane.anchor then
+            items[#items+1] = { text="⤺  Return to anchor", fn=function() pane:returnToAnchor() end }
+            items[#items+1] = { text="⚓  Remove anchor",    fn=function() pane:removeAnchor() end }
+        end
     end
 
     -- Swap / Split (mirrors swapBtn, splitHBtn, splitVBtn)

@@ -18,11 +18,49 @@ local _pendingPropsConfirm = nil  -- {message, onProceed} for the close-confirm 
 local refreshPaneProperties
 local refreshTabProperties
 
+-- Live screen geometry of a pane, for the read-only Properties readout. Uses the
+-- actual rendered container when present (reflects drags/resizes), else the
+-- stored float geometry. Includes the id so a specific pane is easy to reference.
+local function _geomString(pane)
+    local x, y, w, h
+    if pane.outer and pane.outer.get_x then
+        x, y = pane.outer:get_x(), pane.outer:get_y()
+        w, h = pane.outer:get_width(), pane.outer:get_height()
+    else
+        x, y, w, h = pane.floatX, pane.floatY, pane.floatW, pane.floatH
+    end
+    local idStr = pane.id and ("   ·   id " .. tostring(pane.id)) or ""
+    if not (x and y and w and h) then return "—" .. idStr end
+    return string.format("x %d, y %d   ·   %d × %d px%s",
+        math.floor(x), math.floor(y), math.floor(w), math.floor(h), idStr)
+end
+
 
 -- ── Property definitions ──────────────────────────────────────────────────────
 
 local function paneRows(pane)
     local rows = {}
+
+    -- Read-only live geometry (kept first so the poll can refresh row 1).
+    rows[#rows+1] = {
+        label  = "Position & Size",
+        desc   = "Live screen geometry — updates as you move/resize. Use it to find a snap target for a floating pane.",
+        type   = "readOnly",
+        readFn = function() return _geomString(pane) end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Anchorable",
+        desc       = "Allow this pane to be anchored to other panes' edges. When on, right-click the pane → Anchor mode, then drag to an edge or corner. Independent of embedding.",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.anchorable ~= false end,
+        writeFn    = function(v)
+            pane.anchorable = v
+            if not v then pane:removeAnchor() end
+        end,
+    }
 
     -- Group 1: Tabs, Locked, Titlebar, Properties Button
     rows[#rows+1] = {
@@ -506,6 +544,7 @@ local function openPropsDialog(title, rows, targetPane, posX, posY)
     end
 
     d.onClose = function()
+        d._geomPollActive = false
         if targetPane and targetPane._propertiesDialogs then
             targetPane._propertiesDialogs[d.id] = nil
         end
@@ -546,6 +585,20 @@ local function openPropsDialog(title, rows, targetPane, posX, posY)
     pendingRows = rows
     Mux._applyContent(d, "mux_properties")
     pendingRows = nil
+
+    -- Live-refresh the geometry readout (row 1) every 0.5s while the dialog is
+    -- open. Only for panes (tabs have no geometry row); refreshing a read-only
+    -- row re-reads its value without disturbing any field being edited.
+    if targetPane and targetPane.titlebarVisible ~= nil then
+        d._geomPollActive = true
+        local function poll()
+            if not d._geomPollActive then return end
+            local h = d._propsFormHandle
+            if h and h.refresh then pcall(h.refresh, 1) end
+            tempTimer(0.5, poll)
+        end
+        tempTimer(0.5, poll)
+    end
 end
 
 -- ── Public API ────────────────────────────────────────────────────────────────

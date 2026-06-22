@@ -171,6 +171,14 @@ function MuxPane:init(opts)
     self.consoleBorders   = opts.consoleBorders or false
     -- insertable: when false, excluded from drag-to-split insertion zone detection.
     self.insertable         = opts.insertable ~= false
+    -- anchorable: when true, this floating pane can be anchored to other panes'
+    -- edges (graphically via anchor mode, or programmatically). Independent of
+    -- convertible/insertable — nothing ever auto-anchors. self.anchor holds the
+    -- spec (see anchor.lua); _atAnchor tracks whether it's currently snapped to it.
+    self.anchorable         = opts.anchorable ~= false
+    self.anchor             = opts.anchor
+    self._atAnchor          = false
+    self._anchorArming      = false
     -- showSettingsInMenu: context menu shows "Settings" instead of Properties/Close.
     self.showSettingsInMenu = opts.showSettingsInMenu or false
     -- onReposition: optional callback fired whenever the pane's geometry changes due
@@ -311,6 +319,7 @@ function MuxPane:_buildTitlebar(theme)
         drag.paneX  = self.outer:get_x()
         drag.paneY  = self.outer:get_y()
         drag.dropTargets = nil  -- snapshot lazily on the first move frame
+        drag.anchorSpec  = nil
         self.titlebar:setCursor("ClosedHand")
         if self.floating then self:raise() end
     end)
@@ -333,6 +342,25 @@ function MuxPane:_buildTitlebar(theme)
         self.outer:reposition()
         self.floatX = newX
         self.floatY = newY
+
+        -- A plain drag moves the pane off its anchor (the spec is kept for return).
+        if self._atAnchor and not self._anchorArming then self._atAnchor = false end
+
+        -- Anchor mode: preview an anchor target (edge/corner) instead of insertion.
+        if self._anchorArming and self.anchorable then
+            local agx, agy = event.globalX, event.globalY
+            if not drag.dropTargets then snapshotDropTargets() end
+            local aw, ah = self.outer:get_width(), self.outer:get_height()
+            local spec, ax, ay, aw2, ah2 = Mux._anchorHitTest(drag.dropTargets, agx, agy, aw, ah)
+            if spec then
+                Mux._showAnchorIndicator(ax, ay, aw2, ah2)
+                drag.anchorSpec = spec
+            else
+                Mux._hideAnchorIndicator()
+                drag.anchorSpec = nil
+            end
+            return
+        end
 
         if not self.convertible then return end
         local gx, gy = event.globalX, event.globalY
@@ -402,6 +430,19 @@ function MuxPane:_buildTitlebar(theme)
             if prev then Mux._unhighlightGhostSlot(prev) end
         end
         Mux._hideInsertionGhost()
+        Mux._hideAnchorIndicator()
+
+        -- Anchor-mode release: set the anchor (snaps + marks at-anchor, stays
+        -- floating) or, if no target, just keep floating where dropped. Either
+        -- way we never embed.
+        if self._anchorArming then
+            self._anchorArming = false
+            local spec = drag.anchorSpec
+            drag.anchorSpec = nil
+            if spec then self:setAnchor(spec) end
+            Mux._scheduleAutoSave()
+            return
+        end
 
         if not self.floating or not self.convertible then
             drag.lastHoverGhostKey = nil
@@ -445,7 +486,11 @@ function MuxPane:_buildTitlebar(theme)
     -- Double-click embeds a floating pane into the nearest ghost slot.
     -- For embedded panes, double-click just sets focus.
     self.titlebar:setDoubleClickCallback(function(event)
-        if not self.convertible then return end
+        if not self.convertible then
+            -- Non-embeddable panes can't dock, so double-click means "return to anchor".
+            if self.anchor then self:returnToAnchor() end
+            return
+        end
         if not self.floating then
             if Mux.raisePane then Mux.raisePane(self) end
             return
@@ -787,6 +832,40 @@ function MuxPane:setNameAlign(align)
     self:_layoutTitlebarButtons()
     self:_refreshTitlebarName()
     self:_checkOverflow()
+end
+
+-- ── Anchoring ────────────────────────────────────────────────────────────────
+-- Set/replace this pane's anchor and snap to it. spec is an anchor table (see
+-- anchor.lua). No-op unless the pane is anchorable.
+function MuxPane:setAnchor(spec)
+    if not self.anchorable then return false end
+    self.anchor = spec
+    return Mux._applyAnchor(self)
+end
+
+-- Remove the anchor; the pane becomes a plain floating pane that stays exactly
+-- where it is. Its current position persists; no more snap-back.
+function MuxPane:removeAnchor()
+    self.anchor    = nil
+    self._atAnchor = false
+    Mux._scheduleAutoSave()
+end
+
+-- Re-derive from the anchor and snap back, resuming live tracking. The canonical
+-- "return to anchor" used by re-show, double-click, and the context menu.
+function MuxPane:returnToAnchor()
+    if not self.anchor then return false end
+    local ok = Mux._applyAnchor(self)
+    if ok then Mux._scheduleAutoSave() end
+    return ok
+end
+
+function MuxPane:isAnchored() return self.anchor ~= nil end
+
+-- Arm anchor mode for the next titlebar drag: it will anchor (stay floating)
+-- instead of insert. Cleared automatically on drag release.
+function MuxPane:armAnchorMode(on)
+    self._anchorArming = ((on ~= false) and self.anchorable) or false
 end
 
 -- Checks whether visible buttons fit in the current header width and repositions them.

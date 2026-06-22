@@ -11,6 +11,7 @@
   {"name": "split"},
   {"name": "panespace"},
   {"name": "manager"},
+  {"name": "anchor"},
   {"name": "dialog"},
   {"name": "widgets"},
   {"name": "welcome"},
