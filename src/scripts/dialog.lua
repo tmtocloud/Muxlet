@@ -291,6 +291,7 @@ function MuxDialog:init(opts)
         contextMenu      = opts.contextMenu or false,
         closeable        = opts.closeable ~= false,
         convertible      = opts.convertible or false,
+        anchorable       = opts.anchorable or false,   -- special dialogs don't anchor by default
         minimizable      = opts.minimizable or false,
     })
 

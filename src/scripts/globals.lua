@@ -481,20 +481,20 @@ function Mux._showContextMenu(pane, globalX, globalY)
         items[#items+1] = { text=zText, fn=function() pane:zoom() end }
     end
 
-    -- Anchoring (floating + anchorable) collapses into one "Anchor" submenu:
-    -- arm mode applies to the next drag; return/remove appear once an anchor exists.
+    -- Anchoring (floating + anchorable). Before an anchor exists, a single
+    -- "Anchor" entry that arms anchor mode directly. Once anchored, it becomes a
+    -- submenu of re-anchor / return / remove.
     if pane.floating and pane.anchorable then
         if #items > 0 then items[#items+1] = { sep=true } end
-        local sub = {}
-        sub[#sub+1] = {
-            text = pane.anchor and "Re-anchor (drag to set)" or "Set anchor (drag to edge)",
-            fn   = function() pane:armAnchorMode(true) end,
-        }
         if pane.anchor then
-            sub[#sub+1] = { text = "Return to anchor", fn = function() pane:returnToAnchor() end }
-            sub[#sub+1] = { text = "Remove anchor",    fn = function() pane:removeAnchor() end, danger = true }
+            items[#items+1] = { text = "⚓  Anchor", submenu = {
+                { text = "Re-anchor (drag to set)", fn = function() pane:armAnchorMode(true) end },
+                { text = "Return to anchor",        fn = function() pane:returnToAnchor() end },
+                { text = "Remove anchor",           fn = function() pane:removeAnchor() end, danger = true },
+            } }
+        else
+            items[#items+1] = { text = "⚓  Anchor", fn = function() pane:armAnchorMode(true) end }
         end
-        items[#items+1] = { text = "⚓  Anchor", submenu = sub }
     end
 
     -- Swap / Split (mirrors swapBtn, splitHBtn, splitVBtn)
@@ -984,3 +984,64 @@ function Mux._doInsertAtEdge(floatingPane, targetPane, edge)
 end
 
 Mux._log("Muxlet globals loaded (v%s)", Mux._version)
+-- ── Expanding titlebar icon stack ─────────────────────────────────────────────
+-- Generalized "this titlebar button fans out into a column of sibling icons".
+-- Given the origin button's screen rect and a list of { icon, tooltip, fn }, it
+-- drops same-sized icon buttons straight down from the origin, styled to match
+-- the titlebar, with a transparent full-screen scrim that dismisses on outside
+-- click. Reusable by any titlebar button that needs sub-actions in its own
+-- footprint (used by the anchor button for re-anchor / return / remove).
+Mux._iconStack = Mux._iconStack or { scrim = nil, btns = {} }
+
+function Mux._hideTitlebarIconStack()
+    local s = Mux._iconStack
+    if s.scrim then s.scrim:hide() end
+    for _, b in ipairs(s.btns) do b:hide() end
+end
+
+function Mux._showTitlebarIconStack(x, y, w, h, items)
+    local theme  = Mux.activeTheme()
+    local s      = Mux._iconStack
+    local sw, sh = getMainWindowSize()
+
+    if not s.scrim then
+        s.scrim = Geyser.Label:new(
+            { name = "mux_iconstack_scrim", x = 0, y = 0, width = sw, height = sh, fillBg = 1 }, Geyser)
+        s.scrim:setStyleSheet("background-color: rgba(0,0,0,0); border: none;")
+    end
+    resizeWindow("mux_iconstack_scrim", sw, sh)
+    s.scrim:setClickCallback(function() Mux._hideTitlebarIconStack() end)
+    s.scrim:show(); s.scrim:raiseAll()
+
+    local btnCss   = theme.btnCss or "background-color: rgba(40,46,72,240); border: 1px solid rgba(100,160,255,0.35); border-radius: 3px;"
+    local hoverCss = theme.minHoverCss or btnCss
+    local textCol  = theme.btnTextColor or "#aaaabb"
+
+    for i, item in ipairs(items) do
+        local by = math.floor(y + (i - 1) * h)   -- straight down from the supplied start point
+        local b  = s.btns[i]
+        if not b then
+            b = Geyser.Label:new(
+                { name = "mux_iconstack_btn" .. i, x = 0, y = 0, width = w, height = h, fillBg = 1 }, Geyser)
+            s.btns[i] = b
+        end
+        resizeWindow(b.name, w, h)
+        moveWindow(b.name, math.floor(x), by)
+        local icon = item.icon or "•"
+        local function paint(hovered)
+            b:setStyleSheet(hovered and hoverCss or btnCss)
+            b:echo(string.format("<center><font color='%s'>%s</font></center>", hovered and "white" or textCol, icon))
+        end
+        paint(false)
+        if item.tooltip then b:setToolTip(item.tooltip) end
+        b:setOnEnter(function() paint(true) end)
+        b:setOnLeave(function() paint(false) end)
+        b:setClickCallback(function(event)
+            if event and event.button ~= "LeftButton" then return end
+            Mux._hideTitlebarIconStack()
+            if item.fn then item.fn() end
+        end)
+        b:show(); b:raiseAll()
+    end
+    for i = #items + 1, #s.btns do s.btns[i]:hide() end
+end

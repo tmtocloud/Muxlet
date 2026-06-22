@@ -11,12 +11,13 @@
 --   anchor = {
 --     v = { ref=<paneId>, targetEdge="left"|"right", myEdge="left"|"right" }, -- pins X (optional)
 --     h = { ref=<paneId>, targetEdge="top"|"bottom",  myEdge="top"|"bottom"  }, -- pins Y (optional)
---     alongV = <0..1>,  -- Y fraction down the target's height when ONLY v is set
---     alongH = <0..1>,  -- X fraction across the target's width when ONLY h is set
+--     alongV = <px>,  -- Y pixel offset down from the target's top edge when ONLY v is set
+--     alongH = <px>,  -- X pixel offset across from the target's left edge when ONLY h is set
 --   }
 --
--- An edge anchor sets one axis (and stores the free axis as a fraction so it
--- tracks resizes); a corner anchor sets both v and h (each may reference a
+-- An edge anchor sets one axis (and stores the free axis as an absolute pixel
+-- offset from the target's edge start, so resizing the anchored pane never shifts
+-- it along that side); a corner anchor sets both v and h (each may reference a
 -- different pane, which is how the navigator pins its right edge to one pane and
 -- its top edge to another).
 
@@ -42,7 +43,9 @@ function Mux._anchorGeom(pane)
         local line = (A.v.targetEdge == "left") and e.left or e.right
         X = (A.v.myEdge == "left") and line or (line - W)
         if not A.h then
-            Y = e.top + (A.alongV or 0) * math.max(0, (e.bottom - e.top) - H)
+            -- alongV is an absolute pixel offset down from the target's top edge,
+            -- so resizing the anchored pane never shifts it along the side.
+            Y = e.top + (A.alongV or 0)
         end
     end
     if A.h then
@@ -50,7 +53,7 @@ function Mux._anchorGeom(pane)
         local line = (A.h.targetEdge == "top") and e.top or e.bottom
         Y = (A.h.myEdge == "top") and line or (line - H)
         if not A.v then
-            X = e.left + (A.alongH or 0) * math.max(0, (e.right - e.left) - W)
+            X = e.left + (A.alongH or 0)   -- absolute pixel offset from target's left edge
         end
     end
 
@@ -166,11 +169,11 @@ function Mux._anchorHitTest(targets, gx, gy, W, H)
                     h = { ref = id, targetEdge = nearT and "top"  or "bottom", myEdge = nearT and "bottom" or "top" },
                 }
             elseif nearL or nearR then
-                local frac = Mux._clamp((gy - t.y - H / 2) / math.max(1, t.h - H), 0, 1)
-                A = { v = { ref = id, targetEdge = nearL and "left" or "right", myEdge = nearL and "right" or "left" }, alongV = frac }
+                local along = Mux._clamp(gy - t.y - H / 2, 0, math.max(0, t.h - H))
+                A = { v = { ref = id, targetEdge = nearL and "left" or "right", myEdge = nearL and "right" or "left" }, alongV = along }
             elseif nearT or nearB then
-                local frac = Mux._clamp((gx - t.x - W / 2) / math.max(1, t.w - W), 0, 1)
-                A = { h = { ref = id, targetEdge = nearT and "top" or "bottom", myEdge = nearT and "bottom" or "top" }, alongH = frac }
+                local along = Mux._clamp(gx - t.x - W / 2, 0, math.max(0, t.w - W))
+                A = { h = { ref = id, targetEdge = nearT and "top" or "bottom", myEdge = nearT and "bottom" or "top" }, alongH = along }
             end
             if A then
                 local X, Y, w2, h2 = Mux._anchorGeom({ anchor = A, floatW = W, floatH = H, floating = true })
@@ -180,4 +183,33 @@ function Mux._anchorHitTest(targets, gx, gy, W, H)
         end
     end
     return nil
+end
+
+-- Re-capture an edge anchor's free-axis position from the pane's current screen
+-- position. Called after a resize-while-anchored so the remembered position along
+-- the side is updated and a later return doesn't jump the pane. Corner anchors
+-- (both v and h) pin both axes and need no recapture.
+function Mux._recaptureAlong(pane)
+    local A = pane and pane.anchor
+    if not A then return end
+    local x = (pane.outer and pane.outer.get_x and pane.outer:get_x()) or pane.floatX
+    local y = (pane.outer and pane.outer.get_y and pane.outer:get_y()) or pane.floatY
+    if A.v and not A.h then
+        local e = Mux._paneEdges(A.v.ref); if e and y then A.alongV = math.max(0, y - e.top) end
+    elseif A.h and not A.v then
+        local e = Mux._paneEdges(A.h.ref); if e and x then A.alongH = math.max(0, x - e.left) end
+    end
+end
+
+-- Drop the anchor on any pane that references `id` (e.g. its anchor target was
+-- just closed). The pane keeps its current position but is no longer anchored,
+-- so it won't think it's tracking a pane that no longer exists.
+function Mux._dropAnchorsReferencing(id)
+    if not id or not Mux._panes then return end
+    for _, p in pairs(Mux._panes) do
+        local A = p.anchor
+        if A and ((A.v and A.v.ref == id) or (A.h and A.h.ref == id)) then
+            if p.removeAnchor then p:removeAnchor() else p.anchor = nil; p._atAnchor = false end
+        end
+    end
 end

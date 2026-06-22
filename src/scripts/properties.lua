@@ -37,9 +37,10 @@ end
 
 
 -- Expandable "Position & Size" section. Collapsed: a clickable heading. Expanded:
--- a larger-font readout the user can highlight and copy. Uses a MiniConsole because
--- Geyser.Labels aren't text-selectable, and wraps to the dialog width so values
--- never trail off the right edge.
+-- a larger-font readout the user can highlight and copy. Uses a MiniConsole
+-- (Geyser.Labels aren't text-selectable) but blends it with the dialog and keeps
+-- it to a single line so it reads like plain text. It updates live, repainting
+-- only when the value actually changes so a selection isn't wiped mid-copy.
 if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets["geomSection"]) then
     Mux.ui.registerWidget("geomSection", function(row, c)
         local spec, uid, css = c.spec, c.uid, c.css
@@ -48,7 +49,7 @@ if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets
 
         -- Clickable heading with a disclosure chevron.
         local head = Geyser.Label:new(
-            { name = uid .. "_h", x = c.padL, y = 8, width = availW - 70, height = 18 }, row)
+            { name = uid .. "_h", x = c.padL, y = 8, width = availW, height = 18 }, row)
         head:setStyleSheet(css.rowLabel)
         head:rawEcho((spec.expanded and "▾  " or "▸  ") .. (spec.label or "Position & Size"))
         head:setCursor("PointingHand")
@@ -58,18 +59,17 @@ if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets
             return {}   -- collapsed: heading only
         end
 
-        local boxY = 30
-        local boxH = math.max(20, (spec.rowHeight or 132) - boxY - 10)
+        -- Selectable, larger-font value line. Background matches the dialog so it
+        -- doesn't read as a console box; autoWrap keeps it from trailing off.
         local mc = Geyser.MiniConsole:new({
-            name = uid .. "_mc", x = c.padL, y = boxY, width = availW,
-            height = boxH,
-            color = "#1b1b1f", autoWrap = true,
+            name = uid .. "_mc", x = c.padL, y = 30, width = availW, height = 38,
+            color = "#24283e", autoWrap = true,
         }, row)
         mc:setFontSize(13)
         if mc.disableScrollBar then mc:disableScrollBar() end
 
+        local last
         local function paint()
-            mc:clear()
             local x, y, w, h
             if pane and pane.outer and pane.outer.get_x then
                 x, y = pane.outer:get_x(), pane.outer:get_y()
@@ -77,28 +77,17 @@ if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets
             else
                 x, y, w, h = pane.floatX, pane.floatY, pane.floatW, pane.floatH
             end
-            local function fmt(n) return n and tostring(math.floor(n)) or "—" end
-            mc:cecho(string.format(
-                "<#9ecbff>x<#6b7280>      <#e6e6e6>%s\n"
-              .. "<#9ecbff>y<#6b7280>      <#e6e6e6>%s\n"
-              .. "<#9ecbff>w<#6b7280>      <#e6e6e6>%s\n"
-              .. "<#9ecbff>h<#6b7280>      <#e6e6e6>%s\n"
-              .. "<#9ecbff>id<#6b7280>     <#e6e6e6>%s",
-                fmt(x), fmt(y), fmt(w), fmt(h), tostring(pane and pane.id or "—")))
+            local function n(v) return v and tostring(math.floor(v)) or "—" end
+            local s = string.format("x %s   y %s   %s × %s px   ·   id %s",
+                n(x), n(y), n(w), n(h), tostring(pane and pane.id or "—"))
+            if s == last then return end   -- no change → don't disturb a selection
+            last = s
+            mc:clear(); mc:echo(s)
         end
         paint()
 
-        -- Manual refresh — auto-polling would clear the console mid-selection
-        -- and defeat copyability, so the values are a snapshot the user refreshes.
-        local refr = Geyser.Label:new(
-            { name = uid .. "_r", x = c.padL + availW - 64, y = 7, width = 62, height = 16 }, row)
-        refr:setStyleSheet(css.rowDesc or css.rowLabel)
-        refr:rawEcho("<center>⟳ refresh</center>")
-        refr:setCursor("PointingHand")
-        refr:setClickCallback(paint)
-
-        return { refresh = function() end }   -- selection-safe: no auto-repaint
-    end, { rowHeight = 132, layout = "block" })
+        return { refresh = paint }   -- live; repaints only on change
+    end, { rowHeight = 74, layout = "block" })
 end
 
 
@@ -114,7 +103,7 @@ local function paneRows(pane)
         type      = "geomSection",
         pane      = pane,
         expanded  = geomExpanded,
-        rowHeight = geomExpanded and 132 or 34,
+        rowHeight = geomExpanded and 74 or 34,
         onToggle  = function()
             pane._geomExpanded = not pane._geomExpanded
             if refreshPaneProperties then refreshPaneProperties(pane) end
@@ -657,6 +646,20 @@ local function openPropsDialog(title, rows, targetPane, posX, posY)
     pendingRows = rows
     Mux._applyContent(d, "mux_properties")
     pendingRows = nil
+
+    -- Live geometry: re-read the readout (row 1) every 0.5s while open. The
+    -- geomSection's refresh only repaints when the value changes, so an idle
+    -- selection in the readout is never wiped. Panes only (tabs have no geometry).
+    if targetPane and targetPane.titlebarVisible ~= nil then
+        d._geomPollActive = true
+        local function poll()
+            if not d._geomPollActive then return end
+            local h = d._propsFormHandle
+            if h and h.refresh then pcall(h.refresh, 1) end
+            tempTimer(0.5, poll)
+        end
+        tempTimer(0.5, poll)
+    end
 end
 
 -- ── Public API ────────────────────────────────────────────────────────────────

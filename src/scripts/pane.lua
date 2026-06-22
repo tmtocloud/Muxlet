@@ -443,6 +443,7 @@ function MuxPane:_buildTitlebar(theme)
             drag.anchorSpec = nil
             if spec then self:setAnchor(spec) end
             if self._refreshAnchorBtn then self._refreshAnchorBtn() end
+            if self.titlebar then self.titlebar:setCursor(self:_titlebarCursor()) end
             Mux._scheduleAutoSave()
             return
         end
@@ -693,20 +694,30 @@ function MuxPane:_buildTitlebar(theme)
     self.anchorBtn, self._anchorBtnEcho = makeTitlebarButton({
         suffix  = "_anchor",
         x       = "2",
-        icon    = "⚓",
+        icon    = "<span style='font-size:12px;'>⚓</span>",
         tooltip = "Anchor",
         onClick = function(event)
             if event.button ~= "LeftButton" then return end
-            local items = {}
-            items[#items+1] = {
-                text = self.anchor and "Re-anchor (drag to set)" or "Set anchor (drag to edge)",
-                fn   = function() self:armAnchorMode(true) end,
-            }
-            if self.anchor then
-                items[#items+1] = { text = "Return to anchor", fn = function() self:returnToAnchor() end }
-                items[#items+1] = { text = "Remove anchor",    fn = function() self:removeAnchor() end, danger = true }
+            if self._anchorArming then
+                self:armAnchorMode(false)        -- click again to leave anchor mode
+            elseif not self.anchor then
+                self:armAnchorMode(true)         -- not anchored: just enter anchor mode (drag to set)
+            else
+                -- Anchored: fan out a downward stack of same-sized icon buttons,
+                -- starting just below the button. get_x/get_y on a nested child are
+                -- parent-relative in Geyser, so anchor off the click's global coords.
+                local bw, bh = self.anchorBtn:get_width(), self.anchorBtn:get_height()
+                if Mux._showTitlebarIconStack then
+                    local sx = (event.globalX or 0) - math.floor(bw / 2)
+                    local sy = (event.globalY or 0) + math.floor(bh)
+                    Mux._showTitlebarIconStack(sx, sy, bw, bh, {
+                        { icon = "<span style='font-size:12px;'>⚓</span>", tooltip = "Re-anchor (drag to set)",
+                          fn = function() self:armAnchorMode(true) end },
+                        { icon = "⤺", tooltip = "Return to anchor", fn = function() self:returnToAnchor() end },
+                        { icon = "✕", tooltip = "Remove anchor",    fn = function() self:removeAnchor() end },
+                    })
+                end
             end
-            if Mux._showItemMenu then Mux._showItemMenu(event.globalX, event.globalY, items) end
         end,
     })
     self._refreshAnchorBtn = function()
@@ -921,6 +932,7 @@ function MuxPane:isAnchored() return self.anchor ~= nil end
 function MuxPane:armAnchorMode(on)
     self._anchorArming = ((on ~= false) and self.anchorable) or false
     if self._refreshAnchorBtn then self._refreshAnchorBtn() end
+    if self.titlebar then self.titlebar:setCursor(self:_titlebarCursor()) end
 end
 
 -- Checks whether visible buttons fit in the current header width and repositions them.
@@ -1313,6 +1325,7 @@ function MuxPane:_detachToFloat()
     self.outer:move(self.floatX, self.floatY)
     self.outer:resize(self.floatW, self.floatH)
     self.outer:reposition()
+    self:_applyTitlebarVisibility()   -- floating state now set: reveal floating-only buttons (anchor, zoom)
     self:raise()
     self.frame:setStyleSheet(self:_baseFrameCss())
     if self.resizable then self:_showCornerHandles() else self:_hideCornerHandles() end
@@ -1547,6 +1560,7 @@ function MuxPane:_minBtnVisible()
 end
 
 function MuxPane:_titlebarCursor()
+    if self._anchorArming then return "Cross" end   -- anchor mode: crosshair to indicate "drop to anchor"
     if self.floating then
         return (self.movable ~= false) and "OpenHand" or "Arrow"
     else
@@ -1642,6 +1656,7 @@ function MuxPane:close()
         if self._split then self._split:collapseSlot(self._slotSide) end
     end
 
+    if Mux._dropAnchorsReferencing then Mux._dropAnchorsReferencing(self.id) end
     Mux._panes[self.id] = nil
     if self._gid then Mux._tabHosts[self._gid] = nil end
     if self._singletonKey and Mux._singletonDialogs then
@@ -1852,6 +1867,7 @@ function MuxPane:_buildCornerHandles(theme)
             if event.button ~= "LeftButton" then return end
             drag.active = false
             lbl:setStyleSheet(css)
+            if pane._atAnchor and Mux._recaptureAlong then Mux._recaptureAlong(pane) end
             Mux._scheduleAutoSave()
         end)
 
