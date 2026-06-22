@@ -164,7 +164,10 @@ render = function(target)
         end
         local lbl = Geyser.Label:new({ name = string.format("%s_bg%d_%d", g, gen, rc.index),
             x = lx, y = ly, width = lw, height = lh }, C)
-        lbl:setStyleSheet(buttonCss(btn, editing, lw, lh))
+        -- The button currently open in the editor previews in its final style so
+        -- the user sees exactly what it will look like; the rest keep the edit border.
+        local isEdited = editing and st.editingIdx == rc.index
+        lbl:setStyleSheet(buttonCss(btn, editing and not isEdited, lw, lh))
         lbl:echo(string.format('<center><span style="color:%s;font-size:%dpx;font-weight:bold;">%s</span></center>',
             btn.fg or "#96c8ff", btn.fontSize or 12, btn.label or ""))
         local idx = rc.index
@@ -234,6 +237,13 @@ openButtonEditor = function(target, idx)
     if not btn then return end
     btn.action = btn.action or { type = "command", text = "" }
     local snapshot = yajl.to_value(yajl.to_string(btn))   -- deep copy; ✕ reverts to this
+    local function clearEdit()
+        local s = STATE_BY_TARGET[target.id]; if s then s.editingIdx = nil end
+    end
+    do
+        local s = STATE_BY_TARGET[target.id]
+        if s then s.editingIdx = idx; render(target) end   -- preview this one in its final look
+    end
 
     local W   = 400
     local BAR = 40
@@ -325,7 +335,7 @@ openButtonEditor = function(target, idx)
     del:setStyleSheet([[QLabel{background:rgba(120,40,40,0.9);color:#fdd;border:1px solid rgba(180,80,80,0.6);
         border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(150,55,55,0.95);}]])
     del:echo("<center>🗑 Delete</center>")
-    del:setClickCallback(function() table.remove(cfg.buttons, idx); scheduleSave(); render(target); d.onClose = nil; Mux.ui.closeColorWheel(); d:close() end)
+    del:setClickCallback(function() table.remove(cfg.buttons, idx); clearEdit(); scheduleSave(); render(target); d.onClose = nil; Mux.ui.closeColorWheel(); d:close() end)
 
     local test = Geyser.Label:new({ name = d._gid .. "_be_test", x = 94, y = 7, width = 70, height = 26 }, bar)
     test:setStyleSheet([[QLabel{background:rgba(40,50,80,0.9);color:#cde;border:1px solid rgba(90,110,170,0.6);
@@ -344,12 +354,14 @@ openButtonEditor = function(target, idx)
     done:echo("<center>Done</center>")
     done:setClickCallback(function()
         if d._beForm and d._beForm.commitAll then d._beForm.commitAll() end
-        scheduleSave(); d.onClose = nil; Mux.ui.closeColorWheel(); d:close()
+        scheduleSave(); clearEdit(); d.onClose = nil; Mux.ui.closeColorWheel(); d:close(); render(target)
     end)
 
     d.onClose = function()                       -- ✕ discards every edit made since opening
         Mux.ui.closeColorWheel()
         cfg.buttons[idx] = snapshot
+        clearEdit()
+        scheduleSave()                           -- persist the revert so no in-progress state survives
         render(target)
     end
 end
@@ -384,6 +396,21 @@ openGridSettings = function(target)
     form:setStyleSheet("background:rgba(18,18,26,1);border:none;")
     Mux.ui.buildForm(form, rows, { width = cw, prefix = d._gid .. "_gs", hideApply = true })
     d.onClose = function() scheduleSave() end
+    -- Locking hides the edit gear, so warn before closing — mirrors the pane confirm
+    -- for a hidden titlebar/Properties, pointing at `mux reveal` as the way back.
+    if d.closeBtn then
+        d.closeBtn:setClickCallback(function(event)
+            if event.button ~= "LeftButton" then return end
+            if cfg.locked then
+                local msg = "This grid is <b>locked</b> — the edit gear is now hidden.<br/>"
+                         .. "To bring the editor back, run: "
+                         .. "<tt style='color:#8ab4ff;'>mux reveal " .. (target.id or "&lt;id&gt;") .. "</tt>"
+                Mux._showPropsCloseConfirm(msg, function() d:close() end)
+            else
+                d:close()
+            end
+        end)
+    end
 end
 
 -- ── Content registration ──────────────────────────────────────────────────────────

@@ -971,20 +971,11 @@ function MuxSurface:_showTabContextMenu(tab, gx, gy)
 
     local contentNames = Mux._listContent and Mux._listContent() or {}
     if #contentNames > 0 and tab.contentable ~= false then
-        local contentItems = {}
-        for _, contentName in ipairs(contentNames) do
-            local def        = Mux._content[contentName]
-            local capture    = contentName
-            local captureTab = tab
-            contentItems[#contentItems+1] = {
-                text = (def and def.name) or contentName,
-                fn   = function()
-                    if Mux._applyContent then Mux._applyContent(captureTab, capture) end
-                end,
-            }
-        end
         if #items > 0 then items[#items+1] = { sep = true } end
-        items[#items+1] = { text = "▥  Content Library  ▶", submenu = contentItems }
+        local captureTab = tab
+        items[#items+1] = { text = "▥  Content Library…", fn = function()
+            Mux._showContentLibrary(captureTab)
+        end }
     end
 
     if tab.closeable ~= false then

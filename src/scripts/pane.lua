@@ -691,12 +691,17 @@ function MuxPane:_infoBtnX()
     return 8 + self:_titlebarNameWidth() + 4
 end
 
--- Moves infoBtn to its correct position based on current name length (left-align only).
+-- Moves the left-anchored cluster (Properties, then Content Library to its right)
+-- to its correct position: trailing the name in left-align, parked at the far
+-- left otherwise. Called on name changes and from _layoutTitlebarButtons.
 function MuxPane:_updateInfoBtnPos()
-    if not self.infoBtn then return end
-    if (self.nameAlign or "left") ~= "left" then return end
+    if not (self.infoBtn or self.contentBtn) then return end
     local theme = Mux.activeTheme and Mux.activeTheme() or {}
-    self.infoBtn:move(self:_infoBtnX(), theme.btnTopMargin or 2)
+    local y     = theme.btnTopMargin or 2
+    local btnSz = theme.btnSize or 22
+    local x0    = ((self.nameAlign or "left") == "left") and self:_infoBtnX() or 2
+    if self.infoBtn    then self.infoBtn:move(x0, y) end
+    if self.contentBtn then self.contentBtn:move(x0 + btnSz + 4, y) end
 end
 
 -- Returns the HTML string for the titlebar name, styled for the current nameAlign.
@@ -769,15 +774,10 @@ function MuxPane:_layoutTitlebarButtons()
     rightAnchor(self.swapBtn,    96)
     rightAnchor(self.splitHBtn, 120)
     rightAnchor(self.splitVBtn, 140)
-    rightAnchor(self.contentBtn, 210)
 
-    -- infoBtn: trails the name in left-align (positive offset from the left edge);
-    -- parked at the far left in center and right.
-    if align == "left" then
-        self:_updateInfoBtnPos()
-    elseif self.infoBtn then
-        self.infoBtn:move(Mux._toPx(2), yPx)
-    end
+    -- Properties + Content Library anchor to the LEFT (Content sits just right of
+    -- Properties), trailing the name in left-align and parked far-left otherwise.
+    self:_updateInfoBtnPos()
 end
 
 -- Sets the name alignment and refreshes the titlebar layout.
@@ -813,8 +813,9 @@ function MuxPane:_checkOverflow()
 
     local showInfo = self.infoBtn and self.contextMenu
         and (self.showSettingsInMenu or self.propertiesButton)
-    local infoBtnW = showInfo and 22 or 0
-    local nameW    = self:_titlebarNameWidth()
+    local infoBtnW    = showInfo and 22 or 0
+    local contentBtnW = self:_contentEnabled() and 26 or 0   -- now part of the left cluster
+    local nameW       = self:_titlebarNameWidth()
 
     -- Always-visible close + min cluster.
     local closeMinW = 22
@@ -825,7 +826,6 @@ function MuxPane:_checkOverflow()
     if self.zoomable and (self._split or self.floating or self._zoomed)          then rightW = rightW + 28 end
     if self.swappable and self._split and not self.floating      then rightW = rightW + 26 end
     if self.splittable and not self.floating                     then rightW = rightW + 44 end
-    if self:_contentEnabled()                                    then rightW = rightW + 70 end
 
     local newOverflow
     if align == "right" then
@@ -833,15 +833,15 @@ function MuxPane:_checkOverflow()
         -- Same shape as center plus the name slot. namePad / clusterGap match
         -- _layoutTitlebarButtons.
         local namePad, clusterGap = 6, 6
-        local leftW = 6 + infoBtnW
+        local leftW = 6 + infoBtnW + contentBtnW
         newOverflow = compact
             or (headerW < leftW + rightW + namePad + nameW + clusterGap + 10)
     else
         if align == "center" then
-            local leftW = 6 + infoBtnW
+            local leftW = 6 + infoBtnW + contentBtnW
             newOverflow = compact or (headerW < leftW + nameW + rightW + 10)
         else  -- left
-            local leftW = 16 + nameW + 4 + infoBtnW
+            local leftW = 16 + nameW + 4 + infoBtnW + contentBtnW
             newOverflow = compact or (headerW < leftW + rightW + 10)
         end
     end

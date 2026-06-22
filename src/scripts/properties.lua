@@ -294,33 +294,42 @@ end
 local function tabRows(host, tab)
     local rows = {}
 
-    rows[#rows+1] = {
-        label   = "Tabs",
-        desc    = "Enabled: host nested tabs inside this tab; NoAdd: tab bar shown but no new tabs can be added",
-        type    = "choiceCycler",
-        options = {
-            { value = false,    label = "Disabled", style = "off"  },
-            { value = true,     label = "Enabled",  style = "on"   },
-            { value = "locked", label = "NoAdd",    style = "warn" },
-        },
-        readFn  = function()
-            if tab.tabsLocked then return "locked" end
-            return tab._tabsEnabled and true or false
-        end,
-        writeFn = function(v)
-            if v == true then
-                tab.tabsLocked = false
-                if not tab._tabsEnabled then tab:enableTabs() end
-                if tab._addTabBtn then tab:_setAddTabBtnVisible(true) end
-            elseif v == false then
-                tab.tabsLocked = false
-                if tab._tabsEnabled then tab:disableTabs() end
-            elseif v == "locked" then
-                tab.tabsLocked = true
-                if tab._addTabBtn then tab:_setAddTabBtnVisible(false) end
-            end
-        end,
-    }
+    -- Tab nesting is capped at three levels. A tab's depth is how many tab hosts
+    -- sit above it (its host chain via .pane up to the owning pane). At depth 3 we
+    -- omit the Tabs row, so a fourth level can't be created from the UI.
+    local depth = 1
+    local h = host
+    while h and h.pane do depth = depth + 1; h = h.pane end
+
+    if depth < 3 then
+        rows[#rows+1] = {
+            label   = "Tabs",
+            desc    = "Enabled: host nested tabs inside this tab; NoAdd: tab bar shown but no new tabs can be added",
+            type    = "choiceCycler",
+            options = {
+                { value = false,    label = "Disabled", style = "off"  },
+                { value = true,     label = "Enabled",  style = "on"   },
+                { value = "locked", label = "NoAdd",    style = "warn" },
+            },
+            readFn  = function()
+                if tab.tabsLocked then return "locked" end
+                return tab._tabsEnabled and true or false
+            end,
+            writeFn = function(v)
+                if v == true then
+                    tab.tabsLocked = false
+                    if not tab._tabsEnabled then tab:enableTabs() end
+                    if tab._addTabBtn then tab:_setAddTabBtnVisible(true) end
+                elseif v == false then
+                    tab.tabsLocked = false
+                    if tab._tabsEnabled then tab:disableTabs() end
+                elseif v == "locked" then
+                    tab.tabsLocked = true
+                    if tab._addTabBtn then tab:_setAddTabBtnVisible(false) end
+                end
+            end,
+        }
+    end
 
     rows[#rows+1] = {
         label      = "Properties",
