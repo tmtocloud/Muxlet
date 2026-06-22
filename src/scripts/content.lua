@@ -213,6 +213,21 @@ end
 -- opt in by declaring an optional `resize(target)` callback in registerContent.
 -- Size-gated so it is cheap to call from hot reposition paths — the content's
 -- resize runs only when the content area's pixel size actually changed.
+-- Ask a target's active content to reveal any chrome it has deliberately hidden
+-- (e.g. an edit affordance / lock). Optional per-content `onReveal(target)` hook;
+-- cascades into the active tab. Wired into `mux reveal` so there's a uniform,
+-- discoverable way back from a content that has hidden its own controls.
+function Mux._revealContent(target)
+    if not target then return end
+    if target._tabsEnabled and target._activeTabId and target._findTab then
+        local activeTab = target:_findTab(target._activeTabId)
+        if activeTab then Mux._revealContent(activeTab) end
+    end
+    if not target._activeContent then return end
+    local def = Mux._content[target._activeContent]
+    if def and type(def.onReveal) == "function" then pcall(def.onReveal, target) end
+end
+
 function Mux._relayoutContent(target)
     if not target then return end
 

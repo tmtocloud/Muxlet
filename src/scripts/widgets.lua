@@ -210,6 +210,12 @@ local function hsvToHex(h, s, v)
         math.floor((b + m) * 255 + 0.5))
 end
 
+-- Closes whichever colour wheel is currently open (only one can be), if any.
+-- Hosts that tear down (e.g. a dialog closing) call this so a wheel never lingers.
+function Mux.ui.closeColorWheel()
+    if Mux.ui._closeActiveWheel then Mux.ui._closeActiveWheel() end
+end
+
 function Mux.ui.colorField(parent, opts)
     opts = opts or {}
     local value    = opts.value or "#000000"
@@ -267,13 +273,15 @@ function Mux.ui.colorField(parent, opts)
     -- clicks directly, so there's no in-label click-coordinate mapping to get
     -- wrong; the hex field and presets remain as precise fallbacks.
     local POPW = 200
-    local wheelCells, wheelPanel = {}, nil
+    local wheelCells, wheelPanel, wheelScrim = {}, nil, nil
 
     local function closeWheel()
-        if not wheelPanel then return end
+        if not (wheelPanel or wheelScrim) then return end
         for _, w in ipairs(wheelCells) do if w.delete then w:delete() else w:hide() end end
-        if wheelPanel.delete then wheelPanel:delete() else wheelPanel:hide() end
-        wheelCells, wheelPanel = {}, nil
+        if wheelPanel then if wheelPanel.delete then wheelPanel:delete() else wheelPanel:hide() end end
+        if wheelScrim then if wheelScrim.delete then wheelScrim:delete() else wheelScrim:hide() end end
+        wheelCells, wheelPanel, wheelScrim = {}, nil, nil
+        if Mux.ui._closeActiveWheel == closeWheel then Mux.ui._closeActiveWheel = nil end
     end
 
     local function addCell(px, py, sz, hex)
@@ -289,6 +297,17 @@ function Mux.ui.colorField(parent, opts)
     end
 
     local function openWheel()
+        if Mux.ui._closeActiveWheel then Mux.ui._closeActiveWheel() end   -- only one open anywhere
+
+        local host = getScreenPos and Geyser or parent
+
+        -- Full-host scrim beneath the panel: a click anywhere outside the wheel
+        -- lands here and dismisses it, leaving the current colour unchanged.
+        wheelScrim = Geyser.Label:new({ name = prefix .. "_wscrim", x = 0, y = 0, width = "100%", height = "100%" }, host)
+        wheelScrim:setStyleSheet("background:rgba(0,0,0,0.01);border:none;")
+        wheelScrim:show(); wheelScrim:raise()
+        wheelScrim:setClickCallback(closeWheel)
+
         local px, py
         if getScreenPos then
             local ox, oy = getScreenPos()
@@ -296,7 +315,6 @@ function Mux.ui.colorField(parent, opts)
         else
             px, py = x, y + INPUTH + 4          -- best-effort anchor within parent
         end
-        local host = getScreenPos and Geyser or parent
         local POPH = 220
         wheelPanel = Geyser.Label:new({ name = prefix .. "_wheel",
             x = math.floor(px), y = math.floor(py), width = POPW, height = POPH }, host)
@@ -337,6 +355,8 @@ function Mux.ui.colorField(parent, opts)
         for k = 0, dh - 1 do
             addCell(10 + k * dw, 198, dw - 2, hsvToHex(k * (360 / dh), 0.85, 0.5))
         end
+
+        Mux.ui._closeActiveWheel = closeWheel
     end
 
     preview:setToolTip("Click to open the colour wheel")

@@ -326,6 +326,22 @@ function Mux._scheduleAutoSave()
     end)
 end
 
+-- Write a pending debounced save immediately. Called on session exit so a move,
+-- resize, or other change made inside the 1s debounce window isn't lost.
+function Mux._flushAutoSave()
+    if Mux._autoSaveTimer then
+        killTimer(Mux._autoSaveTimer)
+        Mux._autoSaveTimer = nil
+        Mux._doAutoSave()
+    end
+end
+
+if not Mux._exitSaveHandler then
+    Mux._exitSaveHandler = registerAnonymousEventHandler("sysExitEvent", function()
+        if Mux._flushAutoSave then Mux._flushAutoSave() end
+    end)
+end
+
 function Mux._doAutoSave()
     local def = {
         name          = "current",

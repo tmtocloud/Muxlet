@@ -148,7 +148,10 @@ render = function(target)
     st.gen = (st.gen or 0) + 1
     local gen = st.gen
 
-    local rects = layoutRects(cfg, W, H, st.editing)
+    -- Locked grids never enter edit mode: the gear/edit chrome is hidden and the
+    -- buttons simply run. Unlock with `mux reveal <pane id>` (content onReveal hook).
+    local editing = st.editing and not cfg.locked
+    local rects = layoutRects(cfg, W, H, editing)
     for _, rc in ipairs(rects) do
         local btn = rc.btn
         local lx, ly, lw, lh = rc.x, rc.y, rc.w, rc.h
@@ -161,11 +164,11 @@ render = function(target)
         end
         local lbl = Geyser.Label:new({ name = string.format("%s_bg%d_%d", g, gen, rc.index),
             x = lx, y = ly, width = lw, height = lh }, C)
-        lbl:setStyleSheet(buttonCss(btn, st.editing, lw, lh))
+        lbl:setStyleSheet(buttonCss(btn, editing, lw, lh))
         lbl:echo(string.format('<center><span style="color:%s;font-size:%dpx;font-weight:bold;">%s</span></center>',
             btn.fg or "#96c8ff", btn.fontSize or 12, btn.label or ""))
         local idx = rc.index
-        if st.editing then
+        if editing then
             lbl:setToolTip("Click to edit this button")
             lbl:setClickCallback(function() openButtonEditor(target, idx) end)
         else
@@ -184,33 +187,39 @@ render = function(target)
     -- Edit affordances live in the top-right corner as small overlay icons. They
     -- don't reserve layout space, so the grid shown while editing is exactly the
     -- locked-in result. The resting gear is faint and brightens on hover.
-    local gear = Geyser.Label:new({ name = g .. "_bgear_" .. gen, x = "-26", y = 2, width = 22, height = 22 }, C)
-    gear:setStyleSheet(st.editing
-        and [[QLabel{background:rgba(255,210,90,0.92);color:#222;border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}]]
-        or  [[QLabel{background:rgba(40,44,60,0.30);color:rgba(200,205,225,0.45);border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}QLabel::hover{background:rgba(60,66,88,0.92);color:rgba(225,230,250,0.95);}]])
-    gear:echo("<center>⚙</center>")
-    gear:setToolTip(st.editing and "Exit edit mode" or "Edit buttons")
-    gear:setClickCallback(function() st.editing = not st.editing; render(target) end)
-    st.widgets[#st.widgets + 1] = gear
+    -- Edit affordances live in the top-right corner as small overlay icons. They
+    -- don't reserve layout space, so the grid shown while editing is exactly the
+    -- locked-in result. The resting gear is faint and brightens on hover. When the
+    -- grid is locked, none of this renders — the content looks final.
+    if not cfg.locked then
+        local gear = Geyser.Label:new({ name = g .. "_bgear_" .. gen, x = "-26", y = 2, width = 22, height = 22 }, C)
+        gear:setStyleSheet(editing
+            and [[QLabel{background:rgba(255,210,90,0.92);color:#222;border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}]]
+            or  [[QLabel{background:rgba(40,44,60,0.30);color:rgba(200,205,225,0.45);border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}QLabel::hover{background:rgba(60,66,88,0.92);color:rgba(225,230,250,0.95);}]])
+        gear:echo("<center>⚙</center>")
+        gear:setToolTip(editing and "Exit edit mode" or "Edit buttons")
+        gear:setClickCallback(function() st.editing = not st.editing; render(target) end)
+        st.widgets[#st.widgets + 1] = gear
 
-    if st.editing then
-        local addI = Geyser.Label:new({ name = g .. "_badd_" .. gen, x = "-52", y = 2, width = 22, height = 22 }, C)
-        addI:setStyleSheet([[QLabel{background:rgba(40,90,50,0.92);color:#cfe;border-radius:4px;qproperty-alignment:AlignCenter;font-size:15px;font-weight:bold;}QLabel::hover{background:rgba(55,115,65,0.96);}]])
-        addI:echo("<center>＋</center>")
-        addI:setToolTip("Add button")
-        addI:setClickCallback(function()
-            cfg.buttons[#cfg.buttons + 1] = { label = "Button", width = 1, bg = "#1c2a4e", fg = "#96c8ff",
-                fontSize = 12, shape = "rounded", action = { type = "command", text = "" } }
-            scheduleSave(); render(target); openButtonEditor(target, #cfg.buttons)
-        end)
-        st.widgets[#st.widgets + 1] = addI
+        if editing then
+            local addI = Geyser.Label:new({ name = g .. "_badd_" .. gen, x = "-52", y = 2, width = 22, height = 22 }, C)
+            addI:setStyleSheet([[QLabel{background:rgba(40,90,50,0.92);color:#cfe;border-radius:4px;qproperty-alignment:AlignCenter;font-size:15px;font-weight:bold;}QLabel::hover{background:rgba(55,115,65,0.96);}]])
+            addI:echo("<center>＋</center>")
+            addI:setToolTip("Add button")
+            addI:setClickCallback(function()
+                cfg.buttons[#cfg.buttons + 1] = { label = "Button", width = 1, bg = "#1c2a4e", fg = "#96c8ff",
+                    fontSize = 12, shape = "rounded", action = { type = "command", text = "" } }
+                scheduleSave(); render(target); openButtonEditor(target, #cfg.buttons)
+            end)
+            st.widgets[#st.widgets + 1] = addI
 
-        local setI = Geyser.Label:new({ name = g .. "_bgset_" .. gen, x = "-78", y = 2, width = 22, height = 22 }, C)
-        setI:setStyleSheet([[QLabel{background:rgba(40,50,80,0.92);color:#cde;border-radius:4px;qproperty-alignment:AlignCenter;font-size:17px;font-weight:bold;}QLabel::hover{background:rgba(55,68,110,0.96);}]])
-        setI:echo("<center>⊞</center>")
-        setI:setToolTip("Grid settings")
-        setI:setClickCallback(function() openGridSettings(target) end)
-        st.widgets[#st.widgets + 1] = setI
+            local setI = Geyser.Label:new({ name = g .. "_bgset_" .. gen, x = "-78", y = 2, width = 22, height = 22 }, C)
+            setI:setStyleSheet([[QLabel{background:rgba(40,50,80,0.92);color:#cde;border-radius:4px;qproperty-alignment:AlignCenter;font-size:17px;font-weight:bold;}QLabel::hover{background:rgba(55,68,110,0.96);}]])
+            setI:echo("<center>⊞</center>")
+            setI:setToolTip("Grid settings")
+            setI:setClickCallback(function() openGridSettings(target) end)
+            st.widgets[#st.widgets + 1] = setI
+        end
     end
 end
 
@@ -316,7 +325,7 @@ openButtonEditor = function(target, idx)
     del:setStyleSheet([[QLabel{background:rgba(120,40,40,0.9);color:#fdd;border:1px solid rgba(180,80,80,0.6);
         border-radius:4px;qproperty-alignment:AlignCenter;font-size:11px;}QLabel::hover{background:rgba(150,55,55,0.95);}]])
     del:echo("<center>🗑 Delete</center>")
-    del:setClickCallback(function() table.remove(cfg.buttons, idx); scheduleSave(); render(target); d.onClose = nil; d:close() end)
+    del:setClickCallback(function() table.remove(cfg.buttons, idx); scheduleSave(); render(target); d.onClose = nil; Mux.ui.closeColorWheel(); d:close() end)
 
     local test = Geyser.Label:new({ name = d._gid .. "_be_test", x = 94, y = 7, width = 70, height = 26 }, bar)
     test:setStyleSheet([[QLabel{background:rgba(40,50,80,0.9);color:#cde;border:1px solid rgba(90,110,170,0.6);
@@ -335,10 +344,11 @@ openButtonEditor = function(target, idx)
     done:echo("<center>Done</center>")
     done:setClickCallback(function()
         if d._beForm and d._beForm.commitAll then d._beForm.commitAll() end
-        scheduleSave(); d.onClose = nil; d:close()
+        scheduleSave(); d.onClose = nil; Mux.ui.closeColorWheel(); d:close()
     end)
 
     d.onClose = function()                       -- ✕ discards every edit made since opening
+        Mux.ui.closeColorWheel()
         cfg.buttons[idx] = snapshot
         render(target)
     end
@@ -364,6 +374,10 @@ openGridSettings = function(target)
           readFn = function() return cfg.vsizing or "fill" end, writeFn = function(v) cfg.vsizing = v; preview() end },
         { label = "Row Height (px, when Fixed)", type = "number", min = 20, max = 120, step = 2,
           readFn = function() return cfg.rowH end, writeFn = function(v) cfg.rowH = v; preview() end },
+        { label = "Lock (hide editor)", type = "toggle",
+          desc = "Hide the gear and edit controls so the grid looks final. Bring them back with:  mux reveal <pane id>",
+          readFn = function() return cfg.locked or false end,
+          writeFn = function(v) cfg.locked = v; scheduleSave(); preview() end },
     }
     local cw = d.content:get_width(); if cw < 50 then cw = 356 end
     local form = Geyser.Label:new({ name = d._gid .. "_gs_form", x = 0, y = 0, width = cw, height = Mux.ui.formHeight(rows) }, d.content)
@@ -400,6 +414,14 @@ Mux.registerContent("mux_buttons", {
     restore = function(target, data)  -- reapply saved grid on workspace load
         if type(data) == "table" then
             CONFIG[target.id] = data
+            render(target)
+        end
+    end,
+    onReveal = function(target)       -- `mux reveal <id>` clears the lock so the gear returns
+        local cfg = configFor(target.id)
+        if cfg.locked then
+            cfg.locked = false
+            scheduleSave()
             render(target)
         end
     end,

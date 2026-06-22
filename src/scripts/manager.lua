@@ -90,6 +90,7 @@ local function _revealPane(p)
     end
     if p._applyTitlebarVisibility then p:_applyTitlebarVisibility() end
     if p._checkOverflow then p:_checkOverflow() end
+    if Mux._revealContent then Mux._revealContent(p) end
 end
 
 function Mux.listPanespace()
@@ -136,7 +137,10 @@ function Mux.revealUI(id)
             if not p._dialog then
                 _revealPane(p)
                 if p._tabs then
-                    for _, t in ipairs(p._tabs) do t.propertiesButton = true end
+                    for _, t in ipairs(p._tabs) do
+                        t.propertiesButton = true
+                        if Mux._revealContent then Mux._revealContent(t) end
+                    end
                 end
                 n = n + 1
             end
@@ -158,6 +162,7 @@ function Mux.revealUI(id)
         -- target is a tab; restore its Properties affordance (and ensure the host
         -- pane's titlebar is reachable so the tab is operable).
         target.propertiesButton = true
+        if Mux._revealContent then Mux._revealContent(target) end
         _revealPane(host)
         Mux._echo(string.format(
             "\n<green>[Muxlet]<reset> Revealed controls on tab '<white>%s<reset>'.\n", id))

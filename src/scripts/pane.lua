@@ -395,6 +395,7 @@ function MuxPane:_buildTitlebar(theme)
         if event.button ~= "LeftButton" then return end
         drag.active = false
         self.titlebar:setCursor(self:_titlebarCursor())
+        if self.floating then Mux._scheduleAutoSave() end
 
         if drag.lastHoverGhostKey then
             local prev = Mux._ghostSlots[drag.lastHoverGhostKey]
@@ -1692,6 +1693,7 @@ function MuxPane:_buildCornerHandles(theme)
             if event.button ~= "LeftButton" then return end
             drag.active = false
             lbl:setStyleSheet(css)
+            Mux._scheduleAutoSave()
         end)
 
         self._cornerHandles[#self._cornerHandles + 1] = lbl
