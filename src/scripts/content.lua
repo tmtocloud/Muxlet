@@ -214,7 +214,17 @@ end
 -- Size-gated so it is cheap to call from hot reposition paths — the content's
 -- resize runs only when the content area's pixel size actually changed.
 function Mux._relayoutContent(target)
-    if not target or not target._activeContent or not target.content then return end
+    if not target then return end
+
+    -- Tabbed hosts (a pane or a tab hosting sub-tabs) keep their visible content
+    -- on the active tab, which isn't in Mux._panes and so is never reached by the
+    -- reposition loop directly. Cascade into it; recursion covers nested sub-tabs.
+    if target._tabsEnabled and target._activeTabId and target._findTab then
+        local activeTab = target:_findTab(target._activeTabId)
+        if activeTab then Mux._relayoutContent(activeTab) end
+    end
+
+    if not target._activeContent or not target.content then return end
     local def = Mux._content[target._activeContent]
     if not (def and type(def.resize) == "function") then return end
     local C = target.content

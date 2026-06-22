@@ -191,6 +191,25 @@ Mux.ui.COLOR_PRESETS = {
     "#f9a825", "#00838f", "#455a64", "#e0e0e0", "#0b0d14", "#96c8ff",
 }
 
+-- HSV (h 0–360, s/v 0–1) → "#rrggbb". Used to generate the colour-wheel cells.
+local function hsvToHex(h, s, v)
+    h = h % 360
+    local c = v * s
+    local xx = c * (1 - math.abs((h / 60) % 2 - 1))
+    local m = v - c
+    local r, g, b = 0, 0, 0
+    if     h <  60 then r, g, b = c, xx, 0
+    elseif h < 120 then r, g, b = xx, c, 0
+    elseif h < 180 then r, g, b = 0, c, xx
+    elseif h < 240 then r, g, b = 0, xx, c
+    elseif h < 300 then r, g, b = xx, 0, c
+    else                r, g, b = c, 0, xx end
+    return string.format("#%02x%02x%02x",
+        math.floor((r + m) * 255 + 0.5),
+        math.floor((g + m) * 255 + 0.5),
+        math.floor((b + m) * 255 + 0.5))
+end
+
 function Mux.ui.colorField(parent, opts)
     opts = opts or {}
     local value    = opts.value or "#000000"
@@ -199,6 +218,7 @@ function Mux.ui.colorField(parent, opts)
     local x, y     = opts.x or 0, opts.y or 0
     local width    = opts.width or 240
     local prefix   = opts.prefix or ("muxcf_" .. tostring(math.random(1, 1000000000)))
+    local getScreenPos = opts.getScreenPos
     local SW, GAP, INPUTH = 18, 4, 26
     local perRow   = math.max(1, math.floor((width + GAP) / (SW + GAP)))
     local rows     = math.max(1, math.ceil(#swatches / perRow))
@@ -240,6 +260,89 @@ function Mux.ui.colorField(parent, opts)
         local captured = hex
         s:setClickCallback(function() apply(captured, false) end)
     end
+
+    -- ── Full-spectrum picker popup (click the preview swatch to open) ─────────
+    -- A wheel of discrete colour cells (hue around, saturation by ring) plus
+    -- greyscale and dark-shade strips. Each cell is an exact colour the user
+    -- clicks directly, so there's no in-label click-coordinate mapping to get
+    -- wrong; the hex field and presets remain as precise fallbacks.
+    local POPW = 200
+    local wheelCells, wheelPanel = {}, nil
+
+    local function closeWheel()
+        if not wheelPanel then return end
+        for _, w in ipairs(wheelCells) do if w.delete then w:delete() else w:hide() end end
+        if wheelPanel.delete then wheelPanel:delete() else wheelPanel:hide() end
+        wheelCells, wheelPanel = {}, nil
+    end
+
+    local function addCell(px, py, sz, hex)
+        local cellLbl = Geyser.Label:new({ name = prefix .. "_wc" .. (#wheelCells + 1),
+            x = math.floor(px), y = math.floor(py), width = math.floor(sz), height = math.floor(sz) }, wheelPanel)
+        cellLbl:setStyleSheet(string.format(
+            "background:%s;border:1px solid rgba(0,0,0,0.35);border-radius:2px;", hex))
+        cellLbl:setToolTip(hex)
+        cellLbl:show(); cellLbl:raise()
+        local captured = hex
+        cellLbl:setClickCallback(function() apply(captured, false); closeWheel() end)
+        wheelCells[#wheelCells + 1] = cellLbl
+    end
+
+    local function openWheel()
+        local px, py
+        if getScreenPos then
+            local ox, oy = getScreenPos()
+            px, py = ox + x, oy + y + INPUTH + 4
+        else
+            px, py = x, y + INPUTH + 4          -- best-effort anchor within parent
+        end
+        local host = getScreenPos and Geyser or parent
+        local POPH = 220
+        wheelPanel = Geyser.Label:new({ name = prefix .. "_wheel",
+            x = math.floor(px), y = math.floor(py), width = POPW, height = POPH }, host)
+        wheelPanel:setStyleSheet("background:rgba(20,21,30,0.98);border:1px solid rgba(255,255,255,0.18);border-radius:6px;")
+        wheelPanel:show(); wheelPanel:raise()
+
+        local xb = Geyser.Label:new({ name = prefix .. "_wx", x = POPW - 20, y = 4, width = 16, height = 16 }, wheelPanel)
+        xb:setStyleSheet("background:transparent;color:rgba(210,210,225,0.85);qproperty-alignment:AlignCenter;font-size:12px;")
+        xb:echo("<center>✕</center>")
+        xb:show(); xb:raise()
+        xb:setClickCallback(closeWheel)
+        wheelCells[#wheelCells + 1] = xb
+
+        -- Hue × saturation wheel (value = 1). Sectors scale with radius so the disc
+        -- tiles evenly.
+        local cx, cy, cell = 100, 96, 14
+        addCell(cx - cell / 2, cy - cell / 2, cell, "#ffffff")
+        local rings = { { r = 20, s = 0.30 }, { r = 38, s = 0.55 }, { r = 56, s = 0.78 }, { r = 74, s = 1.0 } }
+        for _, ring in ipairs(rings) do
+            local sectors = math.max(6, math.floor(2 * math.pi * ring.r / (cell + 2)))
+            for j = 0, sectors - 1 do
+                local ang = (j / sectors) * 2 * math.pi
+                addCell(cx + ring.r * math.cos(ang) - cell / 2,
+                        cy + ring.r * math.sin(ang) - cell / 2,
+                        cell, hsvToHex((j / sectors) * 360, ring.s, 1))
+            end
+        end
+
+        -- Greyscale strip (black → white).
+        local gsteps, gw = 10, math.floor((POPW - 20) / 10)
+        for k = 0, gsteps - 1 do
+            local g = math.floor(k / (gsteps - 1) * 255 + 0.5)
+            addCell(10 + k * gw, 180, gw - 2, string.format("#%02x%02x%02x", g, g, g))
+        end
+
+        -- Dark/muted hues (value 0.5) for shades the bright wheel omits.
+        local dh, dw = 12, math.floor((POPW - 20) / 12)
+        for k = 0, dh - 1 do
+            addCell(10 + k * dw, 198, dw - 2, hsvToHex(k * (360 / dh), 0.85, 0.5))
+        end
+    end
+
+    preview:setToolTip("Click to open the colour wheel")
+    preview:setClickCallback(function()
+        if wheelPanel then closeWheel() else openWheel() end
+    end)
 
     return {
         container = cont,
@@ -319,6 +422,10 @@ local function w_color(row, c)
         value = tostring(spec.readFn() or "#000000"),
         onChange = function(hex) spec.writeFn(hex) end,
         prefix = uid.."_cf",
+        getScreenPos = c.getScreenPos and function()
+            local fx, fy = c.getScreenPos()
+            return fx, fy + c.yPos     -- form-content origin + this row's offset = row top-left
+        end,
     })
     return { commit = cf.commit, refresh = cf.refresh }
 end

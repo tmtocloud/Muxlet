@@ -821,7 +821,7 @@ function MuxPane:_checkOverflow()
 
     -- Width of the right-anchored action cluster in the current state.
     local rightW = closeMinW
-    if self.zoomable and (self._split or self._zoomed)          then rightW = rightW + 28 end
+    if self.zoomable and (self._split or self.floating or self._zoomed)          then rightW = rightW + 28 end
     if self.swappable and self._split and not self.floating      then rightW = rightW + 26 end
     if self.splittable and not self.floating                     then rightW = rightW + 44 end
     if self:_contentEnabled()                                    then rightW = rightW + 70 end
@@ -869,7 +869,7 @@ function MuxPane:_checkOverflow()
             self.closeBtn:show()
         end
         if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
-        if self.zoomable and (self._split or self._zoomed) then self.zoomBtn:show() else self.zoomBtn:hide() end
+        if self.zoomable and (self._split or self.floating or self._zoomed) then self.zoomBtn:show() else self.zoomBtn:hide() end
         if self.splittable and not self.floating then
             self.splitVBtn:show(); self.splitHBtn:show()
         else
@@ -909,7 +909,7 @@ function MuxPane:_applyTitlebarVisibility()
             self.closeBtn:show()
         end
         if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
-        if self.zoomable and (self._split or self._zoomed) then self.zoomBtn:show() else self.zoomBtn:hide() end
+        if self.zoomable and (self._split or self.floating or self._zoomed) then self.zoomBtn:show() else self.zoomBtn:hide() end
         if self.splittable and not self.floating then
             self.splitVBtn:show(); self.splitHBtn:show()
         else
@@ -1323,7 +1323,7 @@ function MuxPane:_updateZoomBtn()
     if not self.zoomBtn then return end
     if self._zoomBtnEcho then self._zoomBtnEcho(false) end
     self.zoomBtn:setToolTip(self._zoomed and "UnZoom" or "Zoom")
-    if self.zoomable and (self._split or self._zoomed) then
+    if self.zoomable and (self._split or self.floating or self._zoomed) then
         self.zoomBtn:show()
     else
         self.zoomBtn:hide()

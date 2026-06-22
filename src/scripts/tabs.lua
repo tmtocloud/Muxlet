@@ -632,6 +632,7 @@ function MuxSurface:_activateTabObj(tab)
     end
     self:_echoTabLabel(tab.label, tab.name, true, false, theme, tab.nameAlign)
     tab.content:show()
+    if Mux._relayoutContent then Mux._relayoutContent(tab) end
     Mux._scheduleAutoSave()
 end
 

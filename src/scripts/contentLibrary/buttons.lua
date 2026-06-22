@@ -15,8 +15,6 @@ local CONFIG          = {}     -- per-pane config (by pane id); persisted via th
 local DEFAULT_ROW_H   = 44
 local MIN_ROW_H       = 18    -- floor when filling vertically
 
-local SHAPE_RADIUS = { square = 0, rounded = 6, pill = 999 }
-
 -- ── Persistence ───────────────────────────────────────────────────────────────
 -- No side file: config lives in memory and is persisted through the content
 -- serialize/restore hook (see the registration block below).  Mutations call
@@ -91,10 +89,22 @@ end
 
 -- ── Button appearance / behaviour ────────────────────────────────────────────────
 
-local function buttonCss(btn, editing)
+local function buttonCss(btn, editing, w, h)
     local bg = btn.bg or "#1c2a4e"
     local fg = btn.fg or "#96c8ff"
-    local radius = SHAPE_RADIUS[btn.shape or "rounded"] or 6
+    local shape = btn.shape or "rounded"
+    local radius
+    if shape == "square" then
+        radius = 0
+    elseif shape == "pill" or shape == "circle" then
+        -- Half the shorter side gives true capsule ends (and a full circle when the
+        -- cell is square, as the circle shape forces). A fixed huge radius like 999
+        -- is what rendered square: Qt ignores an un-clampable radius instead of
+        -- capping it, so the corners stayed sharp.
+        radius = math.floor(math.min(w or 0, h or 0) / 2)
+    else
+        radius = 6  -- rounded
+    end
     local border = editing and "border:1px dashed rgba(255,210,90,0.9);"
                             or "border:1px solid rgba(255,255,255,0.10);"
     return string.format([[
@@ -141,11 +151,19 @@ render = function(target)
     local rects = layoutRects(cfg, W, H, st.editing)
     for _, rc in ipairs(rects) do
         local btn = rc.btn
+        local lx, ly, lw, lh = rc.x, rc.y, rc.w, rc.h
+        if btn.shape == "circle" then
+            -- Centre a square inside the cell so the half-side radius is a true circle.
+            local side = math.min(rc.w, rc.h)
+            lx = rc.x + math.floor((rc.w - side) / 2)
+            ly = rc.y + math.floor((rc.h - side) / 2)
+            lw, lh = side, side
+        end
         local lbl = Geyser.Label:new({ name = string.format("%s_bg%d_%d", g, gen, rc.index),
-            x = rc.x, y = rc.y, width = rc.w, height = rc.h }, C)
-        lbl:setStyleSheet(buttonCss(btn, st.editing))
-        lbl:echo(string.format('<center><span style="color:%s;">%s</span></center>',
-            btn.fg or "#96c8ff", btn.label or ""))
+            x = lx, y = ly, width = lw, height = lh }, C)
+        lbl:setStyleSheet(buttonCss(btn, st.editing, lw, lh))
+        lbl:echo(string.format('<center><span style="color:%s;font-size:%dpx;font-weight:bold;">%s</span></center>',
+            btn.fg or "#96c8ff", btn.fontSize or 12, btn.label or ""))
         local idx = rc.index
         if st.editing then
             lbl:setToolTip("Click to edit this button")
@@ -188,8 +206,8 @@ render = function(target)
         st.widgets[#st.widgets + 1] = addI
 
         local setI = Geyser.Label:new({ name = g .. "_bgset_" .. gen, x = "-78", y = 2, width = 22, height = 22 }, C)
-        setI:setStyleSheet([[QLabel{background:rgba(40,50,80,0.92);color:#cde;border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}QLabel::hover{background:rgba(55,68,110,0.96);}]])
-        setI:echo("<center>▦</center>")
+        setI:setStyleSheet([[QLabel{background:rgba(40,50,80,0.92);color:#cde;border-radius:4px;qproperty-alignment:AlignCenter;font-size:17px;font-weight:bold;}QLabel::hover{background:rgba(55,68,110,0.96);}]])
+        setI:echo("<center>⊞</center>")
         setI:setToolTip("Grid settings")
         setI:setClickCallback(function() openGridSettings(target) end)
         st.widgets[#st.widgets + 1] = setI
@@ -250,8 +268,8 @@ openButtonEditor = function(target, idx)
                 readFn = function() return btn.action.actionId or "" end,
                 writeFn = function(v) btn.action.actionId = (v ~= "" and v or nil); preview() end }
         end
-        rows[#rows + 1] = { label = "Shape", type = "segmentedControl",
-            options = { { value = "square", label = "Square" }, { value = "rounded", label = "Rounded" }, { value = "pill", label = "Pill" } },
+        rows[#rows + 1] = { label = "Shape", type = "segmentedControl", widgetWidth = 240,
+            options = { { value = "square", label = "Square" }, { value = "rounded", label = "Rounded" }, { value = "pill", label = "Pill" }, { value = "circle", label = "Circle" } },
             readFn = function() return btn.shape or "rounded" end,
             writeFn = function(v) btn.shape = v; preview() end }
         rows[#rows + 1] = { label = "Width (columns)", type = "number", min = 1, max = math.max(1, cfg.cols),
