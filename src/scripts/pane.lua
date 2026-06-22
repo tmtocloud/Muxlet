@@ -353,7 +353,9 @@ function MuxPane:_buildTitlebar(theme)
             local aw, ah = self.outer:get_width(), self.outer:get_height()
             local spec, ax, ay, aw2, ah2 = Mux._anchorHitTest(drag.dropTargets, agx, agy, aw, ah)
             if spec then
-                Mux._showAnchorIndicator(ax, ay, aw2, ah2)
+                local corner = (spec.v and spec.h)
+                    and { vx = spec.v.myEdge, hy = spec.h.myEdge } or nil
+                Mux._showAnchorIndicator(ax, ay, aw2, ah2, corner)
                 drag.anchorSpec = spec
             else
                 Mux._hideAnchorIndicator()
@@ -440,6 +442,7 @@ function MuxPane:_buildTitlebar(theme)
             local spec = drag.anchorSpec
             drag.anchorSpec = nil
             if spec then self:setAnchor(spec) end
+            if self._refreshAnchorBtn then self._refreshAnchorBtn() end
             Mux._scheduleAutoSave()
             return
         end
@@ -486,9 +489,10 @@ function MuxPane:_buildTitlebar(theme)
     -- Double-click embeds a floating pane into the nearest ghost slot.
     -- For embedded panes, double-click just sets focus.
     self.titlebar:setDoubleClickCallback(function(event)
+        -- An anchored pane double-clicks back to its anchor, ahead of any dock
+        -- behaviour — applies whether or not the pane is convertible.
+        if self.anchor then self:returnToAnchor(); return end
         if not self.convertible then
-            -- Non-embeddable panes can't dock, so double-click means "return to anchor".
-            if self.anchor then self:returnToAnchor() end
             return
         end
         if not self.floating then
@@ -681,6 +685,51 @@ function MuxPane:_buildTitlebar(theme)
     })
     if not self.contentable then self.contentBtn:hide() end
 
+    -- anchorBtn: left cluster, just right of Content Library. Only shown for a
+    -- floating, anchorable pane when the titlebar isn't compact (compact panes
+    -- get the right-click Anchor submenu instead). Clicking drops a downward menu
+    -- of Set / Return / Remove. Its background lights up while anchor mode is
+    -- armed or an anchor is set.
+    self.anchorBtn, self._anchorBtnEcho = makeTitlebarButton({
+        suffix  = "_anchor",
+        x       = "2",
+        icon    = "⚓",
+        tooltip = "Anchor",
+        onClick = function(event)
+            if event.button ~= "LeftButton" then return end
+            local items = {}
+            items[#items+1] = {
+                text = self.anchor and "Re-anchor (drag to set)" or "Set anchor (drag to edge)",
+                fn   = function() self:armAnchorMode(true) end,
+            }
+            if self.anchor then
+                items[#items+1] = { text = "Return to anchor", fn = function() self:returnToAnchor() end }
+                items[#items+1] = { text = "Remove anchor",    fn = function() self:removeAnchor() end, danger = true }
+            end
+            if Mux._showItemMenu then Mux._showItemMenu(event.globalX, event.globalY, items) end
+        end,
+    })
+    self._refreshAnchorBtn = function()
+        if not self.anchorBtn then return end
+        local active = self._anchorArming or (self.anchor ~= nil)
+        self.anchorBtn:setStyleSheet(active
+            and "background: rgba(125,230,150,0.80); border-radius: 3px;"
+            or  (Mux.activeTheme().btnCss or ""))
+    end
+    self.anchorBtn:setOnEnter(function()
+        if self._anchorArming or self.anchor then
+            self.anchorBtn:setStyleSheet("background: rgba(125,230,150,0.95); border-radius: 3px;")
+        else
+            self.anchorBtn:setStyleSheet(Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss or "")
+        end
+        if self._anchorBtnEcho then self._anchorBtnEcho(true) end
+    end)
+    self.anchorBtn:setOnLeave(function()
+        self._refreshAnchorBtn()
+        if self._anchorBtnEcho then self._anchorBtnEcho(false) end
+    end)
+    self.anchorBtn:hide()   -- shown by _applyTitlebarVisibility / _checkOverflow when eligible
+
     -- reveal strip: shown when titlebar is hidden; right-click only via Alt+[ or mux titlebar
     -- to prevent accidental re-show.
     self.reveal = Geyser.Label:new({
@@ -747,6 +796,7 @@ function MuxPane:_updateInfoBtnPos()
     local x0    = ((self.nameAlign or "left") == "left") and self:_infoBtnX() or 2
     if self.infoBtn    then self.infoBtn:move(x0, y) end
     if self.contentBtn then self.contentBtn:move(x0 + btnSz + 4, y) end
+    if self.anchorBtn  then self.anchorBtn:move(x0 + 2 * (btnSz + 4), y) end
 end
 
 -- Returns the HTML string for the titlebar name, styled for the current nameAlign.
@@ -840,7 +890,9 @@ end
 function MuxPane:setAnchor(spec)
     if not self.anchorable then return false end
     self.anchor = spec
-    return Mux._applyAnchor(self)
+    local ok = Mux._applyAnchor(self)
+    if self._refreshAnchorBtn then self._refreshAnchorBtn() end
+    return ok
 end
 
 -- Remove the anchor; the pane becomes a plain floating pane that stays exactly
@@ -848,6 +900,7 @@ end
 function MuxPane:removeAnchor()
     self.anchor    = nil
     self._atAnchor = false
+    if self._refreshAnchorBtn then self._refreshAnchorBtn() end
     Mux._scheduleAutoSave()
 end
 
@@ -857,6 +910,7 @@ function MuxPane:returnToAnchor()
     if not self.anchor then return false end
     local ok = Mux._applyAnchor(self)
     if ok then Mux._scheduleAutoSave() end
+    if self._refreshAnchorBtn then self._refreshAnchorBtn() end
     return ok
 end
 
@@ -866,12 +920,13 @@ function MuxPane:isAnchored() return self.anchor ~= nil end
 -- instead of insert. Cleared automatically on drag release.
 function MuxPane:armAnchorMode(on)
     self._anchorArming = ((on ~= false) and self.anchorable) or false
+    if self._refreshAnchorBtn then self._refreshAnchorBtn() end
 end
 
 -- Checks whether visible buttons fit in the current header width and repositions them.
 -- If too narrow: hides action buttons (overflow mode — right-click shows them as a menu).
 -- If wide enough: restores button visibility without calling _applyTitlebarVisibility().
-function MuxPane:_checkOverflow()
+function MuxPane:_checkOverflow(force)
     if not self.titlebarVisible then return end
     -- During a live handle drag this is called for every pane on every reposition
     -- frame. Anchored titlebar buttons already track position via reposition, so
@@ -894,6 +949,7 @@ function MuxPane:_checkOverflow()
         and (self.showSettingsInMenu or self.propertiesButton)
     local infoBtnW    = showInfo and 22 or 0
     local contentBtnW = self:_contentEnabled() and 26 or 0   -- now part of the left cluster
+    local anchorBtnW  = (self.anchorBtn and self.floating and self.anchorable and not compact) and 26 or 0
     local nameW       = self:_titlebarNameWidth()
 
     -- Always-visible close + min cluster.
@@ -912,20 +968,27 @@ function MuxPane:_checkOverflow()
         -- Same shape as center plus the name slot. namePad / clusterGap match
         -- _layoutTitlebarButtons.
         local namePad, clusterGap = 6, 6
-        local leftW = 6 + infoBtnW + contentBtnW
+        local leftW = 6 + infoBtnW + contentBtnW + anchorBtnW
         newOverflow = compact
             or (headerW < leftW + rightW + namePad + nameW + clusterGap + 10)
     else
         if align == "center" then
-            local leftW = 6 + infoBtnW + contentBtnW
+            local leftW = 6 + infoBtnW + contentBtnW + anchorBtnW
             newOverflow = compact or (headerW < leftW + nameW + rightW + 10)
         else  -- left
-            local leftW = 16 + nameW + 4 + infoBtnW + contentBtnW
+            local leftW = 16 + nameW + 4 + infoBtnW + contentBtnW + anchorBtnW
             newOverflow = compact or (headerW < leftW + rightW + 10)
         end
     end
 
-    if newOverflow == self._overflowMode then return end
+    -- Normally we skip the visibility re-apply when the overflow state is
+    -- unchanged. But _applyTitlebarVisibility() force-calls us after a property
+    -- toggle: it has just :show()n every eligible button, so even when the pane
+    -- is still too narrow (overflow unchanged) we must re-run the apply pass to
+    -- re-hide the secondary buttons. Without `force` those shows would stick,
+    -- resetting the compact view. (force also re-applies the now-current
+    -- eligibility, which the right-click menu reads independently.)
+    if not force and newOverflow == self._overflowMode then return end
     self._overflowMode = newOverflow
 
     if newOverflow then
@@ -938,6 +1001,7 @@ function MuxPane:_checkOverflow()
         if self.splitHBtn  then self.splitHBtn:hide()  end
         if self.splitVBtn  then self.splitVBtn:hide()  end
         if self.contentBtn then self.contentBtn:hide() end
+        if self.anchorBtn  then self.anchorBtn:hide()  end
     else
         -- Restore ideal visibility without recursing into _applyTitlebarVisibility.
         if self.infoBtn then
@@ -962,6 +1026,13 @@ function MuxPane:_checkOverflow()
         end
         if self.contentBtn then
             if self:_contentEnabled() then self.contentBtn:show() else self.contentBtn:hide() end
+        end
+        if self.anchorBtn then
+            if self.floating and self.anchorable and not compact then
+                self.anchorBtn:show(); self._refreshAnchorBtn()
+            else
+                self.anchorBtn:hide()
+            end
         end
     end
 end
@@ -1003,7 +1074,15 @@ function MuxPane:_applyTitlebarVisibility()
         if self.contentBtn then
             if self:_contentEnabled() then self.contentBtn:show() else self.contentBtn:hide() end
         end
-        self:_checkOverflow()
+        if self.anchorBtn then
+            local compact = Mux.settings.get and Mux.settings.get("mux", "compact_titlebar")
+            if self.floating and self.anchorable and not compact then
+                self.anchorBtn:show(); self._refreshAnchorBtn()
+            else
+                self.anchorBtn:hide()
+            end
+        end
+        self:_checkOverflow(true)
         self.reveal:hide()
     else
         local h = theme.revealStripHeight
@@ -1022,6 +1101,7 @@ function MuxPane:_applyTitlebarVisibility()
         if self.splitHBtn  then self.splitHBtn:hide()  end
         if self.swapBtn    then self.swapBtn:hide()    end
         if self.contentBtn then self.contentBtn:hide() end
+        if self.anchorBtn  then self.anchorBtn:hide()  end
         self.reveal:show()
     end
 end

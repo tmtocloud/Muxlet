@@ -163,6 +163,7 @@ end
 
 function Mux.ui.specHeight(spec, opts)
     opts = opts or {}
+    if spec.rowHeight then return spec.rowHeight end   -- explicit per-row override
     local cw = Mux.ui._widgets[spec.type]
     if cw then return cw.rowHeight or opts.rowHeight or 42 end
     if spec.type == "color" then return opts.colorRowHeight or 92 end
@@ -446,7 +447,7 @@ end
 function Mux.ui.registerWidget(wtype, builder, opts)
     assert(type(wtype)   == "string",   "registerWidget: type must be a string")
     assert(type(builder) == "function", "registerWidget: builder must be a function")
-    Mux.ui._widgets[wtype] = { build = builder, rowHeight = opts and opts.rowHeight }
+    Mux.ui._widgets[wtype] = { build = builder, rowHeight = opts and opts.rowHeight, layout = opts and opts.layout }
 end
 
 function Mux.ui.unregisterWidget(wtype)
@@ -953,7 +954,7 @@ function Mux.ui.buildForm(parent, specs, opts)
         local customW = Mux.ui._widgets[specType]
         local isColor = (specType == "color")
         local isWide  = (specType == "string") and (specDisplay == "text") and not isReadOnly
-        local thisH   = (customW and customW.rowHeight) or (isColor and colorH or (isWide and textH or rowH))
+        local thisH   = spec.rowHeight or (customW and customW.rowHeight) or (isColor and colorH or (isWide and textH or rowH))
         local uid     = prefix .. "_w" .. i
 
         -- Per-row widget width override (e.g. wider segmented controls).

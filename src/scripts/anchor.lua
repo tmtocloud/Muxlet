@@ -114,15 +114,29 @@ end
 -- A single overlay rectangle previews where an armed anchor drag would land.
 -- Visually distinct (blue dashed) from the insertion ghost.
 
-function Mux._showAnchorIndicator(x, y, w, h)
+function Mux._showAnchorIndicator(x, y, w, h, corner)
     if not Mux._anchorInd then
         Mux._anchorInd = Geyser.Label:new(
             { name = "mux_anchor_ind", x = 0, y = 0, width = 10, height = 10 }, Geyser)
     end
     Mux._anchorInd:move(math.floor(x), math.floor(y))
     Mux._anchorInd:resize(math.floor(w), math.floor(h))
-    Mux._anchorInd:setStyleSheet(
-        "background: rgba(90,200,255,0.12); border: 2px dashed rgba(90,200,255,0.95); border-radius: 3px;")
+    if corner then
+        -- Corner anchor: bright L-bracket emphasising the two meeting edges (and
+        -- a green tint), visually distinct from the uniform blue dashed rectangle
+        -- an edge anchor shows.
+        local strong = "3px solid rgba(125,230,150,0.98)"
+        local faint  = "1px dashed rgba(125,230,150,0.38)"
+        Mux._anchorInd:setStyleSheet(
+            "background: rgba(125,230,150,0.10); border-radius: 3px;"
+            .. "border-left: "   .. (corner.vx == "left"   and strong or faint) .. ";"
+            .. "border-right: "  .. (corner.vx == "right"  and strong or faint) .. ";"
+            .. "border-top: "    .. (corner.hy == "top"    and strong or faint) .. ";"
+            .. "border-bottom: " .. (corner.hy == "bottom" and strong or faint) .. ";")
+    else
+        Mux._anchorInd:setStyleSheet(
+            "background: rgba(90,200,255,0.12); border: 2px dashed rgba(90,200,255,0.95); border-radius: 3px;")
+    end
     Mux._anchorInd:show(); Mux._anchorInd:raise()
 end
 

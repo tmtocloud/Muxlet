@@ -481,22 +481,20 @@ function Mux._showContextMenu(pane, globalX, globalY)
         items[#items+1] = { text=zText, fn=function() pane:zoom() end }
     end
 
-    -- Embed (floating panes only)
-    if pane.floating and pane.convertible then
-        if #items > 0 then items[#items+1] = { sep=true } end
-        items[#items+1] = { text="Embed Pane", fn=function() pane:embed() end }
-    end
-
-    -- Anchoring (floating + anchorable). Arm mode applies to the next drag;
-    -- return/remove appear once an anchor exists.
+    -- Anchoring (floating + anchorable) collapses into one "Anchor" submenu:
+    -- arm mode applies to the next drag; return/remove appear once an anchor exists.
     if pane.floating and pane.anchorable then
         if #items > 0 then items[#items+1] = { sep=true } end
-        items[#items+1] = { text="⚓  Anchor mode (drag to set)",
-            fn=function() pane:armAnchorMode(true) end }
+        local sub = {}
+        sub[#sub+1] = {
+            text = pane.anchor and "Re-anchor (drag to set)" or "Set anchor (drag to edge)",
+            fn   = function() pane:armAnchorMode(true) end,
+        }
         if pane.anchor then
-            items[#items+1] = { text="⤺  Return to anchor", fn=function() pane:returnToAnchor() end }
-            items[#items+1] = { text="⚓  Remove anchor",    fn=function() pane:removeAnchor() end }
+            sub[#sub+1] = { text = "Return to anchor", fn = function() pane:returnToAnchor() end }
+            sub[#sub+1] = { text = "Remove anchor",    fn = function() pane:removeAnchor() end, danger = true }
         end
+        items[#items+1] = { text = "⚓  Anchor", submenu = sub }
     end
 
     -- Swap / Split (mirrors swapBtn, splitHBtn, splitVBtn)
