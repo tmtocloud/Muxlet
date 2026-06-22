@@ -114,6 +114,23 @@ end
 function Mux._toPx(n)       return tostring(math.floor(n)) .. "px" end
 function Mux._fromEdgePx(n) return "-" .. tostring(math.floor(n)) .. "px" end
 
+-- Human-readable path identifying a pane or tab, e.g. "Console › Logs › Errors".
+-- Tabs carry .pane = their immediate host (a pane or another tab); panes have
+-- none, so the walk terminates at the owning pane. Used in dialog titles so it's
+-- always clear which element a Properties / Content / editor dialog acts on.
+function Mux._targetPath(target)
+    if not target then return "" end
+    local parts, t, guard = {}, target, 0
+    while t and guard < 8 do
+        parts[#parts + 1] = t.name or t.id or "?"
+        t = t.pane
+        guard = guard + 1
+    end
+    local out = {}
+    for i = #parts, 1, -1 do out[#out + 1] = parts[i] end
+    return table.concat(out, " › ")
+end
+
 Mux.debug = false
 
 function Mux._log(fmt, ...)
@@ -528,7 +545,7 @@ function Mux._showContentLibrary(pane)
     local dlgH      = math.min(#contentNames * LIB_ROW_H + 26, 500)
     local innerH    = dlgH - 26
 
-    local paneLabel = pane.name or pane.id or "pane"
+    local paneLabel = Mux._targetPath(pane)
     local dlg = Mux.createDialog({
         title = "Content Library — " .. paneLabel,
         width = dlgW, height = dlgH,

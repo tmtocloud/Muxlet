@@ -216,7 +216,7 @@ local function paneRows(pane)
                 -- Keep the open Properties dialog's own titlebar in sync.
                 if pane._propertiesDialogs then
                     for _, dlg in pairs(pane._propertiesDialogs) do
-                        if dlg.setName then dlg:setName("Properties: " .. v) end
+                        if dlg.setName then dlg:setName("Properties: " .. Mux._targetPath(pane)) end
                     end
                 end
             end,
@@ -396,7 +396,7 @@ local function tabRows(host, tab)
                 -- Keep the open Properties dialog's own titlebar in sync.
                 if tab._propertiesDialogs then
                     for _, dlg in pairs(tab._propertiesDialogs) do
-                        if dlg.setName then dlg:setName("Tab: " .. v) end
+                        if dlg.setName then dlg:setName("Properties: " .. Mux._targetPath(tab)) end
                     end
                 end
             end,
@@ -563,13 +563,13 @@ function Mux.showPaneProperties(pane)
     -- Singleton: raise the existing dialog rather than opening a duplicate.
     local existing = Mux.getDialog("muxprops:" .. tostring(pane.id))
     if existing then existing:show(); existing:raise(); return end
-    openPropsDialog(string.format("Properties: %s", pane.name), paneRows(pane), pane)
+    openPropsDialog(string.format("Properties: %s", Mux._targetPath(pane)), paneRows(pane), pane)
 end
 
 function Mux.showTabProperties(host, tab)
     local existing = Mux.getDialog("muxprops:" .. tostring(tab.id))
     if existing then existing:show(); existing:raise(); return end
-    openPropsDialog(string.format("Tab: %s", tab.name), tabRows(host, tab), tab)
+    openPropsDialog(string.format("Properties: %s", Mux._targetPath(tab)), tabRows(host, tab), tab)
 end
 
 -- Internal refresh: close existing dialogs for the target then reopen at the same position.

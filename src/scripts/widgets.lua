@@ -210,25 +210,41 @@ local function hsvToHex(h, s, v)
         math.floor((b + m) * 255 + 0.5))
 end
 
--- Closes whichever colour wheel is currently open (only one can be), if any.
--- Hosts that tear down (e.g. a dialog closing) call this so a wheel never lingers.
-function Mux.ui.closeColorWheel()
-    if Mux.ui._closeActiveWheel then Mux.ui._closeActiveWheel() end
+-- "#rrggbb" → HSV (h 0–360, s/v 0–1). Pairs with hsvToHex for the brightness strip.
+local function hexToHsv(hex)
+    hex = tostring(hex or ""):gsub("#", "")
+    if #hex < 6 then return 0, 0, 0 end
+    local r = (tonumber(hex:sub(1, 2), 16) or 0) / 255
+    local g = (tonumber(hex:sub(3, 4), 16) or 0) / 255
+    local b = (tonumber(hex:sub(5, 6), 16) or 0) / 255
+    local mx, mn = math.max(r, g, b), math.min(r, g, b)
+    local d = mx - mn
+    local h = 0
+    if d ~= 0 then
+        if     mx == r then h = ((g - b) / d) % 6
+        elseif mx == g then h = (b - r) / d + 2
+        else                h = (r - g) / d + 4 end
+        h = h * 60
+    end
+    return h, (mx == 0) and 0 or (d / mx), mx
 end
 
+-- A compact colour control: a swatch, a hex input (Enter commits), and a
+-- brightness strip. The strip shows the current hue/saturation from dark to
+-- light; clicking a cell sets that brightness (HSV value) while keeping the hue
+-- and saturation. Pick a hue by typing a hex; fine-tune light/dark on the strip.
 function Mux.ui.colorField(parent, opts)
     opts = opts or {}
     local value    = opts.value or "#000000"
     local onChange = opts.onChange or function() end
-    local swatches = opts.swatches or Mux.ui.COLOR_PRESETS
     local x, y     = opts.x or 0, opts.y or 0
     local width    = opts.width or 240
     local prefix   = opts.prefix or ("muxcf_" .. tostring(math.random(1, 1000000000)))
-    local getScreenPos = opts.getScreenPos
-    local SW, GAP, INPUTH = 18, 4, 26
-    local perRow   = math.max(1, math.floor((width + GAP) / (SW + GAP)))
-    local rows     = math.max(1, math.ceil(#swatches / perRow))
-    local height   = INPUTH + 6 + rows * (SW + GAP)
+    local INPUTH   = 26
+    local STRIP_N  = 14
+    local STRIP_H  = 18
+    local STRIP_GAP = 6
+    local height   = INPUTH + STRIP_GAP + STRIP_H
 
     local cont = Geyser.Label:new({ name = prefix.."_c", x = x, y = y, width = width, height = height }, parent)
     cont:setStyleSheet("background:transparent;border:none;")
@@ -243,126 +259,56 @@ function Mux.ui.colorField(parent, opts)
         width = math.max(40, width - INPUTH - 6), height = INPUTH }, cont)
     input:setStyleSheet("background:rgba(0,0,0,0.35);color:#dde;border:1px solid rgba(255,255,255,0.15);border-radius:3px;")
 
+    -- Brightness strip cells (dark → light). Levels span HSV value 0.15 .. 1.0.
+    local cells  = {}
+    local stripY = INPUTH + STRIP_GAP
+    local cellW  = math.max(6, math.floor((width - (STRIP_N - 1) * 2) / STRIP_N))
+    local function levelV(k) return 0.15 + (k / (STRIP_N - 1)) * 0.85 end
+
+    local function refreshStrip()
+        local h, s, v = hexToHsv(value)
+        local closest, cd = 1, math.huge
+        for k = 0, STRIP_N - 1 do
+            local diff = math.abs(levelV(k) - v)
+            if diff < cd then cd = diff; closest = k + 1 end
+        end
+        for k = 0, STRIP_N - 1 do
+            local cell = cells[k + 1]
+            if cell then
+                local sel = (k + 1) == closest
+                cell:setStyleSheet(string.format(
+                    "background:%s;border:1px solid %s;border-radius:2px;",
+                    hsvToHex(h, s, levelV(k)),
+                    sel and "rgba(255,255,255,0.9)" or "rgba(0,0,0,0.3)"))
+            end
+        end
+    end
+
     local function apply(hex, fromInput)
         if not hex or hex == "" then return end
         value = hex
         setPreview(hex)
         if not fromInput then input:print(hex) end
+        refreshStrip()
         onChange(hex)
+    end
+
+    for k = 0, STRIP_N - 1 do
+        local cell = Geyser.Label:new({ name = prefix.."_b"..k,
+            x = k * (cellW + 2), y = stripY, width = cellW, height = STRIP_H }, cont)
+        cell:setToolTip("Brightness")
+        local kk = k
+        cell:setClickCallback(function()
+            local h, s = hexToHsv(value)
+            apply(hsvToHex(h, s, levelV(kk)), false)
+        end)
+        cells[k + 1] = cell
     end
 
     setPreview(value)
     input:print(value)
     input:setAction(function() apply(input:getText(), true) end)
-
-    local sy = INPUTH + 6
-    for i, hex in ipairs(swatches) do
-        local r, c = math.floor((i - 1) / perRow), (i - 1) % perRow
-        local s = Geyser.Label:new({ name = prefix.."_s"..i,
-            x = c * (SW + GAP), y = sy + r * (SW + GAP), width = SW, height = SW }, cont)
-        s:setStyleSheet(string.format(
-            "background:%s;border:1px solid rgba(255,255,255,0.18);border-radius:3px;", hex))
-        s:setToolTip(hex)
-        local captured = hex
-        s:setClickCallback(function() apply(captured, false) end)
-    end
-
-    -- ── Full-spectrum picker popup (click the preview swatch to open) ─────────
-    -- A wheel of discrete colour cells (hue around, saturation by ring) plus
-    -- greyscale and dark-shade strips. Each cell is an exact colour the user
-    -- clicks directly, so there's no in-label click-coordinate mapping to get
-    -- wrong; the hex field and presets remain as precise fallbacks.
-    local POPW = 200
-    local wheelCells, wheelPanel, wheelScrim = {}, nil, nil
-
-    local function closeWheel()
-        if not (wheelPanel or wheelScrim) then return end
-        for _, w in ipairs(wheelCells) do if w.delete then w:delete() else w:hide() end end
-        if wheelPanel then if wheelPanel.delete then wheelPanel:delete() else wheelPanel:hide() end end
-        if wheelScrim then if wheelScrim.delete then wheelScrim:delete() else wheelScrim:hide() end end
-        wheelCells, wheelPanel, wheelScrim = {}, nil, nil
-        if Mux.ui._closeActiveWheel == closeWheel then Mux.ui._closeActiveWheel = nil end
-    end
-
-    local function addCell(px, py, sz, hex)
-        local cellLbl = Geyser.Label:new({ name = prefix .. "_wc" .. (#wheelCells + 1),
-            x = math.floor(px), y = math.floor(py), width = math.floor(sz), height = math.floor(sz) }, wheelPanel)
-        cellLbl:setStyleSheet(string.format(
-            "background:%s;border:1px solid rgba(0,0,0,0.35);border-radius:2px;", hex))
-        cellLbl:setToolTip(hex)
-        cellLbl:show(); cellLbl:raise()
-        local captured = hex
-        cellLbl:setClickCallback(function() apply(captured, false); closeWheel() end)
-        wheelCells[#wheelCells + 1] = cellLbl
-    end
-
-    local function openWheel()
-        if Mux.ui._closeActiveWheel then Mux.ui._closeActiveWheel() end   -- only one open anywhere
-
-        local host = getScreenPos and Geyser or parent
-
-        -- Full-host scrim beneath the panel: a click anywhere outside the wheel
-        -- lands here and dismisses it, leaving the current colour unchanged.
-        wheelScrim = Geyser.Label:new({ name = prefix .. "_wscrim", x = 0, y = 0, width = "100%", height = "100%" }, host)
-        wheelScrim:setStyleSheet("background:rgba(0,0,0,0.01);border:none;")
-        wheelScrim:show(); wheelScrim:raise()
-        wheelScrim:setClickCallback(closeWheel)
-
-        local px, py
-        if getScreenPos then
-            local ox, oy = getScreenPos()
-            px, py = ox + x, oy + y + INPUTH + 4
-        else
-            px, py = x, y + INPUTH + 4          -- best-effort anchor within parent
-        end
-        local POPH = 220
-        wheelPanel = Geyser.Label:new({ name = prefix .. "_wheel",
-            x = math.floor(px), y = math.floor(py), width = POPW, height = POPH }, host)
-        wheelPanel:setStyleSheet("background:rgba(20,21,30,0.98);border:1px solid rgba(255,255,255,0.18);border-radius:6px;")
-        wheelPanel:show(); wheelPanel:raise()
-
-        local xb = Geyser.Label:new({ name = prefix .. "_wx", x = POPW - 20, y = 4, width = 16, height = 16 }, wheelPanel)
-        xb:setStyleSheet("background:transparent;color:rgba(210,210,225,0.85);qproperty-alignment:AlignCenter;font-size:12px;")
-        xb:echo("<center>✕</center>")
-        xb:show(); xb:raise()
-        xb:setClickCallback(closeWheel)
-        wheelCells[#wheelCells + 1] = xb
-
-        -- Hue × saturation wheel (value = 1). Sectors scale with radius so the disc
-        -- tiles evenly.
-        local cx, cy, cell = 100, 96, 14
-        addCell(cx - cell / 2, cy - cell / 2, cell, "#ffffff")
-        local rings = { { r = 20, s = 0.30 }, { r = 38, s = 0.55 }, { r = 56, s = 0.78 }, { r = 74, s = 1.0 } }
-        for _, ring in ipairs(rings) do
-            local sectors = math.max(6, math.floor(2 * math.pi * ring.r / (cell + 2)))
-            for j = 0, sectors - 1 do
-                local ang = (j / sectors) * 2 * math.pi
-                addCell(cx + ring.r * math.cos(ang) - cell / 2,
-                        cy + ring.r * math.sin(ang) - cell / 2,
-                        cell, hsvToHex((j / sectors) * 360, ring.s, 1))
-            end
-        end
-
-        -- Greyscale strip (black → white).
-        local gsteps, gw = 10, math.floor((POPW - 20) / 10)
-        for k = 0, gsteps - 1 do
-            local g = math.floor(k / (gsteps - 1) * 255 + 0.5)
-            addCell(10 + k * gw, 180, gw - 2, string.format("#%02x%02x%02x", g, g, g))
-        end
-
-        -- Dark/muted hues (value 0.5) for shades the bright wheel omits.
-        local dh, dw = 12, math.floor((POPW - 20) / 12)
-        for k = 0, dh - 1 do
-            addCell(10 + k * dw, 198, dw - 2, hsvToHex(k * (360 / dh), 0.85, 0.5))
-        end
-
-        Mux.ui._closeActiveWheel = closeWheel
-    end
-
-    preview:setToolTip("Click to open the colour wheel")
-    preview:setClickCallback(function()
-        if wheelPanel then closeWheel() else openWheel() end
-    end)
+    refreshStrip()
 
     return {
         container = cont,
@@ -370,7 +316,7 @@ function Mux.ui.colorField(parent, opts)
         read      = function() return value end,
         set       = function(hex) apply(hex, false) end,
         commit    = function() apply(input:getText(), true) end,
-        refresh   = function() input:print(value); setPreview(value) end,
+        refresh   = function() input:print(value); setPreview(value); refreshStrip() end,
     }
 end
 
