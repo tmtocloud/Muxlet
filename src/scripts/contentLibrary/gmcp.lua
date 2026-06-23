@@ -276,7 +276,7 @@ end
 local _inspectors   = {}
 local INS_DEFAULT   = "char.vitals"
 local INS_HDR_H     = 30
-local POLL_INTERVAL = 3
+local POLL_INTERVAL = 1
 local BODY_LIMIT    = 40    -- max items per type group per level
 local BROWSER_THRESH_ARR = 10   -- arrays with > this many items hidden in browser
 local BROWSER_THRESH_OBJ = 20   -- objects with > this many keys hidden in browser
@@ -802,8 +802,10 @@ insDrawBody = function(st)
     end
 
     -- Keep bodyContent tall enough to fill the ScrollBox viewport so the ScrollBox's
-    -- own background never shows through as a white box when content shrinks.
-    totalH = math.max(totalH, 1200)
+    -- own background never shows through. Use the actual live viewport height instead
+    -- of a magic number so the fill tracks the pane size correctly at any dimension.
+    local viewportH = (st.bodyScroll and st.bodyScroll:get_height()) or 0
+    totalH = math.max(totalH, viewportH > 0 and viewportH or 200)
     content:resize(st.contentWidth, totalH)
 end
 
@@ -901,19 +903,35 @@ end
 local function insBindEvent(st)
     if st.handlerId then killAnonymousEventHandler(st.handlerId); st.handlerId = nil end
     if st.pollTimer  then killTimer(st.pollTimer);                st.pollTimer  = nil end
-    if not st.path or st.path == "" then return end
+    if not st.path or st.path == "" or st.paused then return end
 
-    if st.paused then
-        local function poll() st.pollTimer = tempTimer(POLL_INTERVAL, poll) end
-        st.pollTimer = tempTimer(POLL_INTERVAL, poll)
-    else
-        local captured = st
-        st.handlerId = registerAnonymousEventHandler("gmcp." .. st.path, function()
-            if not captured.paused then
-                tempTimer(0.05, function() insDrawBody(captured) end)
-            end
+    local captured    = st
+    local pendingDraw = false
+
+    -- Coalesce back-to-back triggers (event + poll firing together) into one redraw.
+    local function scheduleDraw()
+        if pendingDraw then return end
+        pendingDraw = true
+        tempTimer(0.05, function()
+            pendingDraw = false
+            if captured and not captured.paused then insDrawBody(captured) end
         end)
     end
+
+    -- Exact-path event: fires immediately when the server sends this specific module.
+    st.handlerId = registerAnonymousEventHandler("gmcp." .. st.path, function()
+        if not captured.paused then scheduleDraw() end
+    end)
+
+    -- Poll fallback: catches updates to child paths (watching "Char" when the server
+    -- sends "Char.Vitals", "Char.Status" etc.) and any case mismatch between the
+    -- registered path name and the server's module name.
+    local function poll()
+        if not captured.pollTimer then return end  -- stopped by insRemove / insBindEvent
+        if not captured.paused then scheduleDraw() end
+        captured.pollTimer = tempTimer(POLL_INTERVAL, poll)
+    end
+    st.pollTimer = tempTimer(POLL_INTERVAL, poll)
 end
 
 -- ── Path change ───────────────────────────────────────────────────────────────
@@ -1329,11 +1347,26 @@ Mux.registerContent("gmcp_inspector", {
     singleton   = false,
     apply       = insApply,
     remove      = insRemove,
-    resize      = function(target)        -- re-fit body to the new container width
+    resize      = function(target)
         local st = _inspectors[target.id]
         if not (st and st.bodyScroll) then return end
         st.contentWidth = math.max(50, st.bodyScroll:get_width() - 17)
         insDrawBody(st)
+    end,
+    serialize = function(target)
+        local st = _inspectors[target.id]
+        if not st then return nil end
+        return { path = st.path, zoomIdx = st.zoomIdx }
+    end,
+    restore = function(target, data)
+        local st = _inspectors[target.id]
+        if not (st and data) then return end
+        if data.zoomIdx then
+            st.zoomIdx = math.max(1, math.min(#ZOOM, data.zoomIdx))
+        end
+        if data.path and data.path ~= "" then
+            insSetPath(st, data.path)
+        end
     end,
 })
 

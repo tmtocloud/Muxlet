@@ -621,6 +621,19 @@ local function buildMainPaneContent(targetTab, bgColor)
     }
 
     rows[#rows+1] = {
+        label      = "addPane",
+        desc       = "Show a + button in the titlebar (and right-click menu when compact) to add a new floating pane",
+        type       = "toggle",
+        trueLabel  = "Visible",
+        falseLabel = "Hidden",
+        readFn     = function() return mainPane.addable end,
+        writeFn    = function(v)
+            mainPane.addable = v
+            mainPane:_checkOverflow(true)
+        end,
+    }
+
+    rows[#rows+1] = {
         label      = "Splittable",
         desc       = "Allow this pane to be split horizontally or vertically",
         type       = "toggle",

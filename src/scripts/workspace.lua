@@ -256,6 +256,7 @@ local function serializeNode(obj)
     if not obj.insertable        then node.insertable         = false end
     if not obj.bordered          then node.bordered           = false end
     if obj.showSettingsInMenu    then node.showSettingsInMenu = true  end
+    if obj.mainConsoleHost and not obj.addable then node.addable = false end
     if obj.nameAlign and obj.nameAlign ~= "left" then node.nameAlign = obj.nameAlign end
     if obj._connectionAware then node.connectionAware  = true end
     if obj.condition then node.condition = obj.condition end
@@ -544,6 +545,7 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             actionFalse      = node.actionFalse or "mux.hideSelf",
         })
         p._paneSpace = paneSpace
+        if node.addable == false then p.addable = false end
         if node.id then paneMap[node.id] = p end
         if node.anchor then
             p._pendingAnchor   = node.anchor

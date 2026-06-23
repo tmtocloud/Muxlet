@@ -160,6 +160,13 @@ function Mux._applyContent(target, contentName, force)
         Mux._err("content '%s' apply error: %s", contentName, tostring(err))
     end
 
+    -- Geyser's hide() only covers children that existed at the moment hide() was
+    -- called; widgets born inside apply() above escape it and render at their raw
+    -- screen coordinates. Re-hiding the outer collapses those new children too.
+    if target._conditionHidden and target.outer then
+        target.outer:hide()
+    end
+
     -- Auto-fit: if apply set _autoFitHeight and the pane is floating, resize to fit content.
     if ok and target.floating and target._autoFitHeight and target.outer then
         local theme  = Mux.activeTheme and Mux.activeTheme() or {}

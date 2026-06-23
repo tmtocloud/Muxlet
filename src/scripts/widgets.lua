@@ -243,6 +243,12 @@ function Mux.ui.closeColorWheel()
     if Mux.ui._closeActiveWheel then Mux.ui._closeActiveWheel() end
 end
 
+-- Closes whichever dropdown overlay is currently open (only one can be), if any.
+-- Called by pane and tab teardown so a floating dropdown panel never outlives its host.
+function Mux.ui.closeDropdown()
+    if Mux.ui._activeDropdownClose then Mux.ui._activeDropdownClose() end
+end
+
 -- A compact colour control: a swatch, a hex input (Enter commits), a colour
 -- wheel popup (click the swatch) for choosing hue/saturation, and a brightness
 -- strip for fine-tuning light/dark. The strip shows the current hue/saturation
@@ -650,6 +656,9 @@ local function w_dropdown(row, c)
             end
             if c.getActive() == overlay then c.setActive(nil) end
             overlay = nil
+            if Mux.ui._activeDropdownClose == destroyOverlay then
+                Mux.ui._activeDropdownClose = nil
+            end
         end
     end
 
@@ -674,6 +683,10 @@ local function w_dropdown(row, c)
 
     local function openOverlay()
         if not c.getScreenPos then return end
+        -- Close any dropdown open in another form before creating this one.
+        if Mux.ui._activeDropdownClose and Mux.ui._activeDropdownClose ~= destroyOverlay then
+            Mux.ui._activeDropdownClose()
+        end
         local cx, cy  = c.getScreenPos()
         local panelW  = math.max(c.width, 150)
         local absBtnX = cx + c.x
@@ -709,6 +722,7 @@ local function w_dropdown(row, c)
             end)
         end
         c.setActive(overlay)
+        Mux.ui._activeDropdownClose = destroyOverlay
     end
 
     btn:setClickCallback(function()

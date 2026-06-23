@@ -589,6 +589,7 @@ function MuxSurface:removeTab(tabId)
         end
         tab._propertiesDialogs = nil
     end
+    if Mux.ui and Mux.ui.closeDropdown then Mux.ui.closeDropdown() end
     table.remove(self._tabs, idx)
     if self._isSubTabHost then self:_resizeSubTabBar() end
     Mux._freeId(tabId)

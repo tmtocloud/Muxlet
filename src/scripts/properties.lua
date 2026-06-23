@@ -14,6 +14,25 @@ local _propsEpoch    = 0     -- incremented each open to avoid widget name colli
 local _pendingPrefix = nil   -- set before _applyContent so apply() uses a unique prefix
 local _pendingActiveGroup = nil   -- group label to re-activate after a grouped rebuild
 local _pendingPropsConfirm = nil  -- {message, onProceed} for the close-confirm dialog
+local _propsRebuildInProgress = false  -- true while refreshPaneProperties re-opens the dialog
+
+-- Centered Apply button for use in form rows (Rules tab).  Registered once so
+-- the form builder can dispatch to it by type name "mux_action_btn".
+if not Mux.ui._widgets["mux_action_btn"] then
+    Mux.ui.registerWidget("mux_action_btn", function(row, c)
+        local dlgCss = Mux.dialogCss or {}
+        local btnW, btnH = 120, 28
+        local btnX = math.floor((c.formW - btnW) / 2)
+        local btnY = math.floor((c.rowH - btnH) / 2)
+        local btn = Geyser.Label:new({name=c.uid.."_btn", x=btnX, y=btnY, width=btnW, height=btnH}, row)
+        btn:setStyleSheet(dlgCss.buttonPrimary or c.css.applyBtn)
+        btn:echo("<center>" .. (c.spec.btnLabel or "Apply") .. "</center>")
+        if dlgCss.buttonPrimary and dlgCss.buttonPrimaryHover then
+            Mux.wireDialogButton(btn, dlgCss.buttonPrimary, dlgCss.buttonPrimaryHover)
+        end
+        btn:setClickCallback(function() c.onChange(true) end)
+    end, { rowHeight = 44, layout = "block" })
+end
 
 -- Forward declarations needed because paneRows/tabRows reference these before their definitions.
 local refreshPaneProperties
@@ -399,32 +418,46 @@ local function paneRows(pane)
         }
     end
     -- ── Rules (inline "show when" condition + reactive actions) ───────────────
-    -- The condition lives on the pane as an inline spec; the fields shown follow
-    -- the chosen type. Action pickers list every registered action (built-ins +
-    -- your own from Settings → Actions).
+    -- Condition parameters are buffered in pane._pendingCondition until Apply is
+    -- clicked, so selecting a type or editing a field does not call setCondition
+    -- immediately. This prevents the content area from reacting mid-edit.
+    -- "Always" is the only type that auto-applies on selection (no parameters).
+    if not pane._pendingCondition then
+        pane._pendingCondition = {}
+        if pane.condition then
+            for k, v in pairs(pane.condition) do pane._pendingCondition[k] = v end
+        end
+    end
+    local cspec = pane._pendingCondition
+    local ctype = cspec.type or "always"
+
+    local function setType(t)
+        pane._propsActiveGroup = "Rules"
+        cspec.type = (t == "always") and nil or t
+        if not cspec.type then
+            pane:setCondition(nil)
+            pane._pendingCondition = {}
+        end
+        refreshPaneProperties(pane)
+    end
+    local function setField(k, v)
+        cspec[k] = v
+    end
+    local function doApply()
+        if not cspec.type or cspec.type == "always" then
+            pane:setCondition(nil)
+        else
+            pane:setCondition(cspec)
+        end
+        pane._pendingCondition = {}
+        if pane.condition then
+            for k, v in pairs(pane.condition) do pane._pendingCondition[k] = v end
+        end
+    end
+
     local actOpts = {}
     for _, a in ipairs(Mux.listActions and Mux.listActions() or {}) do
         actOpts[#actOpts+1] = { value = a.id, label = a.name or a.id }
-    end
-
-    -- One mutable working spec that both readFn and writeFn share, so an applied
-    -- value is reflected immediately (no reopen needed). setCondition stores it.
-    local cspec = {}
-    if pane.condition then for k, vv in pairs(pane.condition) do cspec[k] = vv end end
-    local ctype = cspec.type or "always"
-    local function setType(t)
-        pane._propsActiveGroup = "Rules"   -- stay on Rules across the rebuild
-        if t == "always" then pane:setCondition(nil)
-        else
-            cspec.type = t
-            pane:setCondition(cspec)
-        end
-        refreshPaneProperties(pane)   -- rebuild so the type-specific fields appear
-    end
-    local function setField(k, v)
-        cspec.type = ctype
-        cspec[k] = v
-        pane:setCondition(cspec)
     end
 
     local rules = {}
@@ -436,18 +469,25 @@ local function paneRows(pane)
         writeFn = setType,
     }
     if ctype == "gmcp_exists" or ctype == "gmcp_equals" then
-        rules[#rules+1] = { label = "GMCP path", type = "text", desc = "dotted path under gmcp, e.g. room.info.players (a leading 'gmcp.' is fine)",
-            readFn = function() return cspec.path or "" end, writeFn = function(v) setField("path", v) end }
+        rules[#rules+1] = { label = "GMCP path", type = "text",
+            desc = "dotted path under gmcp, e.g. room.info.players (a leading 'gmcp.' is fine)",
+            readFn = function() return cspec.path or "" end,
+            writeFn = function(v) setField("path", v) end }
     end
     if ctype == "gmcp_equals" then
         rules[#rules+1] = { label = "Equals", type = "text", desc = "value to match (text)",
-            readFn = function() return cspec.value or "" end, writeFn = function(v) setField("value", v) end }
+            readFn = function() return cspec.value or "" end,
+            writeFn = function(v) setField("value", v) end }
     end
     if ctype == "event_fired" then
-        rules[#rules+1] = { label = "Event", type = "text", desc = "Mudlet event name, e.g. gmcp.char.vitals",
-            readFn = function() return cspec.event or "" end, writeFn = function(v) setField("event", v) end }
-        rules[#rules+1] = { label = "Seconds", type = "text", desc = "stays true this long after the event fires",
-            readFn = function() return tostring(cspec.seconds or 5) end, writeFn = function(v) setField("seconds", tonumber(v) or 5) end }
+        rules[#rules+1] = { label = "Event", type = "text",
+            desc = "Mudlet event name, e.g. gmcp.char.vitals",
+            readFn = function() return cspec.event or "" end,
+            writeFn = function(v) setField("event", v) end }
+        rules[#rules+1] = { label = "Seconds", type = "text",
+            desc = "stays true this long after the event fires",
+            readFn = function() return tostring(cspec.seconds or 5) end,
+            writeFn = function(v) setField("seconds", tonumber(v) or 5) end }
     end
     if ctype ~= "always" then
         rules[#rules+1] = { label = "When true", type = "array", display = "dropdown",
@@ -458,6 +498,11 @@ local function paneRows(pane)
             desc = "action when the condition becomes false (default: hide pane)",
             options = actOpts, readFn = function() return pane.actionFalse or "mux.hideSelf" end,
             writeFn = function(v) pane:setReactiveActions(nil, v) end }
+        rules[#rules+1] = {
+            btnLabel = "Apply",
+            type     = "mux_action_btn",
+            writeFn  = function() doApply() end,
+        }
     end
 
     -- Partition the flat rows above into the General / Behavior tabs by label.
@@ -763,6 +808,9 @@ local function openPropsDialog(title, rows, targetPane, posX, posY)
         if targetPane and targetPane._propertiesDialogs then
             targetPane._propertiesDialogs[d.id] = nil
         end
+        if targetPane and not _propsRebuildInProgress then
+            targetPane._pendingCondition = nil
+        end
     end
 
     -- Intercept close button: warn when closing would leave no UI path back to Properties.
@@ -852,7 +900,9 @@ end
 
 refreshPaneProperties = function(pane)
     local px, py = _captureDialogPos(pane)
+    _propsRebuildInProgress = true
     closeExistingPropsDialogs(pane)
+    _propsRebuildInProgress = false
     openPropsDialog(string.format("Properties: %s", pane.name), paneRows(pane), pane, px, py)
 end
 

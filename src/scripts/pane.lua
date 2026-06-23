@@ -202,12 +202,16 @@ function MuxPane:init(opts)
     -- workspace JSON and call sites need no changes. The field is kept as metadata for
     -- workspace serialisation and focus-fallback identification.
     self.mainConsoleHost = opts.mainConsoleHost or false
+    -- addable: shows the + / Add Floating Pane button. Auto-set for the main console
+    -- host pane; no other pane type sets this. Toggled by the Muxlet/Main setting.
+    self.addable = false
     if self.mainConsoleHost then
         self.closeable        = false
         self.convertible      = false
         self.consoleBorders   = true
         self.showSettingsInMenu = true
         self.contentable      = false
+        self.addable          = true
     end
 
     if self.consoleBorders then
@@ -694,6 +698,19 @@ function MuxPane:_buildTitlebar(theme)
         end,
     })
 
+    -- addPaneBtn: far-right slot (same offset as close; addable panes are not closeable).
+    -- Spawns a new floating pane. Only ever visible on the main console host pane.
+    self.addPaneBtn, self._addPaneBtnEcho = makeTitlebarButton({
+        suffix  = "_addpane",
+        x       = "-20",
+        icon    = "+",
+        tooltip = "Add floating pane",
+        onClick = function(event)
+            if event.button == "LeftButton" then Mux._addFloatingPane() end
+        end,
+    })
+    if not self.addable then self.addPaneBtn:hide() end
+
     -- minBtn: x="-42" = btnSize(18) + gap(2) + close offset(20) + margin(2).
     self.minBtn, self._minBtnEcho = makeTitlebarButton({
         suffix  = "_min",
@@ -961,13 +978,14 @@ function MuxPane:_layoutTitlebarButtons()
     local function rightAnchor(btn, offset)
         if btn then btn:move(Mux._fromEdgePx(nameSlot + offset), yPx) end
     end
-    rightAnchor(self.closeBtn,   20)
-    rightAnchor(self.minBtn,     42)
-    rightAnchor(self.zoomBtn,    70)
-    rightAnchor(self.swapBtn,    96)
-    rightAnchor(self.anchorBtn,  96)   -- floating-only; shares the (embedded-only) swap slot
-    rightAnchor(self.splitHBtn, 120)
-    rightAnchor(self.splitVBtn, 140)
+    rightAnchor(self.closeBtn,    20)
+    rightAnchor(self.addPaneBtn,  20)   -- shares the close slot; addable panes are not closeable
+    rightAnchor(self.minBtn,      42)
+    rightAnchor(self.zoomBtn,     70)
+    rightAnchor(self.swapBtn,     96)
+    rightAnchor(self.anchorBtn,   96)   -- floating-only; shares the (embedded-only) swap slot
+    rightAnchor(self.splitHBtn,  120)
+    rightAnchor(self.splitVBtn,  140)
 
     -- Properties + Content Library anchor to the LEFT (Content sits just right of
     -- Properties), trailing the name in left-align and parked far-left otherwise.
@@ -1096,13 +1114,14 @@ function MuxPane:_checkOverflow(force)
         -- Secondary action buttons collapse into the right-click context menu.
         -- closeBtn and minBtn are primary window controls; they stay visible so
         -- panes without a context menu (dialogs, settings) always have a close target.
-        if self.infoBtn    then self.infoBtn:hide()    end
-        if self.zoomBtn    then self.zoomBtn:hide()    end
-        if self.swapBtn    then self.swapBtn:hide()    end
-        if self.splitHBtn  then self.splitHBtn:hide()  end
-        if self.splitVBtn  then self.splitVBtn:hide()  end
-        if self.contentBtn then self.contentBtn:hide() end
-        if self.anchorBtn  then self.anchorBtn:hide()  end
+        if self.infoBtn     then self.infoBtn:hide()     end
+        if self.zoomBtn     then self.zoomBtn:hide()     end
+        if self.swapBtn     then self.swapBtn:hide()     end
+        if self.splitHBtn   then self.splitHBtn:hide()   end
+        if self.splitVBtn   then self.splitVBtn:hide()   end
+        if self.contentBtn  then self.contentBtn:hide()  end
+        if self.anchorBtn   then self.anchorBtn:hide()   end
+        if self.addPaneBtn  then self.addPaneBtn:hide()  end
     else
         -- Restore ideal visibility without recursing into _applyTitlebarVisibility.
         if self.infoBtn then
@@ -1112,6 +1131,9 @@ function MuxPane:_checkOverflow(force)
             self.closeBtn:hide()
         else
             self.closeBtn:show()
+        end
+        if self.addPaneBtn then
+            if self.addable then self.addPaneBtn:show() else self.addPaneBtn:hide() end
         end
         if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
         if self.zoomable and (self._split or self.floating or self._zoomed) then self.zoomBtn:show() else self.zoomBtn:hide() end
@@ -1159,6 +1181,9 @@ function MuxPane:_applyTitlebarVisibility()
             self.closeBtn:hide()
         else
             self.closeBtn:show()
+        end
+        if self.addPaneBtn then
+            if self.addable then self.addPaneBtn:show() else self.addPaneBtn:hide() end
         end
         if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
         if self.zoomable and (self._split or self.floating or self._zoomed) then self.zoomBtn:show() else self.zoomBtn:hide() end
@@ -1715,6 +1740,7 @@ function MuxPane:close()
         self._propertiesDialogs = nil
     end
     Mux._closeContextMenu()
+    if Mux.ui and Mux.ui.closeDropdown then Mux.ui.closeDropdown() end
     if self.onClose then self.onClose(self) end
 
     -- Call remove callback so content can tear down event handlers and widgets.

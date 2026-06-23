@@ -453,6 +453,51 @@ function Mux._showItemMenu(globalX, globalY, items)
     end
 end
 
+-- Cascade positioning for panes spawned by the Add Floating Pane button.
+-- Uses the same 30px diagonal step as dialog cascade so new panes and open
+-- dialogs don't pile on top of each other.
+local function _floatingPaneCascadePos(w, h, sw, sh)
+    local baseX = math.floor((sw - w) / 2)
+    local baseY = math.floor((sh - h) / 2)
+    local step, maxSteps = 30, 12
+    local taken = {}
+    for _, p in pairs(Mux._panes) do
+        if (p._dialog or p._addedPane) and p.outer then
+            local pw, ph = p.outer:get_width(), p.outer:get_height()
+            local pcx = math.floor((sw - pw) / 2)
+            local pcy = math.floor((sh - ph) / 2)
+            local idxX = math.floor((p.outer:get_x() - pcx) / step + 0.5)
+            local idxY = math.floor((p.outer:get_y() - pcy) / step + 0.5)
+            if idxX == idxY and idxX >= 0 then taken[idxX] = true end
+        end
+    end
+    local k = 0
+    while taken[k] and k < maxSteps do k = k + 1 end
+    local x = Mux._clamp(baseX + k * step, 0, math.max(0, sw - w))
+    local y = Mux._clamp(baseY + k * step, 0, math.max(0, sh - h))
+    return x, y
+end
+
+-- Spawns a new floating pane at 20%×20% of the screen, cascaded so multiple
+-- panes don't stack on top of each other. The created pane is identical to one
+-- produced by split + convert: all default capabilities, no special flags.
+function Mux._addFloatingPane()
+    local sw, sh = getMainWindowSize()
+    local w = math.floor(sw * 0.20)
+    local h = math.floor(sh * 0.20)
+    local x, y = _floatingPaneCascadePos(w, h, sw, sh)
+    local pane = MuxPane:new({
+        parent = Geyser,
+        x = x, y = y, width = w, height = h,
+        floatX = x, floatY = y, floatW = w, floatH = h,
+    })
+    pane._addedPane = true
+    pane:_detachToFloat()
+    Mux._raiseSeq = (Mux._raiseSeq or 0) + 1
+    pane._raiseSeq = Mux._raiseSeq
+    Mux.raiseFloatingPanes()
+end
+
 -- Overflow context menu: appears on titlebar right-click ONLY when the titlebar
 -- is too narrow to show all buttons (self._overflowMode == true).
 -- Items mirror what the buttons do, with the same show/hide conditions.
@@ -533,6 +578,12 @@ function Mux._showContextMenu(pane, globalX, globalY)
         items[#items+1] = { text="▥  Content Library…", fn=function()
             Mux._showContentLibrary(pane)
         end }
+    end
+
+    -- Add Floating Pane (mirrors addPaneBtn; shown here when compact/overflow hides the button).
+    if pane.addable then
+        if #items > 0 then items[#items+1] = { sep=true } end
+        items[#items+1] = { text="+  Add Floating Pane", fn=function() Mux._addFloatingPane() end }
     end
 
     if #items > 0 then
