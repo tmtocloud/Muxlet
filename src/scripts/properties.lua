@@ -249,6 +249,15 @@ local function paneRows(pane)
         end,
     }
     rows[#rows+1] = {
+        label      = "Bordered",
+        desc       = "Draw the pane's frame border. When off, the border is hidden and content fills edge-to-edge.",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.bordered ~= false end,
+        writeFn    = function(v) pane:setBordered(v) end,
+    }
+    rows[#rows+1] = {
         label      = "Movable",
         desc       = "Floating: drag titlebar to reposition. Embedded: required together with Convertible to drag-float",
         type       = "toggle",

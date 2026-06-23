@@ -249,6 +249,7 @@ local function serializeNode(obj)
     if not obj.zoomable          then node.zoomable           = false end
     if not obj.contextMenu       then node.contextMenu        = false end
     if not obj.insertable        then node.insertable         = false end
+    if not obj.bordered          then node.bordered           = false end
     if obj.showSettingsInMenu    then node.showSettingsInMenu = true  end
     if obj.nameAlign and obj.nameAlign ~= "left" then node.nameAlign = obj.nameAlign end
     if obj._connectionAware then node.connectionAware  = true end
@@ -520,6 +521,7 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             zoomable         = node.zoomable ~= false,
             contextMenu      = node.contextMenu ~= false,
             insertable       = node.insertable ~= false,
+            bordered         = node.bordered ~= false,
             anchorable       = node.anchorable ~= false,
             showSettingsInMenu = node.showSettingsInMenu or false,
             nameAlign        = node.nameAlign or "left",

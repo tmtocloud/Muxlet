@@ -124,21 +124,25 @@ function MuxPane:init(opts)
     end)
 
     local hdrH = self.titlebarVisible and tbH or rvH
+    -- bordered: when false, the pane has no visible frame border and content fills
+    -- edge-to-edge (the inset that normally reveals the 2px border collapses to 0).
+    self.bordered = opts.bordered ~= false
+    local inset   = self.bordered and borderInset or 0
     self.header = Geyser.Container:new({
         name   = self._gid .. "_header",
-        x      = tostring(borderInset) .. "px",
-        y      = tostring(borderInset) .. "px",
-        width  = Mux._fromEdgePx(borderInset),
+        x      = tostring(inset) .. "px",
+        y      = tostring(inset) .. "px",
+        width  = Mux._fromEdgePx(inset),
         height = Mux._toPx(hdrH),
     }, self.outer)
 
-    local contentY = borderInset + hdrH
+    local contentY = inset + hdrH
     self.content = Geyser.Container:new({
         name   = self._gid .. "_content",
-        x      = tostring(borderInset) .. "px",
+        x      = tostring(inset) .. "px",
         y      = Mux._toPx(contentY),
-        width  = Mux._fromEdgePx(borderInset),
-        height = Mux._fromEdgePx(borderInset),
+        width  = Mux._fromEdgePx(inset),
+        height = Mux._fromEdgePx(inset),
     }, self.outer)
     -- Geyser.Container has no setStyleSheet (no native Qt widget).
     -- Use a background Label as the first child (lowest z-order) for the fill.
@@ -1052,7 +1056,7 @@ end
 
 function MuxPane:_applyTitlebarVisibility()
     local theme = Mux.activeTheme()
-    local bi    = borderInset
+    local bi    = self.bordered and borderInset or 0
     if self.titlebarVisible then
         local h = theme.titlebarHeight
         self.header:resize(nil, Mux._toPx(h))
@@ -1116,6 +1120,19 @@ function MuxPane:_applyTitlebarVisibility()
         if self.contentBtn then self.contentBtn:hide() end
         if self.anchorBtn  then self.anchorBtn:hide()  end
         self.reveal:show()
+    end
+    -- The content container was just resized to span the reclaimed titlebar space;
+    -- force the inner content widget to re-fit (clearing the size cache so the
+    -- relayout actually runs), otherwise it keeps its old height and leaves a gap.
+    self._lastContentW, self._lastContentH = nil, nil
+    if Mux._relayoutContent then
+        Mux._relayoutContent(self)
+        tempTimer(0, function()
+            if self and self.content then
+                self._lastContentW, self._lastContentH = nil, nil
+                Mux._relayoutContent(self)
+            end
+        end)
     end
 end
 
@@ -1900,7 +1917,29 @@ end
 -- console underneath. overlay panes (dialogs) carry the gold accent border;
 -- regular panes are grey. This is the only frame style — there is no focus
 -- highlight.
+function MuxPane:setBordered(on)
+    self.bordered = (on ~= false)
+    if self.frame then self.frame:setStyleSheet(self:_baseFrameCss()) end
+    -- Update the left/right inset (the visible-state layout only adjusts y/height),
+    -- then re-run it for y/height and refit the content.
+    local inset = self.bordered and borderInset or 0
+    if self.header then
+        self.header:move(Mux._toPx(inset), nil)
+        self.header:resize(Mux._fromEdgePx(inset), nil)
+    end
+    if self.content then
+        self.content:move(Mux._toPx(inset), nil)
+        self.content:resize(Mux._fromEdgePx(inset), nil)
+    end
+    self:_applyTitlebarVisibility()
+    if self.outer then self.outer:reposition() end
+    Mux._scheduleAutoSave()
+end
+
 function MuxPane:_baseFrameCss()
+    if not self.bordered then
+        return "background-color: transparent; border: none;"
+    end
     if self.transparentFrame or self.consoleBorders then
         return [[
             background-color: transparent;
