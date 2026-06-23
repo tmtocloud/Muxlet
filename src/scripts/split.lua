@@ -306,6 +306,32 @@ function MuxSplit:_notifyReposition()
     if Mux._reanchorAll then Mux._reanchorAll() end   -- anchored floats track split drags
 end
 
+-- Re-weight this split's two slots so a condition-hidden child collapses to zero
+-- and its visible sibling reclaims the space (as if the hidden child were closed),
+-- without removing anything from the tree. Sets stretch factors only; the caller
+-- organizes the sub-tree once. The divider handle hides while a slot is collapsed.
+function MuxSplit:_applyConditionWeights()
+    local aVis = Mux._nodeVisible and Mux._nodeVisible(self.childA)
+    local bVis = Mux._nodeVisible and Mux._nodeVisible(self.childB)
+    local r    = self.ratio
+    local ra, rb
+    if aVis and bVis then     ra, rb = r, 1 - r
+    elseif aVis then          ra, rb = 1, 0
+    elseif bVis then          ra, rb = 0, 1
+    else                      ra, rb = r, 1 - r end   -- both hidden: parent zeroes this split
+    if self.direction == "v" then
+        self.slotA.v_stretch_factor = ra
+        self.slotB.v_stretch_factor = rb
+    else
+        self.slotA.h_stretch_factor = ra
+        self.slotB.h_stretch_factor = rb
+    end
+    if self.handle then
+        if aVis and bVis then if self.handle.show then self.handle:show() end
+        else                  if self.handle.hide then self.handle:hide() end end
+    end
+end
+
 function MuxSplit:_setRatio(r)
     self.ratio = r
     if self.direction == "v" then

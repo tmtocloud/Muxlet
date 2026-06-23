@@ -127,6 +127,14 @@ function MuxPane:init(opts)
     -- bordered: when false, the pane has no visible frame border and content fills
     -- edge-to-edge (the inset that normally reveals the 2px border collapses to 0).
     self.bordered = opts.bordered ~= false
+    -- Reactive condition (see conditional.lua): an inline spec table, or nil =
+    -- always visible. type "always" (or no type) is normalised to nil.
+    self.condition   = opts.condition
+    if self.condition and (not self.condition.type or self.condition.type == "always") then
+        self.condition = nil
+    end
+    self.actionTrue  = opts.actionTrue  or "mux.showSelf"
+    self.actionFalse = opts.actionFalse or "mux.hideSelf"
     local inset   = self.bordered and borderInset or 0
     self.header = Geyser.Container:new({
         name   = self._gid .. "_header",
@@ -241,10 +249,86 @@ function MuxPane:init(opts)
 
     Mux._panes[self.id] = self
     Mux._log("MuxPane created: %s", self.id)
+    -- Reactive condition: register as a user of its condition and evaluate once
+    -- (deferred a tick so the pane is fully built and any embedding has happened).
+    if self.condition then
+        if Mux._registerConditionUser then Mux._registerConditionUser(self) end
+        tempTimer(0, function()
+            if Mux._evaluatePaneCondition then Mux._evaluatePaneCondition(self) end
+        end)
+    end
     if _t0 then
         Mux._echo(string.format("\n<grey>[mux perf] pane create %s = %.1fms<reset>\n",
             self.id, (os.clock() - _t0) * 1000))
     end
+end
+
+-- ── Reactive condition (see conditional.lua) ──────────────────────────────────
+
+-- Set (or clear, with nil) the pane's inline condition spec, re-wiring it as a
+-- condition user and evaluating immediately. A spec with type "always" (or no
+-- type) clears the condition (always visible).
+function MuxPane:setCondition(spec)
+    if type(spec) == "table" and (not spec.type or spec.type == "always") then spec = nil end
+    if self.condition and Mux._deregisterConditionUser then
+        Mux._deregisterConditionUser(self, self.condition)
+    end
+    self.condition     = spec
+    self._conditionMet = nil   -- force the next evaluation to act
+    if spec then
+        if Mux._registerConditionUser then Mux._registerConditionUser(self) end
+        if Mux._evaluatePaneCondition then Mux._evaluatePaneCondition(self) end
+    else
+        -- No condition → ensure the pane is visible again.
+        if self._conditionHidden then self:_conditionShow() end
+    end
+    Mux._scheduleAutoSave()
+end
+
+function MuxPane:setReactiveActions(trueId, falseId)
+    self.actionTrue  = trueId  or self.actionTrue  or "mux.showSelf"
+    self.actionFalse = falseId or self.actionFalse or "mux.hideSelf"
+    Mux._scheduleAutoSave()
+end
+
+-- "Show self" reactive action: reveal the pane; if embedded, restore its slot's
+-- weight so the layout returns to normal.
+function MuxPane:_conditionShow()
+    if not self._conditionHidden and self.outer and self.outer.get_x then
+        -- already visible; still ensure layout is consistent
+    end
+    self._conditionHidden = false
+    self:show()
+    self:_reflowConditionLayout()
+end
+
+-- "Hide self" reactive action: hide the pane; if embedded, collapse its slot so the
+-- sibling reclaims the space (as if closed); if floating, just hide.
+function MuxPane:_conditionHide()
+    self._conditionHidden = true
+    self:hide()
+    self:_reflowConditionLayout()
+end
+
+-- Re-weight every ancestor split from this pane to the tree root so collapsed
+-- (condition-hidden) slots take zero space, then lay out the sub-tree once.
+function MuxPane:_reflowConditionLayout()
+    local s = self._split
+    if not s then return end           -- floating / root pane: hide/show is enough
+    local top = s
+    while s do
+        if s._applyConditionWeights then s:_applyConditionWeights() end
+        top = s
+        s = s._parentSplit
+    end
+    if top and top.box then
+        if Mux._suppressReposition then
+            Mux._suppressReposition(function() top.box:organize() end)
+        else
+            top.box:organize()
+        end
+    end
+    if Mux._notifyAllReposition then Mux._notifyAllReposition() end
 end
 
 function MuxPane:_buildTitlebar(theme)
@@ -1680,6 +1764,9 @@ function MuxPane:close()
     end
 
     if Mux._dropAnchorsReferencing then Mux._dropAnchorsReferencing(self.id) end
+    if self.condition and Mux._deregisterConditionUser then
+        Mux._deregisterConditionUser(self, self.condition)
+    end
     Mux._panes[self.id] = nil
     if self._gid then Mux._tabHosts[self._gid] = nil end
     if self._singletonKey and Mux._singletonDialogs then

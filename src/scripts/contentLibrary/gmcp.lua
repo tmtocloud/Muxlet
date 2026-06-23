@@ -62,144 +62,157 @@ end
 local DEPTH_LIMIT = 6
 local ENTRY_LIMIT = 40
 
-local function typeChip(val)
-    local t = type(val)
-    local label, bg
-    if t == "table" then
-        if isArrayLike(val) then label, bg = "array",  HC.chip_arr
-        else                     label, bg = "object", HC.chip_obj end
-    elseif t == "string"  then label, bg = "str",  "rgba(35,70,45,0.8)"
-    elseif t == "number"  then label, bg = "num",  "rgba(70,55,20,0.8)"
-    elseif t == "boolean" then
-        label = tostring(val)
-        bg    = val and "rgba(35,70,45,0.8)" or "rgba(70,30,30,0.8)"
-    else                       label, bg = t, "rgba(50,50,70,0.7)" end
+local FONT = "'Segoe UI','Helvetica Neue',Arial,sans-serif"
+
+-- A small type badge ("object · 3", "array · 5").
+local function kindBadge(kind, n)
+    local bg = (kind == "array") and "rgba(74,112,64,0.55)" or "rgba(61,96,128,0.55)"
     return string.format(
-        "<span style='background:%s;border-radius:2px;padding:0 4px;"
-        .. "color:rgba(210,220,235,0.60);font-size:8px;'>%s</span>",
-        bg, label)
+        "<span style='background:%s;color:rgba(225,233,247,0.88);font-size:9px;padding:1px 6px;'>%s&#160;&#183;&#160;%d</span>",
+        bg, kind, n)
 end
 
-local function leafHtml(val)
+-- A single scalar value, colour-coded by type. Booleans get a soft badge.
+local function valuePill(val)
     local t = type(val)
     if val == nil then
-        return string.format("<span style='color:%s;font-style:italic;'>nil</span>", HC.null)
+        return string.format("<span style='color:%s;font-style:italic;'>&#8212;</span>", HC.null)
     elseif t == "boolean" then
-        return string.format("<span style='color:%s;font-weight:600;'>%s</span>",
-            val and HC.bool_t or HC.bool_f, tostring(val))
+        local bg = val and "rgba(60,140,80,0.28)" or "rgba(170,70,70,0.28)"
+        return string.format(
+            "<span style='background:%s;color:%s;padding:1px 7px;font-weight:600;'>%s</span>",
+            bg, val and HC.bool_t or HC.bool_f, tostring(val))
     elseif t == "number" then
-        return string.format("<span style='color:%s;'>%s</span>", HC.num, tostring(val))
+        return string.format("<span style='color:%s;font-weight:600;'>%s</span>", HC.num, tostring(val))
     elseif t == "string" then
         local s = escHtml(val)
-        if #s > 80 then s = s:sub(1, 77) .. "&#8230;" end
-        return string.format("<span style='color:%s;'>&quot;%s&quot;</span>", HC.str, s)
-    else
-        return string.format(
-            "<span style='color:%s;font-style:italic;'>&lt;%s&gt;</span>", HC.null, t)
+        if #s > 90 then s = s:sub(1, 87) .. "&#8230;" end
+        return string.format("<span style='color:%s;'>%s</span>", HC.str, s)
     end
+    return string.format("<span style='color:%s;font-style:italic;'>&lt;%s&gt;</span>", HC.null, t)
 end
 
-local function buildViewerRows(tbl, depth)
-    local rows  = {}
-    local isArr = isArrayLike(tbl)
-    local keys  = {}
-    if isArr then
-        for i = 1, #tbl do keys[i] = i end
-    else
-        for k in pairs(tbl) do keys[#keys+1] = k end
-        table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+local renderValue   -- forward declaration (mutual recursion)
+
+-- An array of scalars renders inline as soft comma-separated chips.
+local function renderScalarArray(arr)
+    local parts = {}
+    local total = #arr
+    for i = 1, math.min(total, ENTRY_LIMIT) do
+        parts[#parts+1] = string.format(
+            "<span style='background:rgba(255,255,255,0.05);padding:1px 7px;'>%s</span>", valuePill(arr[i]))
     end
+    local sep  = "<span style='color:rgba(120,140,180,0.0);'>&#160;</span>"
+    local html = table.concat(parts, sep)
+    if total > ENTRY_LIMIT then
+        html = html .. string.format(
+            "<span style='color:%s;font-style:italic;font-size:10px;'>&#160;&#160;+%d more</span>",
+            HC.null, total - ENTRY_LIMIT)
+    end
+    return "<div style='line-height:20px;'>" .. html .. "</div>"
+end
+
+-- An array of objects renders as a stack of indexed cards.
+local function renderObjectArray(arr, depth)
+    local cards = {}
+    local total = #arr
+    for i = 1, math.min(total, ENTRY_LIMIT) do
+        cards[#cards+1] = string.format(
+            "<div style='background:rgba(255,255,255,0.028);border-left:2px solid %s;"
+            .. "padding:5px 9px;margin:0 0 4px 0;'>"
+            .. "<div style='color:rgba(125,155,195,0.85);font-size:9px;'>#%d</div>%s</div>",
+            HC.chip_obj, i, renderValue(arr[i], depth + 1))
+    end
+    if total > ENTRY_LIMIT then
+        cards[#cards+1] = string.format(
+            "<div style='color:%s;font-style:italic;font-size:10px;padding:2px 0;'>+%d more</div>",
+            HC.null, total - ENTRY_LIMIT)
+    end
+    return table.concat(cards)
+end
+
+-- An object renders as key / value rows; nested objects/arrays indent under their
+-- key with a coloured accent bar instead of console tree characters.
+local function renderObject(tbl, depth)
+    local keys = {}
+    for k in pairs(tbl) do keys[#keys+1] = k end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+
+    local rows  = {}
     local total = #keys
-    local shown = 0
-    for i, k in ipairs(keys) do
-        shown = shown + 1
-        if shown > ENTRY_LIMIT then
+    for i = 1, total do
+        if i > ENTRY_LIMIT then
             rows[#rows+1] = string.format(
-                "<tr><td colspan='3' style='color:%s;padding:2px 8px;"
-                .. "font-style:italic;font-size:8px;'>"
-                .. "&#8230; and %d more entries</td></tr>",
+                "<tr><td colspan='2' style='color:%s;font-style:italic;font-size:10px;padding:3px 0;'>+%d more</td></tr>",
                 HC.null, total - ENTRY_LIMIT)
             break
         end
-        local v      = tbl[k]
-        local vt     = type(v)
-        local isLast = (i == total) or (shown == ENTRY_LIMIT and total > ENTRY_LIMIT)
-        local conn   = isLast and "└" or "├"
-        local rowBg  = shown % 2 == 0 and "background:rgba(255,255,255,0.020);" or ""
-        local keyHtml
-        if isArr then
-            keyHtml = string.format(
-                "<span style='color:rgba(120,145,175,0.75);font-size:9px;'>[%d]</span>", k)
-        else
-            keyHtml = string.format(
-                "<span style='color:%s;font-weight:600;'>%s</span>",
-                HC.key, escHtml(tostring(k)))
-        end
-        if vt == "table" and depth < DEPTH_LIMIT then
-            local count = 0; for _ in pairs(v) do count = count + 1 end
-            rows[#rows+1] = string.format(
-                "<tr style='border-bottom:1px solid %s;%s'>"
-                .. "<td style='color:rgba(55,80,110,0.90);padding:3px 4px 3px 8px;"
-                ..   "white-space:nowrap;vertical-align:top;'>%s&#x2500;</td>"
-                .. "<td style='padding:3px 10px 3px 0;white-space:nowrap;vertical-align:top;'>%s</td>"
-                .. "<td style='vertical-align:top;padding:3px 0;'>%s&nbsp;"
-                ..   "<span style='color:%s;font-size:9px;'>%d</span></td></tr>",
-                HC.sep, rowBg, conn, keyHtml, typeChip(v), HC.null, count)
-            if count > 0 then
-                rows[#rows+1] = string.format(
-                    "<tr style='%s'><td></td>"
-                    .. "<td colspan='2' style='padding-left:10px;border-left:1px solid %s;'>"
-                    .. "<table style='border-collapse:collapse;width:100%%;'>%s</table></td></tr>",
-                    rowBg, HC.sep, buildViewerRows(v, depth + 1))
+        local k   = keys[i]
+        local v   = tbl[k]
+        local key = string.format(
+            "<span style='color:%s;font-weight:600;'>%s</span>", HC.key, escHtml(tostring(k)))
+        if type(v) == "table" then
+            local n    = tableCount(v)
+            local kind = isArrayLike(v) and "array" or "object"
+            local body = ""
+            if n > 0 and depth < DEPTH_LIMIT then
+                body = string.format(
+                    "<div style='margin-top:3px;border-left:2px solid %s;padding-left:11px;'>%s</div>",
+                    HC.sep, renderValue(v, depth + 1))
+            elseif n > 0 then
+                body = string.format("<div style='color:%s;font-style:italic;'>&#8230;</div>", HC.null)
             end
-        elseif vt == "table" then
             rows[#rows+1] = string.format(
-                "<tr style='border-bottom:1px solid %s;%s'>"
-                .. "<td style='color:rgba(55,80,110,0.90);padding:3px 4px 3px 8px;"
-                ..   "white-space:nowrap;'>%s&#x2500;</td>"
-                .. "<td style='padding:3px 10px 3px 0;white-space:nowrap;'>%s</td>"
-                .. "<td style='color:rgba(175,185,210,0.55);font-style:italic;padding:3px 0;'>"
-                ..   "{&#8230;}</td></tr>",
-                HC.sep, rowBg, conn, keyHtml)
+                "<tr><td valign='top' style='padding:5px 12px 5px 0;white-space:nowrap;'>%s</td>"
+                .. "<td valign='top' style='padding:5px 0;'>%s%s</td></tr>",
+                key, kindBadge(kind, n), body)
         else
             rows[#rows+1] = string.format(
-                "<tr style='border-bottom:1px solid %s;%s'>"
-                .. "<td style='color:rgba(55,80,110,0.90);padding:3px 4px 3px 8px;"
-                ..   "white-space:nowrap;vertical-align:top;'>%s&#x2500;</td>"
-                .. "<td style='padding:3px 10px 3px 0;white-space:nowrap;vertical-align:top;'>%s</td>"
-                .. "<td style='vertical-align:top;padding:3px 0;'>%s</td></tr>",
-                HC.sep, rowBg, conn, keyHtml, leafHtml(v))
+                "<tr><td valign='top' style='padding:5px 12px 5px 0;white-space:nowrap;'>%s</td>"
+                .. "<td valign='top' style='padding:5px 0;'>%s</td></tr>",
+                key, valuePill(v))
         end
     end
-    return table.concat(rows)
+    return "<table style='width:100%;border-collapse:collapse;'>" .. table.concat(rows) .. "</table>"
+end
+
+renderValue = function(val, depth)
+    if type(val) ~= "table" then return valuePill(val) end
+    if isArrayLike(val) then
+        local allScalar = true
+        for _, v in ipairs(val) do if type(v) == "table" then allScalar = false; break end end
+        return allScalar and renderScalarArray(val) or renderObjectArray(val, depth)
+    end
+    return renderObject(val, depth)
 end
 
 local function buildViewerHtml(path, val)
-    local chip = string.format(
-        "<div style='background:%s;border-radius:3px;padding:3px 9px;"
-        .. "margin-bottom:6px;color:%s;font-size:9px;font-weight:600;"
-        .. "border:1px solid rgba(80,120,170,0.25);display:inline-block;'>"
-        .. "gmcp.%s</div>", HC.chip_bg, HC.key, escHtml(path))
+    local count = type(val) == "table" and tableCount(val) or nil
+    local header = string.format(
+        "<div style='background:%s;padding:5px 11px;margin-bottom:9px;"
+        .. "border-left:3px solid %s;'>"
+        .. "<span style='color:rgba(150,170,205,0.65);font-size:10px;'>gmcp.</span>"
+        .. "<span style='color:%s;font-size:12px;font-weight:600;'>%s</span>%s</div>",
+        HC.chip_bg, HC.key, "#dbe4ff", escHtml(path),
+        count and ("&#160;&#160;" .. kindBadge(isArrayLike(val) and "array" or "object", count)) or "")
+
     local body
     if val == nil then
         body = string.format(
-            "<div style='color:%s;font-style:italic;padding:4px 2px;'>"
-            .. "No data at gmcp.%s&hellip;</div>", HC.null, escHtml(path))
+            "<div style='color:%s;font-style:italic;padding:6px 2px;'>Waiting for data at gmcp.%s&#8230;</div>",
+            HC.null, escHtml(path))
     elseif type(val) ~= "table" then
-        body = "<div style='padding:4px 2px;'>" .. leafHtml(val) .. "</div>"
+        body = "<div style='padding:4px 2px;'>" .. valuePill(val) .. "</div>"
+    elseif count == 0 then
+        body = string.format("<div style='color:%s;padding:6px 2px;'>(empty)</div>", HC.null)
     else
-        local count = 0; for _ in pairs(val) do count = count + 1 end
-        if count == 0 then
-            body = "<div style='color:rgba(175,185,210,0.55);padding:4px 2px;'>{}</div>"
-        else
-            body = string.format(
-                "<table style='border-collapse:collapse;width:100%%;'>%s</table>",
-                buildViewerRows(val, 0))
-        end
+        body = renderValue(val, 0)
     end
+
     return string.format(
-        "<div style='font-family:Consolas,Monaco,monospace;font-size:10px;"
-        .. "color:#c6d2ee;padding:7px 10px;'>%s%s</div>", chip, body)
+        "<div style='font-family:%s;font-size:11px;color:#cdd6ee;"
+        .. "background:%s;padding:11px 13px;'>%s%s</div>",
+        FONT, HC.body_bg, header, body)
 end
 
 function Mux.registerGmcpViewer(path)
@@ -228,7 +241,11 @@ function Mux.registerGmcpViewer(path)
                     "background-color:%s; border:none;", HC.body_bg))
             end
             target[lblKey] = lbl
-            local function refresh() lbl:echo(buildViewerHtml(path, gmcpGet(path))) end
+            local darkCss = string.format("background-color:%s; border:none;", HC.body_bg)
+            local function refresh()
+                lbl:setStyleSheet(darkCss)            -- re-assert so it can never be left white
+                lbl:echo(buildViewerHtml(path, gmcpGet(path)))
+            end
             refresh()
             target[handlerKey] = registerAnonymousEventHandler(eventName, refresh)
             if target.contentBg then target.contentBg:hide() end
@@ -244,7 +261,10 @@ function Mux.registerGmcpViewer(path)
         end,
         resize = function(target)
             local lbl = target["_gmcpvLbl_" .. safePath]
-            if lbl then lbl:echo(buildViewerHtml(path, gmcpGet(path))) end
+            if lbl then
+                lbl:setStyleSheet(string.format("background-color:%s; border:none;", HC.body_bg))
+                lbl:echo(buildViewerHtml(path, gmcpGet(path)))
+            end
         end,
     })
 end
@@ -1229,6 +1249,9 @@ local function insApply(target)
     local bodyScroll = Geyser.ScrollBox:new({
         name=pfx.."bsc", x=0, y=INS_HDR_H, width="100%", height=Mux._fromEdgePx(0),
     }, target.content)
+    if bodyScroll.setStyleSheet then
+        pcall(function() bodyScroll:setStyleSheet("background:rgba(10,12,22,0.97);border:none;") end)
+    end
 
     local contentW = math.max(50, bodyScroll:get_width() - 17)
     local bodyContent = Geyser.Label:new({

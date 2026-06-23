@@ -192,21 +192,47 @@ end
 
 -- ── Public opt-in API ─────────────────────────────────────────────────────────
 
+-- Connection awareness reframed as a condition/action pair (see conditional.lua):
+-- a connection-aware pane carries condition = "disconnected" with these two
+-- actions, so the engine shows the screen while not connected and hides it once
+-- connected. They're registered into the normal action registry so they're also
+-- selectable/overridable from the pane's Rules properties.
+if Mux.registerAction then
+    Mux.registerAction("mux.connScreen.show", {
+        name = "Show connection screen", group = "muxlet", icon = "⊘",
+        desc = "Cover the pane with the disconnected/connecting screen.",
+        run  = function(ctx)
+            if ctx and ctx.pane and ctx.pane._showConnScreen then
+                ctx.pane:_showConnScreen(Mux._connState)
+            end
+        end,
+    })
+    Mux.registerAction("mux.connScreen.hide", {
+        name = "Hide connection screen", group = "muxlet", icon = "✓",
+        desc = "Remove the connection screen and reveal the pane content.",
+        run  = function(ctx)
+            if ctx and ctx.pane and ctx.pane._hideConnScreen then ctx.pane:_hideConnScreen() end
+        end,
+    })
+end
+
 function MuxPane:setConnectionAware(enabled)
     enabled = (enabled ~= false)
     self._connectionAware = enabled
-    local key = "pane_" .. self.id
     if enabled then
-        Mux._connAware[key] = { kind = "pane", obj = self }
-        -- Suppress any visible tab-level screens — pane screen covers everything.
+        -- Suppress any tab-level screens — the pane screen covers everything.
         for _, tab in ipairs(self._tabs or {}) do
             if tab._connScreen then tab._connScreen:hide() end
         end
-        if Mux._connState ~= "connected" then
-            self:_showConnScreen(Mux._connState)
-        end
+        -- Drive the screen through the condition engine: visible while disconnected.
+        self.actionTrue    = "mux.connScreen.show"
+        self.actionFalse   = "mux.connScreen.hide"
+        self._conditionMet = nil
+        self:setCondition({ type = "disconnected" })
     else
-        Mux._connAware[key] = nil
+        self:setCondition(nil)
+        self.actionTrue  = "mux.showSelf"
+        self.actionFalse = "mux.hideSelf"
         self:_hideConnScreen()
         -- Restore tab-level screens for enrolled tabs if still disconnected.
         if Mux._connState ~= "connected" then
@@ -264,6 +290,11 @@ function Mux.setConnectionState(state)
             end
         end
     end
+    -- Connection-aware panes are now driven by the condition engine (an inline
+    -- "disconnected" spec). Re-evaluate on every state change so transitions that
+    -- arrive without a Mudlet event (e.g. the connect-ready delay timer) still
+    -- toggle their screens.
+    if Mux.evaluateAllPaneConditions then Mux.evaluateAllPaneConditions() end
 end
 
 -- ── Extend _activateTabObj for connection-aware tabs ─────────────────────────

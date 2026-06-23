@@ -12,6 +12,7 @@ local propsUi        = {}
 local pendingRows    = nil   -- rows passed to the registered apply function
 local _propsEpoch    = 0     -- incremented each open to avoid widget name collisions on ID reuse
 local _pendingPrefix = nil   -- set before _applyContent so apply() uses a unique prefix
+local _pendingActiveGroup = nil   -- group label to re-activate after a grouped rebuild
 local _pendingPropsConfirm = nil  -- {message, onProceed} for the close-confirm dialog
 
 -- Forward declarations needed because paneRows/tabRows reference these before their definitions.
@@ -63,7 +64,7 @@ if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets
         -- than a console, and the MiniConsole proved unreliable here, so this is a
         -- plain label: not selectable, but always renders the full value, live.
         local lbl = Geyser.Label:new(
-            { name = uid .. "_v", x = c.padL + 2, y = 28, width = availW - 4, height = 40 }, row)
+            { name = uid .. "_v", x = c.padL + 2, y = 28, width = availW - 4, height = 24 }, row)
         lbl:setStyleSheet("background: transparent; border: none;")
 
         local last
@@ -79,9 +80,8 @@ if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets
             local s = string.format(
                 "<div style='font-size:14px;line-height:19px;color:#dfe3f4;'>"
                 .. "<b>x</b> %s&nbsp;&nbsp;&nbsp;<b>y</b> %s&nbsp;&nbsp;&nbsp;"
-                .. "<b>w</b> %s&nbsp;&nbsp;&nbsp;<b>h</b> %s<br>"
-                .. "<span style='color:#7f8bbf;'>id %s</span></div>",
-                n(x), n(y), n(w), n(h), tostring(pane and pane.id or "—"))
+                .. "<b>w</b> %s&nbsp;&nbsp;&nbsp;<b>h</b> %s</div>",
+                n(x), n(y), n(w), n(h))
             if s == last then return end
             last = s
             lbl:echo(s)
@@ -89,7 +89,7 @@ if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets
         paint()
 
         return { refresh = paint }   -- live; repaints only on change
-    end, { rowHeight = 72, layout = "block" })
+    end, { rowHeight = 56, layout = "block" })
 end
 
 
@@ -398,7 +398,85 @@ local function paneRows(pane)
             end,
         }
     end
-    return rows
+    -- ── Rules (inline "show when" condition + reactive actions) ───────────────
+    -- The condition lives on the pane as an inline spec; the fields shown follow
+    -- the chosen type. Action pickers list every registered action (built-ins +
+    -- your own from Settings → Actions).
+    local actOpts = {}
+    for _, a in ipairs(Mux.listActions and Mux.listActions() or {}) do
+        actOpts[#actOpts+1] = { value = a.id, label = a.name or a.id }
+    end
+
+    -- One mutable working spec that both readFn and writeFn share, so an applied
+    -- value is reflected immediately (no reopen needed). setCondition stores it.
+    local cspec = {}
+    if pane.condition then for k, vv in pairs(pane.condition) do cspec[k] = vv end end
+    local ctype = cspec.type or "always"
+    local function setType(t)
+        pane._propsActiveGroup = "Rules"   -- stay on Rules across the rebuild
+        if t == "always" then pane:setCondition(nil)
+        else
+            cspec.type = t
+            pane:setCondition(cspec)
+        end
+        refreshPaneProperties(pane)   -- rebuild so the type-specific fields appear
+    end
+    local function setField(k, v)
+        cspec.type = ctype
+        cspec[k] = v
+        pane:setCondition(cspec)
+    end
+
+    local rules = {}
+    rules[#rules+1] = {
+        label = "Show when", type = "array", display = "dropdown",
+        desc  = "When this pane is visible. Always = no condition.",
+        options = Mux.conditionTypes,
+        readFn  = function() return ctype end,
+        writeFn = setType,
+    }
+    if ctype == "gmcp_exists" or ctype == "gmcp_equals" then
+        rules[#rules+1] = { label = "GMCP path", type = "text", desc = "dotted path under gmcp, e.g. room.info.players (a leading 'gmcp.' is fine)",
+            readFn = function() return cspec.path or "" end, writeFn = function(v) setField("path", v) end }
+    end
+    if ctype == "gmcp_equals" then
+        rules[#rules+1] = { label = "Equals", type = "text", desc = "value to match (text)",
+            readFn = function() return cspec.value or "" end, writeFn = function(v) setField("value", v) end }
+    end
+    if ctype == "event_fired" then
+        rules[#rules+1] = { label = "Event", type = "text", desc = "Mudlet event name, e.g. gmcp.char.vitals",
+            readFn = function() return cspec.event or "" end, writeFn = function(v) setField("event", v) end }
+        rules[#rules+1] = { label = "Seconds", type = "text", desc = "stays true this long after the event fires",
+            readFn = function() return tostring(cspec.seconds or 5) end, writeFn = function(v) setField("seconds", tonumber(v) or 5) end }
+    end
+    if ctype ~= "always" then
+        rules[#rules+1] = { label = "When true", type = "array", display = "dropdown",
+            desc = "action when the condition becomes true (default: show pane)",
+            options = actOpts, readFn = function() return pane.actionTrue or "mux.showSelf" end,
+            writeFn = function(v) pane:setReactiveActions(v, nil) end }
+        rules[#rules+1] = { label = "When false", type = "array", display = "dropdown",
+            desc = "action when the condition becomes false (default: hide pane)",
+            options = actOpts, readFn = function() return pane.actionFalse or "mux.hideSelf" end,
+            writeFn = function(v) pane:setReactiveActions(nil, v) end }
+    end
+
+    -- Partition the flat rows above into the General / Behavior tabs by label.
+    local GENERAL = {
+        ["Position & Size"] = true, ["Tabs"] = true, ["Renamable"] = true,
+        ["Name"] = true, ["Name Align"] = true, ["Width %"] = true,
+        ["Height %"] = true, ["Connection Awareness"] = true,
+    }
+    local general, behavior = {}, {}
+    for _, r in ipairs(rows) do
+        if GENERAL[r.label] then general[#general+1] = r else behavior[#behavior+1] = r end
+    end
+
+    return {
+        _grouped = true,
+        { label = "General",  rows = general, _geomTab = true },
+        { label = "Behavior", rows = behavior },
+        { label = "Rules",    rows = rules },
+    }
 end
 
 local function tabRows(host, tab)
@@ -553,19 +631,67 @@ Mux.registerContent("mux_properties", {
             target.contentBg:hide()
         end
         local rows = pendingRows
-        if not rows or #rows == 0 then return end
+        if not rows then return end
 
-        local contentH = Mux.ui.formHeight(rows)
-        local cw = target.content:get_width()
-        if cw < 50 then cw = 376 end
-
-        local prefix     = _pendingPrefix or ("mux_prop_" .. target.id)
-        _pendingPrefix   = nil
-
+        local prefix   = _pendingPrefix or ("mux_prop_" .. target.id)
+        _pendingPrefix = nil
         local theme    = Mux.activeTheme() or {}
         local uiTheme  = theme.ui or theme.settingsUi or {}
         local bg       = uiTheme.bg or "rgb(18,18,26)"
+        local cw       = target.content:get_width()
+        if cw < 50 then cw = 376 end
 
+        if rows._grouped then
+            -- Tabbed properties (e.g. panes: General | Behavior | Rules). Build the
+            -- dialog's own tab bar (regular pane styling) and a form per group.
+            if not target._tabsEnabled then
+                target.tabsLocked = true   -- NoAdd: no "+" on the properties tab bar
+                target:enableTabs({ noDefaultTab = true })
+            end
+            local groupTabs = {}
+            for gi, grp in ipairs(rows) do
+                local tab = target:addTab(grp.label)
+                tab.renamable = false; tab.closeable = false; tab.movable = false
+                tab.contentable = false; tab.contextMenu = false
+                groupTabs[grp.label] = tab
+                -- Hide this tab's empty-content placeholder (its text/background
+                -- would otherwise show through behind the form).
+                if tab.contentBg then tab.contentBg:echo(""); tab.contentBg:hide() end
+                local tcw = tab.content:get_width(); if tcw < 50 then tcw = cw end
+                local lbl = Geyser.Label:new({
+                    name = prefix .. "_g" .. gi, x = 0, y = 0, width = tcw, height = Mux.ui.formHeight(grp.rows),
+                }, tab.content)
+                lbl:setStyleSheet("background:" .. bg .. "; border:none;")
+                local fh = Mux.ui.buildForm(lbl, grp.rows, {
+                    width = tcw, prefix = prefix .. "_g" .. gi,
+                    getContentScreenPos = function() return tab.content:get_x(), tab.content:get_y() end,
+                })
+                -- The geom readout lives on the General tab; expose its handle for the live poll.
+                if grp._geomTab then target._propsFormHandle = fh end
+            end
+            -- Restore the previously-active tab (a rebuild from, e.g., changing the
+            -- Rules "Show when" type would otherwise snap back to the first tab).
+            if _pendingActiveGroup and groupTabs[_pendingActiveGroup]
+               and target._activeTabId ~= groupTabs[_pendingActiveGroup].id then
+                target:_activateTabObj(groupTabs[_pendingActiveGroup])
+            end
+            _pendingActiveGroup = nil
+            -- Hide every non-active tab's content (tab infra is added after the
+            -- dialog's own hide pass, so stale tabs would draw over the active one).
+            if target._tabs then
+                for _, t in ipairs(target._tabs) do
+                    if t.content then
+                        if t.id == target._activeTabId then t.content:show() else t.content:hide() end
+                    end
+                    if t.contentBg then t.contentBg:hide() end   -- after show: keep placeholder hidden
+                end
+            end
+            tempTimer(0, function() if target.outer then target.outer:reposition() end end)
+            return
+        end
+
+        if #rows == 0 then return end
+        local contentH = Mux.ui.formHeight(rows)
         local contentLbl = Geyser.Label:new({
             name=prefix.."_cl", x=0, y=0, width=cw, height=contentH,
         }, target.content)
@@ -591,10 +717,27 @@ Mux.registerContent("mux_properties", {
 local function openPropsDialog(title, rows, targetPane, posX, posY)
     _propsEpoch    = _propsEpoch + 1
     _pendingPrefix = "mux_prop_e" .. _propsEpoch
+    -- One-shot: a rebuild triggered from a specific tab asks to land back on it.
+    _pendingActiveGroup = targetPane and targetPane._propsActiveGroup or nil
+    if targetPane then targetPane._propsActiveGroup = nil end
 
     local dialogW = 380
 
-    local contentH = Mux.ui.formHeight(rows)
+    -- Grouped (tabbed) rows: height = tab bar + the tallest group's form. Flat
+    -- rows: height = the single form.
+    local contentH
+    if rows._grouped then
+        local theme   = Mux.activeTheme() or {}
+        local tabBarH = theme.tabBarHeight or 30
+        local maxH    = 0
+        for _, grp in ipairs(rows) do
+            local h = Mux.ui.formHeight(grp.rows)
+            if h > maxH then maxH = h end
+        end
+        contentH = tabBarH + maxH
+    else
+        contentH = Mux.ui.formHeight(rows)
+    end
 
     -- chrome: titlebar (22) + outer border top+bottom (4)
     local dialogH = contentH + 26

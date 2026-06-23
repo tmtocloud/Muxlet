@@ -227,6 +227,10 @@ local function serializeNode(obj)
         }
     end
     if obj.overlay then return nil end
+    -- Conditional/reactive panes are owned by the blueprint engine (conditional.lua),
+    -- which recreates them on demand from their condition. Don't persist them as
+    -- regular workspace panes or they'd be duplicated on the next load.
+    if obj._blueprintId then return nil end
 
     local node = {
         type            = "pane",
@@ -254,6 +258,9 @@ local function serializeNode(obj)
     if obj.showSettingsInMenu    then node.showSettingsInMenu = true  end
     if obj.nameAlign and obj.nameAlign ~= "left" then node.nameAlign = obj.nameAlign end
     if obj._connectionAware then node.connectionAware  = true end
+    if obj.condition then node.condition = obj.condition end
+    if obj.actionTrue  and obj.actionTrue  ~= "mux.showSelf" then node.actionTrue  = obj.actionTrue  end
+    if obj.actionFalse and obj.actionFalse ~= "mux.hideSelf" then node.actionFalse = obj.actionFalse end
     if obj._activeContent   then node.activeContent   = obj._activeContent end
     local cstate = Mux._serializeContent and Mux._serializeContent(obj)
     if cstate then node.contentState = cstate end
@@ -532,6 +539,9 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             floatH           = node.floatH or 300,
             splittable       = node.splittable ~= false,
             swappable        = node.swappable ~= false,
+            condition        = node.condition,
+            actionTrue       = node.actionTrue  or "mux.showSelf",
+            actionFalse      = node.actionFalse or "mux.hideSelf",
         })
         p._paneSpace = paneSpace
         if node.id then paneMap[node.id] = p end

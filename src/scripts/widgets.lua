@@ -136,11 +136,18 @@ local function deriveCss(uiTheme)
             "QLabel{background-color:%s;border:1px solid %s;border-radius:3px;color:%s;font-size:9px;"
             .. "font-weight:bold;}QLabel::hover{background-color:%s;border-color:rgba(120,180,255,200);color:%s;}",
             widgetBg, widgetBd, widgetFg, widgetHv, widgetFg),
+        dropdownBtn = string.format(
+            "QLabel{background:%s;color:%s;border:1px solid %s;border-radius:4px;}"
+            .. "QLabel::hover{background:%s;border:1px solid rgba(120,160,255,0.6);}",
+            widgetBg, widgetFg, widgetBd, widgetHv),
         dropdownPanel = string.format(
-            "background:%s;border:1px solid %s;border-radius:3px;", widgetBg, widgetBd),
+            "background:%s;border:1px solid rgba(120,160,255,0.45);border-radius:5px;", inputBg),
         dropdownOpt = string.format(
-            "QLabel{background:transparent;color:%s;font-size:10px;}"
-            .. "QLabel::hover{background:%s;}", widgetFg, widgetHv),
+            "QLabel{background:transparent;color:%s;font-size:12px;border-radius:3px;}"
+            .. "QLabel::hover{background:%s;color:#ffffff;}", widgetFg, widgetHv),
+        dropdownOptSel = string.format(
+            "QLabel{background:%s;color:#cfe0ff;font-size:12px;border-radius:3px;}"
+            .. "QLabel::hover{background:%s;color:#ffffff;}", widgetHv, widgetHv),
         resetIcon   = "QLabel{background:transparent;color:rgba(140,145,165,0.55);font-size:11px;"
             .. "border:1px solid rgba(140,145,165,0.25);border-radius:3px;}"
             .. "QLabel::hover{color:rgba(220,180,80,0.85);border-color:rgba(220,180,80,0.55);}",
@@ -629,9 +636,10 @@ local function w_dropdown(row, c)
     local choices = spec.options or {}
     local ovName  = uid .. "_dov"
     local overlay = nil
+    local optH    = math.max(c.height, 26)   -- roomier rows than the trigger button
 
     local btn = Geyser.Label:new({name=uid.."_dd", x=c.x, y=c.y, width=c.width, height=c.height}, row)
-    btn:setStyleSheet(css.widgetBtn)
+    btn:setStyleSheet(css.dropdownBtn or css.widgetBtn)
 
     local function destroyOverlay()
         if overlay then
@@ -653,33 +661,44 @@ local function w_dropdown(row, c)
         for _, ch in ipairs(choices) do
             if ch.value == v then dispLabel = ch.label; break end
         end
-        if #dispLabel > 16 then dispLabel = dispLabel:sub(1, 15) .. "…" end
+        if #dispLabel > 22 then dispLabel = dispLabel:sub(1, 21) .. "…" end
+        -- Label left, chevron pinned right (table keeps them apart at any width).
         btn:echo(string.format(
-            "<center><span style='color:%s;font-size:10px;'>%s ▾</span></center>",
-            css.widgetFg, dispLabel))
+            "<table width='100%%' cellpadding='0' cellspacing='0' style='font-size:12px;'><tr>"
+            .. "<td align='left' style='color:%s;padding-left:8px;'>%s</td>"
+            .. "<td align='right' style='color:%s;padding-right:8px;'>▾</td>"
+            .. "</tr></table>",
+            css.widgetFg, dispLabel, css.widgetFg))
     end
     refresh()
 
     local function openOverlay()
         if not c.getScreenPos then return end
         local cx, cy  = c.getScreenPos()
+        local panelW  = math.max(c.width, 150)
         local absBtnX = cx + c.x
-        local absBtnY = cy + capturedRowY + c.y + c.height
+        local absBtnY = cy + capturedRowY + c.y + c.height + 2
         overlay = Geyser.Label:new({
             name=ovName, x=absBtnX, y=absBtnY,
-            width=c.width, height=#choices * c.height,
+            width=panelW, height=#choices * optH + 6,
         }, Geyser)
         overlay:setStyleSheet(css.dropdownPanel)
         overlay:show(); overlay:raise()
+        local cur = spec.readFn()
         for ci, choice in ipairs(choices) do
+            local selected = (choice.value == cur)
             local opt = Geyser.Label:new({
-                name=ovName.."_o"..ci, x=0, y=(ci-1)*c.height,
-                width=c.width, height=c.height,
+                name=ovName.."_o"..ci, x=4, y=3 + (ci-1)*optH,
+                width=panelW-8, height=optH,
             }, overlay)
-            opt:setStyleSheet(css.dropdownOpt)
+            opt:setStyleSheet(selected and (css.dropdownOptSel or css.dropdownOpt) or css.dropdownOpt)
             opt:echo(string.format(
-                "<span style='color:%s;font-size:10px;'>  %s</span>",
-                css.widgetFg, tostring(choice.label)))
+                "<table width='100%%' cellpadding='0' cellspacing='0' style='font-size:12px;'><tr>"
+                .. "<td align='left' style='padding-left:8px;'>%s</td>"
+                .. "<td align='right' style='padding-right:8px;color:#cfe0ff;'>%s</td>"
+                .. "</tr></table>",
+                tostring(choice.label), selected and "✓" or ""))
+            opt:setCursor("PointingHand")
             opt:show(); opt:raise()
             local captured = choice
             if choice.desc and choice.desc ~= "" then opt:setToolTip(choice.desc, 6) end

@@ -72,7 +72,10 @@ function MuxTab:init(opts)
     local label = Geyser.Label:new({
         name = host._gid .. "_tl_" .. tabId,
         sizePolicy = "Dynamic",
-        x = "0%", y = "0%", width = "50%", height = "100%", fillBg = 1,
+        -- fillBg = 0: don't autofill a square palette background. The tab CSS
+        -- (background-color + border-radius) is the sole painter, so large radii
+        -- (Pill/Circle) clip cleanly instead of showing a square fill underneath.
+        x = "0%", y = "0%", width = "50%", height = "100%", fillBg = 0,
     }, host._tabBarBox)
     label:setStyleSheet(theme.tabInactiveCss or "")
     host:_echoTabLabel(label, self.name, false, false, theme)

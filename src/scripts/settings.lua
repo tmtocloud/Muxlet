@@ -482,11 +482,19 @@ local function tabHierarchy()
     end
     promote(root)
 
-    -- Muxlet gets a "Main" tab (main-pane properties) between General and Tabs.
+    -- Muxlet gets a "Main" tab (main-pane properties) plus an Actions management
+    -- tab. Conditions are set per-pane (Rules), so there is no Conditions tab.
+    -- Final order is forced below: General | Main | Tabs | Actions.
     local muxNode = root._map["Muxlet"]
     if muxNode then
         muxNode.children[#muxNode.children + 1] =
             { label = "Main", main = true, children = {}, _map = {} }
+        muxNode.children[#muxNode.children + 1] =
+            { label = "Actions", custom = "actions", children = {}, _map = {} }
+        local DESIRED = { General = 1, Main = 2, Tabs = 3, Actions = 4 }
+        for _, c in ipairs(muxNode.children) do
+            if DESIRED[c.label] then c.order = DESIRED[c.label] end
+        end
     end
 
     -- Order children by (order or 99) then label; "Muxlet" pinned first at top level.
@@ -738,6 +746,274 @@ end
 -- NOTE: settings.lua loads before content.lua, so Mux.registerContent doesn't
 -- exist yet here. The def is defined now (capturing the builder locals) and
 -- registered in the deferred muxletReady timer at the bottom of this file.
+-- ── Conditions / Actions management UIs (Settings → Conditions / Actions) ─────
+-- List every registered condition/action (code ones read-only, declarative ones
+-- editable) and create/delete declarative ones via a minimal builder that
+-- round-trips to rules.json (see conditional.lua).
+
+local function customRefresh(target)
+    if target and not target._closed then
+        target._lastContentW, target._lastContentH = nil, nil
+        Mux._applyContent(target, "mux_settings", true)
+    end
+end
+
+local function okBtnCss()
+    return "QLabel{ background:rgb(40,90,50); color:#bff0c0; border:1px solid rgba(90,180,90,0.5); border-radius:4px; font-weight:bold; }"
+        .. "QLabel::hover{ background:rgb(50,110,60); }"
+end
+local function delBtnCss()
+    return "QLabel{ background:rgb(70,30,30); color:#f0c0c0; border:1px solid rgba(180,90,90,0.5); border-radius:4px; font-weight:bold; }"
+        .. "QLabel::hover{ background:rgb(110,40,40); }"
+end
+
+local function neutralBtnCss()
+    return "QLabel{ background:rgb(45,45,66); color:#cdd2f0; border:1px solid rgba(255,255,255,0.18); border-radius:4px; }"
+        .. "QLabel::hover{ background:rgb(58,58,84); }"
+end
+
+-- Shared builder for the Conditions and Actions managers. `cfg` supplies the
+-- entity-specific bits (labels, registries, kind options, per-kind fields,
+-- create/delete, listing). Clicking a registered entry selects it: declarative
+-- entries load into the editable form, built-ins show read-only info. The Kind
+-- control is a segmented multi-button that rebuilds the form so only the fields
+-- relevant to the chosen kind are shown.
+local function buildEntityManager(target, bg, cfg)
+    if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
+    target._customEpoch = (target._customEpoch or 0) + 1
+    local gid   = target._gid .. "e" .. target._customEpoch
+    local P     = cfg.prefix                      -- widget-name prefix, e.g. "mux_condm"
+    local cw    = target.content:get_width();  if cw    < 50 then cw    = 420 end
+    local fullH = target.content:get_height(); if fullH < 50 then fullH = 360 end
+
+    local root = Geyser.Label:new({ name = P.."_"..gid, x=0, y=0, width=cw, height="100%" }, target.content)
+    root:setStyleSheet("background:"..bg.."; border:none;")
+
+    local selKey   = target[cfg.selField]                 -- selected name/id (or nil = new)
+    local declSpec = selKey and cfg.getDecl(selKey) or nil
+    local builtin  = selKey ~= nil and declSpec == nil and cfg.builtinInfo ~= nil
+
+    -- Bind the editor to a draft, reloading it from the spec when the selection
+    -- changes (so typing persists while a kind switch rebuilds the form).
+    local draft
+    if declSpec then
+        if target[cfg.draftForField] ~= selKey then
+            draft = cfg.draftFromSpec(declSpec)
+            target[cfg.draftField], target[cfg.draftForField] = draft, selKey
+        else
+            draft = target[cfg.draftField]
+        end
+    else
+        if target[cfg.draftForField] ~= false then
+            target[cfg.draftField]    = cfg.blankDraft()
+            target[cfg.draftForField] = false
+        end
+        draft = target[cfg.draftField]
+    end
+
+    local y = 6
+    local hdr = Geyser.Label:new({ name=P.."_h_"..gid, x=8, y=y, width=cw-16, height=22 }, root)
+    hdr:setStyleSheet("background:transparent;border:none;")
+    if declSpec then
+        hdr:echo("<span style='color:#cdd2f0;font-size:13px;font-weight:bold;'>Editing</span>"
+              .. "<span style='color:#7f8bbf;font-size:11px;'>  "..selKey.."</span>")
+    elseif builtin then
+        hdr:echo("<span style='color:#cdd2f0;font-size:13px;font-weight:bold;'>Viewing</span>"
+              .. "<span style='color:#7f8bbf;font-size:11px;'>  "..selKey.." (built-in)</span>")
+    else
+        hdr:echo("<span style='color:#cdd2f0;font-size:13px;font-weight:bold;'>New "..cfg.noun.."</span>")
+    end
+    y = y + 28
+
+    if builtin then
+        local info = Geyser.Label:new({ name=P.."_i_"..gid, x=8, y=y, width=cw-16, height=70 }, root)
+        info:setStyleSheet("background:rgba(255,255,255,0.04);border:none;border-radius:4px;")
+        info:echo(cfg.builtinInfo(selKey))
+        y = y + 78
+
+        local dupBtn = Geyser.Label:new({ name=P.."_dup_"..gid, x=8, y=y, width=150, height=28 }, root)
+        dupBtn:setStyleSheet(okBtnCss())
+        dupBtn:echo("<center><span style='font-size:12px;'>Duplicate as editable</span></center>")
+        dupBtn:setClickCallback(function()
+            target[cfg.draftField]    = cfg.duplicateDraft(selKey)
+            target[cfg.draftForField] = false        -- keep this seeded draft
+            target[cfg.selField]      = nil           -- drop into "new" editing mode
+            customRefresh(target)
+        end)
+        local newBtnB = Geyser.Label:new({ name=P.."_newb_"..gid, x=cw-92, y=y, width=84, height=28 }, root)
+        newBtnB:setStyleSheet(neutralBtnCss())
+        newBtnB:echo("<center><span style='font-size:11px;'>+ New</span></center>")
+        newBtnB:setClickCallback(function()
+            target[cfg.selField], target[cfg.draftForField] = nil, nil
+            target[cfg.draftField] = cfg.blankDraft()
+            customRefresh(target)
+        end)
+        y = y + 34
+    else
+        local specs = {}
+        specs[#specs+1] = (declSpec and cfg.idRowReadOnly or cfg.idRowEditable)(draft)
+        specs[#specs+1] = { key="label", label="Label", type="string", display="text",
+            readFn=function() return draft.label or "" end, writeFn=function(v) draft.label=v end }
+        specs[#specs+1] = { key="kind", label="Kind", type="segmentedControl",
+            widgetWidth=cfg.kindWidth or 200, options=cfg.kindOpts,
+            readFn=function() return draft.kind end,
+            writeFn=function(v) draft.kind=v; customRefresh(target) end }
+        for _, mk in ipairs(cfg.fieldsForKind(draft.kind)) do
+            specs[#specs+1] = mk(draft)
+        end
+
+        local fh = Mux.ui.formHeight(specs)
+        local formLbl = Geyser.Label:new({ name=P.."_f_"..gid, x=0, y=y, width=cw, height=fh }, root)
+        Mux.ui.buildForm(formLbl, specs, { width=cw, prefix=P.."_x_"..gid })
+        y = y + fh + 4
+
+        -- Plain-language explanation of the selected kind.
+        local helpTxt = cfg.kindHelp and cfg.kindHelp(draft.kind)
+        if helpTxt then
+            local help = Geyser.Label:new({ name=P.."_help_"..gid, x=8, y=y, width=cw-16, height=34 }, root)
+            help:setStyleSheet("background:transparent;border:none;")
+            help:echo("<span style='color:#8b93c4;font-size:10px;'>"..helpTxt.."</span>")
+            y = y + 38
+        end
+
+        local btnY = y
+        local saveBtn = Geyser.Label:new({ name=P.."_save_"..gid, x=8, y=btnY, width=110, height=28 }, root)
+        saveBtn:setStyleSheet(okBtnCss())
+        saveBtn:echo("<center><span style='font-size:12px;'>"..(declSpec and "Save" or ("+ Add "..cfg.noun)).."</span></center>")
+        saveBtn:setClickCallback(function()
+            local key, err = cfg.save(draft, declSpec and selKey or nil)
+            if key then
+                target[cfg.selField]      = key
+                target[cfg.draftForField] = nil
+                customRefresh(target)
+            elseif err then cecho("\n<red>[mux]<reset> "..tostring(err).."\n") end
+        end)
+        if declSpec then
+            local delBtn = Geyser.Label:new({ name=P.."_del_"..gid, x=124, y=btnY, width=90, height=28 }, root)
+            delBtn:setStyleSheet(delBtnCss())
+            delBtn:echo("<center><span style='font-size:12px;'>Delete</span></center>")
+            delBtn:setClickCallback(function()
+                cfg.del(selKey)
+                target[cfg.selField], target[cfg.draftForField] = nil, nil
+                customRefresh(target)
+            end)
+        end
+        local newBtn = Geyser.Label:new({ name=P.."_new_"..gid, x=cw-92, y=btnY, width=84, height=28 }, root)
+        newBtn:setStyleSheet(neutralBtnCss())
+        newBtn:echo("<center><span style='font-size:11px;'>New</span></center>")
+        newBtn:setClickCallback(function()
+            target[cfg.selField], target[cfg.draftForField] = nil, nil
+            target[cfg.draftField] = cfg.blankDraft()
+            customRefresh(target)
+        end)
+        y = btnY + 34
+    end
+
+    local sep = Geyser.Label:new({ name=P.."_s_"..gid, x=8, y=y, width=cw-16, height=18 }, root)
+    sep:setStyleSheet("background:transparent;border:none;")
+    sep:echo("<span style='color:#7f8bbf;font-size:11px;font-weight:bold;'>Registered  "
+          .. "<span style='color:#5a6090;'>(click to select)</span></span>")
+    y = y + 20
+
+    local entries = cfg.list()
+    if #entries == 0 then
+        local none = Geyser.Label:new({ name=P.."_none_"..gid, x=8, y=y, width=cw-16, height=20 }, root)
+        none:setStyleSheet("background:transparent;border:none;")
+        none:echo("<span style='color:#7f8bbf;font-size:11px;'>None yet.</span>")
+        return
+    end
+    local rowH   = 22
+    local bottom = fullH - 4
+    for i, e in ipairs(entries) do
+        local ry = y + (i - 1) * rowH
+        if ry + rowH - 2 > bottom then break end   -- clip rows that would overflow
+        local key      = e.key
+        local selected  = (key == selKey)
+        local row = Geyser.Label:new({ name=P.."_le"..i.."_"..gid, x=8, y=ry, width=cw-16, height=rowH-2 }, root)
+        row:setStyleSheet(selected
+            and "QLabel{background:rgba(120,140,220,0.22);border:none;border-radius:3px;} QLabel::hover{background:rgba(120,140,220,0.30);}"
+            or  "QLabel{background:rgba(255,255,255,0.03);border:none;border-radius:3px;} QLabel::hover{background:rgba(120,140,220,0.16);}")
+        row:setCursor("PointingHand")
+        row:echo(string.format(
+            "<span style='color:%s;font-size:11px;'>&nbsp;%s</span>"
+            .. "<span style='color:#7f8bbf;font-size:10px;'>&nbsp;&nbsp;%s</span>"
+            .. "<span style='color:%s;font-size:10px;'>&nbsp;&nbsp;%s</span>",
+            selected and "#cfe0ff" or "#e0e3f4", key, e.label or "",
+            e.editable and "#c9b06a" or "#5a6090", e.editable and "editable" or "built-in"))
+        row:setClickCallback(function()
+            target[cfg.selField] = key; target[cfg.draftForField] = nil; customRefresh(target)
+        end)
+    end
+end
+
+local function buildActionsManager(target, bg)
+    buildEntityManager(target, bg, {
+        prefix = "mux_actm", noun = "action",
+        selField = "_actSel", draftField = "_actDraft", draftForField = "_actDraftFor",
+        getDecl = function(id) return Mux.getDeclarativeAction(id) end,
+        blankDraft = function() return { kind="send" } end,
+        draftFromSpec = function(s) return { id=s.id, label=s.label, kind=s.kind, command=s.command, event=s.event, code=s.code } end,
+        kindWidth = 220,
+        kindOpts = {
+            { value="send",  label="send" },
+            { value="raise", label="raise" },
+            { value="lua",   label="run Lua" },
+        },
+        idRowEditable = function(draft) return { key="id", label="ID", type="string", display="text",
+            readFn=function() return draft.id or "" end, writeFn=function(v) draft.id=v end } end,
+        idRowReadOnly = function(draft) return { key="id", label="ID", type="readOnly",
+            readFn=function() return draft.id or "" end } end,
+        fieldsForKind = function(kind)
+            local f = {}
+            if kind=="send" then
+                f[#f+1] = function(draft) return { key="command", label="Command", type="string", display="text",
+                    desc="text sent to the game", readFn=function() return draft.command or "" end, writeFn=function(v) draft.command=v end } end
+            end
+            if kind=="raise" then
+                f[#f+1] = function(draft) return { key="event", label="Event", type="string", display="text",
+                    desc="Mudlet event to raise", readFn=function() return draft.event or "" end, writeFn=function(v) draft.event=v end } end
+            end
+            if kind=="lua" then
+                f[#f+1] = function(draft) return { key="code", label="Lua", type="string", display="text",
+                    desc="Lua run when fired; the action context is the vararg, e.g. local ctx=... (ctx.pane)",
+                    readFn=function() return draft.code or "" end, writeFn=function(v) draft.code=v end } end
+            end
+            return f
+        end,
+        kindHelp = function(kind)
+            if kind == "send" then
+                return "Sends the command text to the game, exactly as if you typed it at the input line."
+            elseif kind == "raise" then
+                return "Raises a named Mudlet event. Other scripts — or a condition's <i>event fired</i> test — can react to it."
+            elseif kind == "lua" then
+                return "Runs the Lua you enter. It receives the action context as its vararg — write <i>local ctx = ...</i> to read <i>ctx.pane</i>. Call your own functions for anything longer."
+            end
+            return nil
+        end,
+        save = function(draft, editingKey)
+            local id = editingKey or ((draft.id or ""):gsub("%s+",""))
+            if id == "" then return nil, "Action needs an id." end
+            local ok, err = pcall(Mux.createDeclarativeAction, {
+                id=id, label=(draft.label and draft.label~="") and draft.label or id, kind=draft.kind,
+                command=draft.command, event=draft.event, code=draft.code })
+            if ok then cecho(string.format("\n<green>[mux]<reset> Action '<cyan>%s<reset>' saved.\n", id)); return id end
+            return nil, err
+        end,
+        del = function(id) Mux.deleteDeclarativeAction(id) end,
+        list = function()
+            -- Only YOUR actions are managed here. Built-ins still appear in the
+            -- action pickers (pane Rules, buttons) but aren't listed/edited here.
+            local out = {}
+            for _, a in ipairs(Mux.listActions and Mux.listActions() or {}) do
+                if Mux._declActions and Mux._declActions[a.id] then
+                    out[#out+1] = { key=a.id, label=a.name, editable=true }
+                end
+            end
+            return out
+        end,
+    })
+end
+
 local muxSettingsContentDef = {
     name     = "Settings",
     internal = true,
@@ -747,6 +1023,8 @@ local muxSettingsContentDef = {
         local bg    = ui.bg or "rgb(18, 18, 26)"
         if target._settingsMain then
             buildMainPaneContent(target, bg)
+        elseif target._settingsCustom == "actions" then
+            buildActionsManager(target, bg)
         elseif target._settingsNs then
             buildSettingsContent(target, target._settingsNs, bg)
         end
@@ -777,6 +1055,11 @@ local function buildWindow()
         if node.ns then
             local chrome = 2*bi + titleH_pre + depth*tabH_pre + footerPad
             local needed = measureNsHeight(node.ns) + chrome
+            if needed > maxNeeded then maxNeeded = needed end
+        elseif node.custom or node.main then
+            -- Managers (Actions/Conditions) and Main need a workable height.
+            local chrome = 2*bi + titleH_pre + depth*tabH_pre + footerPad
+            local needed = 440 + chrome
             if needed > maxNeeded then maxNeeded = needed end
         end
         for _, child in ipairs(node.children or {}) do
@@ -841,8 +1124,10 @@ local function buildWindow()
 
     -- Build tabs from the hierarchy (already computed above for height pre-sizing).
     -- Recurses for arbitrary depth (e.g. Muxlet → Tabs → Style / Colors).
-    local subTabBarCss = Mux.activeTheme().subTabBarCss
-        or "background-color:rgba(10,12,22,230);border-top:1px solid rgba(255,255,255,0.07);"
+    -- Settings tab bars use the SAME styling as a regular pane's tab bar (the dark
+    -- background with the thin grey line), not a translucent sub-bar.
+    local subTabBarCss = Mux.activeTheme().tabBarCss
+        or "background-color: #000000; border: none; border-bottom: 1px solid rgba(255,255,255,0.10);"
     local function buildNode(parent, node)
         local tab = parent:addTab(node.label)
         tab.renamable   = false
@@ -858,6 +1143,9 @@ local function buildWindow()
             for _, child in ipairs(node.children) do buildNode(tab, child) end
         elseif node.main then
             tab._settingsMain = true
+            Mux._applyContent(tab, "mux_settings")
+        elseif node.custom then
+            tab._settingsCustom = node.custom
             Mux._applyContent(tab, "mux_settings")
         elseif node.ns then
             -- tab._settingsNs already set above.
@@ -1148,9 +1436,11 @@ function Mux._applyTabStyle()
     theme.tabHoverTextColor    = htc
     theme.tabFontSize          = fs
     theme.tabBarHeight         = h
-    -- Tab bar's own chrome is always black when shown, transparent when hidden.
-    theme.tabBarCss = barBg and "background-color: #000000; border: none;"
-        or "background-color: transparent; border: none;"
+    -- Tab bar's own chrome: black background plus the thin grey separator line
+    -- when shown; fully transparent (no line) when the toggle is off.
+    theme.tabBarCss = barBg
+        and "background-color: #000000; border: none; border-bottom: 1px solid rgba(255,255,255,0.10);"
+        or  "background-color: transparent; border: none;"
 
     for _, host in pairs(Mux._tabHosts or {}) do
         if host._tabsEnabled then

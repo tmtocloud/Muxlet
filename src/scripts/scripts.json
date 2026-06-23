@@ -18,6 +18,8 @@
   {"name": "workspace"},
   {"name": "contentLibrary"},
   {"name": "properties"},
+  {"name": "conditional"},
+  {"name": "blueprintui"},
   {"name": "devmode"},
   {"name": "themes"}
 ]
