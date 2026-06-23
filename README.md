@@ -1,6 +1,6 @@
 # Muxlet
 
-A game-agnostic tiling window manager for [Mudlet](https://mudlet.org). Split the Mudlet window into panes, stack views in tabs, save named workspaces, and attach custom content widgets to any pane or tab.
+A game-agnostic tiling window manager for [Mudlet](https://mudlet.org). Split the Mudlet window into panes, stack views in tabs, save named workspaces, attach custom content widgets to any pane or tab, and show or hide panes reactively based on game state.
 
 ---
 
@@ -119,6 +119,8 @@ mux settings set mux.auto_start true    — start automatically on every profile
 mux settings set mux.theme light        — switch to light theme persistently
 ```
 
+The Muxlet section of the settings window is organised as **General · Main · Tabs · Actions**; the Actions tab is where users create and edit their own actions (see *Actions*).
+
 #### Recovery
 
 If a pane's titlebar or Properties access has been hidden, these commands bring them back.
@@ -161,6 +163,58 @@ Mux.gmcpInspect("char.vitals")
 -- Point only the inspector in a specific pane
 Mux.gmcpInspect("room.info", "sidebar")
 ```
+
+---
+
+### Pane Properties
+
+Click the **≡** button on a pane's titlebar (or right-click → Properties) to open its
+properties dialog. The dialog is organised into three tabs:
+
+- **General** — Position & Size (a live, copyable read-out), Tabs, Renamable, Name,
+  Name Align, Width %, Height %, and Connection Awareness.
+- **Behavior** — Titlebar, Properties Button, Minimizable, Closeable, Splittable,
+  Swappable, Zoomable, Convertible, Anchorable, Bordered, Movable, Contentable,
+  Resizable. Each is a toggle that turns the matching capability on or off.
+- **Rules** — when the pane is visible (see *Reactive Panes* below).
+
+Tabs and tab-hosts have their own, simpler properties dialog.
+
+---
+
+### Reactive Panes (show / hide by condition)
+
+A pane is visible by default. Give it a **condition** and Muxlet shows or hides it as
+the condition changes — no scripting required. Open the pane's properties, go to
+**Rules**, and choose a **Show when** type. Only the fields that type needs appear:
+
+| Show when      | Fields            | Visible while…                                          |
+|----------------|-------------------|---------------------------------------------------------|
+| Always         | —                 | always (the default; clears the condition)              |
+| GMCP has value | GMCP path         | the value at the path exists and is non-empty           |
+| GMCP equals    | GMCP path, Equals | the value at the path equals the given text             |
+| Event fired    | Event, Seconds    | for *Seconds* after the named Mudlet event last fired   |
+| Connected      | —                 | the session is connected to the game                    |
+| Disconnected   | —                 | the session is not (fully) connected                    |
+
+For the GMCP types, the **path** is dotted and resolved relative to the `gmcp` table
+— for example `room.info.players` or `char.ship.cargo`. A leading `gmcp.` is
+tolerated, so pasting `gmcp.room.info.players` straight from the command line also
+works.
+
+Two optional action pickers — **When true** and **When false** — choose what runs on
+each edge. They default to showing and hiding the pane; pick any registered action
+instead (see *Actions*), for example to flash a different pane or send a command.
+
+How the hide works depends on the pane:
+
+- **Floating** panes simply hide and reappear.
+- **Embedded** panes collapse to zero width/height and their split sibling reclaims
+  the space — exactly as if the pane were closed — then snap back into place when the
+  condition turns true again. Nothing is removed from the layout.
+
+A pane's condition and any non-default actions are saved with the workspace and
+restored automatically.
 
 ---
 
@@ -295,6 +349,9 @@ All behavioral flags default to `true` (the permissive state). Set a flag to `fa
 | `titlebarHideable` | bool | `true` | Allow the titlebar to be hidden via toggle. Set to `false` to keep it permanently visible. |
 | `renamable` | bool | `true` | Allow renaming via UI or command. |
 | `connectionAware` | bool | `false` | Show a ⊘ / ⟳ overlay while the client is disconnected or connecting. Covers the full content area including any tab bar. See **Connection Awareness** below. |
+| `condition` | table | — | Inline reactive condition that shows/hides the pane, e.g. `{ type = "gmcp_exists", path = "char.ship.cargo" }`. Omit (or `{ type = "always" }`) for always-visible. See **Reactive Panes & Conditions**. |
+| `actionTrue` | string | `"mux.showSelf"` | Action id run when the condition becomes true. |
+| `actionFalse` | string | `"mux.hideSelf"` | Action id run when the condition becomes false. |
 | `zoomable` | bool | `true` | Show a zoom button in the titlebar. |
 | `splittable` | bool | `true` | Show split buttons in the titlebar. |
 | `swappable` | bool | `true` | Show the swap button when the pane is part of a split. |
@@ -541,7 +598,7 @@ Use it in a workspace definition like any other content type:
 
 #### Built-in: Fixed-path GMCP viewer
 
-`Mux.registerGmcpViewer(path)` creates a simple HTML content type that pretty-prints a single GMCP path and auto-refreshes on the corresponding event. Use this when you want a dedicated pane that always shows one specific path:
+`Mux.registerGmcpViewer(path)` creates a content type that renders a single GMCP path as a clean, card-style read-out — a header band with the path and a type/count badge, colour-coded values, and nested objects indented under accent bars — and auto-refreshes on the corresponding event. Use this when you want a dedicated pane that always shows one specific path:
 
 ```lua
 Mux.registerGmcpViewer("char.vitals")   -- → content id "gmcp:char.vitals"
@@ -566,7 +623,7 @@ Use the resulting id in a workspace definition:
 
 ### Actions
 
-Actions are named, serialisable units of behaviour. They decouple *what a control does* from *the control itself*, so a button (or any future UI — context-menu entries, command palettes) can reference behaviour by a stable string id rather than capturing a closure. Register from any package:
+Actions are named, serialisable units of behaviour. They decouple *what a control does* from *the control itself*, so a button, a pane's show/hide reaction, or any future UI can reference behaviour by a stable string id rather than capturing a closure. Register from any package:
 
 ```lua
 Mux.registerAction("mypkg.heal", {
@@ -574,9 +631,14 @@ Mux.registerAction("mypkg.heal", {
     group = "Combat",                     -- grouping label
     icon  = "✚",                          -- optional glyph
     desc  = "Cast the strongest heal you can afford.",  -- shown on hover
-    run   = function(ctx) send("cast 'heal'") end,      -- ctx = { source = ... }
+    run   = function(ctx) send("cast 'heal'") end,
 })
 ```
+
+`run` receives a context table. For a button it carries `{ source = ... }`; when an
+action runs as a pane's reactive edge (see *Reactive Panes*) it carries
+`{ pane = <pane>, met = true|false }`, so an action can act on the pane that
+triggered it.
 
 Registry API:
 
@@ -587,7 +649,107 @@ Mux.getAction(id)    -- → the definition, or nil
 Mux.unregisterAction(id)
 ```
 
-Muxlet ships a few generic built-ins (`mux.reconnect`, `mux.clearConsole`, `mux.demoEcho`) so the action picker is populated out of the box. Anything you register appears automatically in the Button Grid's action dropdown, with `desc` shown on hover.
+Built-in actions, always available in the pickers:
+
+| ID                    | Does                                                   |
+|-----------------------|--------------------------------------------------------|
+| `mux.showSelf`        | Show the pane (default *When true* for a condition)    |
+| `mux.hideSelf`        | Hide the pane (default *When false* for a condition)   |
+| `mux.connScreen.show` | Cover the pane with the disconnected/connecting screen |
+| `mux.connScreen.hide` | Remove the connection screen                           |
+| `mux.reconnect`       | Reconnect the session                                  |
+| `mux.clearConsole`    | Clear the main console                                 |
+| `mux.demoEcho`        | Echo a demo line (sample action)                       |
+
+Anything you register also appears automatically in the Button Grid's action
+dropdown and the pane Rules action pickers, with `desc` shown on hover.
+
+#### User-defined actions (Settings → Actions)
+
+End users can build their own actions from **Settings → Actions** without scripting.
+Each has an id, a label, and a **kind** (a segmented toggle that swaps the fields
+shown):
+
+| Kind    | Field   | Does                                                          |
+|---------|---------|--------------------------------------------------------------|
+| send    | Command | sends the text to the game, as if typed at the input line    |
+| raise   | Event   | raises a named Mudlet event                                  |
+| run Lua | Lua     | runs the snippet; it receives the action context as its vararg|
+
+For the Lua kind, write `local ctx = ...` at the top of the snippet to read
+`ctx.pane`. Click an existing action to edit it, or **+ New** to start one; only your
+own actions are listed here (built-ins live in the pickers, not the manager).
+
+User actions are data and persist to `Muxlet_persistent/rules.json`, re-registered on
+load. The same store is reachable from script:
+
+```lua
+Mux.createDeclarativeAction({ id = "fed2.who", label = "Who",
+                              kind = "send", command = "who" })
+Mux.getDeclarativeAction("fed2.who")
+Mux.deleteDeclarativeAction("fed2.who")
+```
+
+---
+
+### Reactive Panes & Conditions
+
+A pane carries an inline **condition spec** plus two action ids. There is no
+condition registry and no management screen — the condition is data on the pane,
+defined where it is used.
+
+```lua
+pane.condition   = { type = "gmcp_exists", path = "room.info.players" } -- or nil
+pane.actionTrue  = "mux.showSelf"   -- runs when the condition becomes true
+pane.actionFalse = "mux.hideSelf"   -- runs when it becomes false
+```
+
+`nil` (or `type = "always"`) means always visible. The available types — also
+exposed as `Mux.conditionTypes` so the UI and engine stay in lock-step — are:
+
+| `type`         | Fields            | True when…                                       |
+|----------------|-------------------|--------------------------------------------------|
+| `always`       | —                 | always (normalised to `nil`)                     |
+| `gmcp_exists`  | `path`            | the gmcp value at `path` is non-nil and non-empty|
+| `gmcp_equals`  | `path`, `value`   | the gmcp value at `path` equals `value`          |
+| `event_fired`  | `event`, `seconds`| within `seconds` of the Mudlet `event` firing    |
+| `connected`    | —                 | `Mux._connState == "connected"`                  |
+| `disconnected` | —                 | not fully connected                              |
+
+GMCP `path` is resolved relative to `gmcp`; a leading `gmcp.` is stripped if present.
+
+#### Setting and evaluating
+
+```lua
+pane:setCondition(spec)               -- spec table, or nil to clear (always visible)
+pane:setReactiveActions(trueId, fId)  -- override the edge action ids (nil = keep)
+
+Mux._evaluatePaneCondition(pane)      -- evaluate one pane; run its edge action on change
+Mux.evaluateAllPaneConditions()       -- evaluate every pane carrying a condition
+```
+
+`setCondition` re-wires the pane's event subscriptions and evaluates immediately.
+Conditions are re-evaluated when their backing events fire (GMCP conditions subscribe
+to `gmcp.<first-segment>` and `gmcp.<first-two-segments>`), whenever the connection
+state changes, and once after a workspace finishes loading. Edge actions are invoked
+through the registry as `Mux.runAction(id, { pane = pane, met = met })`.
+
+#### Visibility model
+
+Hidden floating panes simply hide; hidden embedded panes collapse via a zero-weight
+split layout — the slot drops to zero and the sibling reclaims the space, with the
+divider handle hidden — and restore in place when shown. `Mux._nodeVisible(node)`
+reports a pane/split's effective visibility for that layout.
+
+#### Persistence
+
+`condition`, and `actionTrue`/`actionFalse` when non-default, serialize with the pane
+in the workspace JSON and restore automatically:
+
+```lua
+{ type = "pane", id = "cargo", name = "Cargo", activeContent = "fed2_cargo",
+  condition = { type = "gmcp_exists", path = "char.ship.cargo" } }
+```
 
 ---
 
@@ -900,6 +1062,8 @@ Panes and tabs can display a status overlay when the game client is disconnected
 Open the Properties dialog for any pane or tab and toggle **Connection Awareness** to **On**. The overlay appears immediately if the client is currently in a non-connected state.
 
 Enabling connection awareness on a **pane** covers the entire content area, including the tab bar. Per-tab overlays are suppressed for all tabs in that pane while pane-level awareness is active. Disabling pane-level awareness restores any enrolled tab overlays automatically.
+
+Under the hood, pane-level connection awareness is a *reactive condition*: the toggle sets the pane's condition to `disconnected` with the `mux.connScreen.show` / `mux.connScreen.hide` actions, so it shows and overrides like any other rule (visible in the pane's **Rules** tab). Tab-level awareness keeps its own dedicated path.
 
 #### API
 
