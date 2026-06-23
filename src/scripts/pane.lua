@@ -686,15 +686,14 @@ function MuxPane:_buildTitlebar(theme)
     })
     if not self.contentable then self.contentBtn:hide() end
 
-    -- anchorBtn: left cluster, just right of Content Library. Only shown for a
-    -- floating, anchorable pane when the titlebar isn't compact (compact panes
-    -- get the right-click Anchor submenu instead). Clicking drops a downward menu
-    -- of Set / Return / Remove. Its background lights up while anchor mode is
-    -- armed or an anchor is set.
+    -- anchorBtn: right cluster (shares the swap/split slot at -96, which is only
+    -- used by embedded panes, so it never collides with the floating-only anchor
+    -- button). Only shown for a floating, anchorable pane when the titlebar isn't
+    -- compact. Background lights up while anchor mode is armed or an anchor is set.
     self.anchorBtn, self._anchorBtnEcho = makeTitlebarButton({
         suffix  = "_anchor",
-        x       = "2",
-        icon    = "<span style='font-size:12px;'>⚓</span>",
+        x       = "-96",
+        icon    = "⚓",
         tooltip = "Anchor",
         onClick = function(event)
             if event.button ~= "LeftButton" then return end
@@ -703,16 +702,13 @@ function MuxPane:_buildTitlebar(theme)
             elseif not self.anchor then
                 self:armAnchorMode(true)         -- not anchored: just enter anchor mode (drag to set)
             else
-                -- Anchored: fan out a downward stack of same-sized icon buttons,
-                -- starting just below the button. get_x/get_y on a nested child are
-                -- parent-relative in Geyser, so anchor off the click's global coords.
+                -- Anchored: fan out a downward stack of same-sized icon buttons.
+                -- get_x/get_y already return absolute screen coords in Geyser.
                 local bw, bh = self.anchorBtn:get_width(), self.anchorBtn:get_height()
+                local sx = self.anchorBtn:get_x()
+                local sy = self.anchorBtn:get_y() + bh
                 if Mux._showTitlebarIconStack then
-                    local sx = (event.globalX or 0) - math.floor(bw / 2)
-                    local sy = (event.globalY or 0) + math.floor(bh)
                     Mux._showTitlebarIconStack(sx, sy, bw, bh, {
-                        { icon = "<span style='font-size:12px;'>⚓</span>", tooltip = "Re-anchor (drag to set)",
-                          fn = function() self:armAnchorMode(true) end },
                         { icon = "⤺", tooltip = "Return to anchor", fn = function() self:returnToAnchor() end },
                         { icon = "✕", tooltip = "Remove anchor",    fn = function() self:removeAnchor() end },
                     })
@@ -720,18 +716,22 @@ function MuxPane:_buildTitlebar(theme)
             end
         end,
     })
+    -- ⚓ renders as a wide color-emoji that HTML <center> doesn't visually center
+    -- the way the monochrome glyphs are; force the QLabel itself to center its
+    -- content via qproperty-alignment in every style state.
+    local alignRule = " QLabel{ qproperty-alignment:'AlignCenter'; }"
     self._refreshAnchorBtn = function()
         if not self.anchorBtn then return end
         local active = self._anchorArming or (self.anchor ~= nil)
         self.anchorBtn:setStyleSheet(active
-            and "background: rgba(125,230,150,0.80); border-radius: 3px;"
-            or  (Mux.activeTheme().btnCss or ""))
+            and "background: rgba(70,130,225,0.85); border-radius: 3px; qproperty-alignment:'AlignCenter';"
+            or  ((Mux.activeTheme().btnCss or "") .. alignRule))
     end
     self.anchorBtn:setOnEnter(function()
         if self._anchorArming or self.anchor then
-            self.anchorBtn:setStyleSheet("background: rgba(125,230,150,0.95); border-radius: 3px;")
+            self.anchorBtn:setStyleSheet("background: rgba(90,150,235,0.95); border-radius: 3px; qproperty-alignment:'AlignCenter';")
         else
-            self.anchorBtn:setStyleSheet(Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss or "")
+            self.anchorBtn:setStyleSheet((Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss or "") .. alignRule)
         end
         if self._anchorBtnEcho then self._anchorBtnEcho(true) end
     end)
@@ -807,7 +807,6 @@ function MuxPane:_updateInfoBtnPos()
     local x0    = ((self.nameAlign or "left") == "left") and self:_infoBtnX() or 2
     if self.infoBtn    then self.infoBtn:move(x0, y) end
     if self.contentBtn then self.contentBtn:move(x0 + btnSz + 4, y) end
-    if self.anchorBtn  then self.anchorBtn:move(x0 + 2 * (btnSz + 4), y) end
 end
 
 -- Returns the HTML string for the titlebar name, styled for the current nameAlign.
@@ -878,6 +877,7 @@ function MuxPane:_layoutTitlebarButtons()
     rightAnchor(self.minBtn,     42)
     rightAnchor(self.zoomBtn,    70)
     rightAnchor(self.swapBtn,    96)
+    rightAnchor(self.anchorBtn,  96)   -- floating-only; shares the (embedded-only) swap slot
     rightAnchor(self.splitHBtn, 120)
     rightAnchor(self.splitVBtn, 140)
 
@@ -973,6 +973,7 @@ function MuxPane:_checkOverflow(force)
     if self.zoomable and (self._split or self.floating or self._zoomed)          then rightW = rightW + 28 end
     if self.swappable and self._split and not self.floating      then rightW = rightW + 26 end
     if self.splittable and not self.floating                     then rightW = rightW + 44 end
+    rightW = rightW + anchorBtnW   -- floating-only anchor button now lives in the right cluster
 
     local newOverflow
     if align == "right" then
@@ -980,15 +981,15 @@ function MuxPane:_checkOverflow(force)
         -- Same shape as center plus the name slot. namePad / clusterGap match
         -- _layoutTitlebarButtons.
         local namePad, clusterGap = 6, 6
-        local leftW = 6 + infoBtnW + contentBtnW + anchorBtnW
+        local leftW = 6 + infoBtnW + contentBtnW
         newOverflow = compact
             or (headerW < leftW + rightW + namePad + nameW + clusterGap + 10)
     else
         if align == "center" then
-            local leftW = 6 + infoBtnW + contentBtnW + anchorBtnW
+            local leftW = 6 + infoBtnW + contentBtnW
             newOverflow = compact or (headerW < leftW + nameW + rightW + 10)
         else  -- left
-            local leftW = 16 + nameW + 4 + infoBtnW + contentBtnW + anchorBtnW
+            local leftW = 16 + nameW + 4 + infoBtnW + contentBtnW
             newOverflow = compact or (headerW < leftW + rightW + 10)
         end
     end
@@ -1127,7 +1128,7 @@ function MuxPane:toggleMinimize()
         self.minimized = false
         if self.content then self.content:show() end
         if self._onRestoreContent then self:_onRestoreContent() end
-        if self.floating then
+        if self.floating or self.overlay then
             local h = self._savedFloatH or self.floatH
             self.floatH = h
             self.outer:resize(self.floatW, h)
@@ -1143,7 +1144,7 @@ function MuxPane:toggleMinimize()
         if self.onMinimize then self.onMinimize(self, false) end
     else
         self.minimized = true
-        if self.floating then
+        if self.floating or self.overlay then
             self._savedFloatH = self.floatH
             local minH = theme.titlebarHeight + borderInset * 2
             self.floatH = minH
@@ -1361,6 +1362,11 @@ function MuxPane:embed(slot)
         self._split.box:show()
     end
     self.floating = false
+    -- Anchoring is a floating-only concept: dropping back into a split clears it
+    -- and removes the (floating-only) anchor button.
+    self._anchorArming = false
+    if self.anchor then self:removeAnchor() end
+    if self.anchorBtn then self.anchorBtn:hide() end
     if self.titlebar then self.titlebar:setCursor(self:_titlebarCursor()) end
     self.outer:changeContainer(target)
     self.outer:move("0%", "0%")
@@ -1555,7 +1561,7 @@ end
 -- so minBtn only shows when floating or in a vertical (top/bottom) split.
 function MuxPane:_minBtnVisible()
     if not self.minimizable then return false end
-    if self.floating then return true end
+    if self.floating or self.overlay then return true end
     return self._split ~= nil and self._split.direction == "v"
 end
 

@@ -278,6 +278,7 @@ function MuxDialog:init(opts)
         id               = opts.id or Mux._newId("dialog"),
         name             = opts.title or "Dialog",
         x = x, y = y, width = w, height = h,
+        floatW = w, floatH = h,
         parent           = Geyser,
         overlay          = true,
         zoomable         = false,

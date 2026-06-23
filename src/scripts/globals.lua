@@ -488,9 +488,8 @@ function Mux._showContextMenu(pane, globalX, globalY)
         if #items > 0 then items[#items+1] = { sep=true } end
         if pane.anchor then
             items[#items+1] = { text = "⚓  Anchor", submenu = {
-                { text = "Re-anchor (drag to set)", fn = function() pane:armAnchorMode(true) end },
-                { text = "Return to anchor",        fn = function() pane:returnToAnchor() end },
-                { text = "Remove anchor",           fn = function() pane:removeAnchor() end, danger = true },
+                { text = "Return to anchor", fn = function() pane:returnToAnchor() end },
+                { text = "Remove anchor",    fn = function() pane:removeAnchor() end, danger = true },
             } }
         else
             items[#items+1] = { text = "⚓  Anchor", fn = function() pane:armAnchorMode(true) end }

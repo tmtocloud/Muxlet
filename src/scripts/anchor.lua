@@ -125,13 +125,13 @@ function Mux._showAnchorIndicator(x, y, w, h, corner)
     Mux._anchorInd:move(math.floor(x), math.floor(y))
     Mux._anchorInd:resize(math.floor(w), math.floor(h))
     if corner then
-        -- Corner anchor: bright L-bracket emphasising the two meeting edges (and
-        -- a green tint), visually distinct from the uniform blue dashed rectangle
-        -- an edge anchor shows.
-        local strong = "3px solid rgba(125,230,150,0.98)"
-        local faint  = "1px dashed rgba(125,230,150,0.38)"
+        -- Corner anchor: same blue dashed rectangle as an edge preview, but the
+        -- two edges meeting at the anchoring corner are drawn as bold solid blue
+        -- to call out exactly which 90° corner it's pinning to.
+        local strong = "3px solid rgba(90,200,255,0.98)"
+        local faint  = "2px dashed rgba(90,200,255,0.55)"
         Mux._anchorInd:setStyleSheet(
-            "background: rgba(125,230,150,0.10); border-radius: 3px;"
+            "background: rgba(90,200,255,0.12); border-radius: 3px;"
             .. "border-left: "   .. (corner.vx == "left"   and strong or faint) .. ";"
             .. "border-right: "  .. (corner.vx == "right"  and strong or faint) .. ";"
             .. "border-top: "    .. (corner.hy == "top"    and strong or faint) .. ";"
@@ -165,15 +165,15 @@ function Mux._anchorHitTest(targets, gx, gy, W, H)
             local A
             if (nearL or nearR) and (nearT or nearB) then
                 A = {
-                    v = { ref = id, targetEdge = nearL and "left" or "right", myEdge = nearL and "right" or "left" },
-                    h = { ref = id, targetEdge = nearT and "top"  or "bottom", myEdge = nearT and "bottom" or "top" },
+                    v = { ref = id, targetEdge = nearL and "left" or "right", myEdge = nearL and "left" or "right" },
+                    h = { ref = id, targetEdge = nearT and "top"  or "bottom", myEdge = nearT and "top"  or "bottom" },
                 }
             elseif nearL or nearR then
                 local along = Mux._clamp(gy - t.y - H / 2, 0, math.max(0, t.h - H))
-                A = { v = { ref = id, targetEdge = nearL and "left" or "right", myEdge = nearL and "right" or "left" }, alongV = along }
+                A = { v = { ref = id, targetEdge = nearL and "left" or "right", myEdge = nearL and "left" or "right" }, alongV = along }
             elseif nearT or nearB then
                 local along = Mux._clamp(gx - t.x - W / 2, 0, math.max(0, t.w - W))
-                A = { h = { ref = id, targetEdge = nearT and "top" or "bottom", myEdge = nearT and "bottom" or "top" }, alongH = along }
+                A = { h = { ref = id, targetEdge = nearT and "top" or "bottom", myEdge = nearT and "top" or "bottom" }, alongH = along }
             end
             if A then
                 local X, Y, w2, h2 = Mux._anchorGeom({ anchor = A, floatW = W, floatH = H, floating = true })
