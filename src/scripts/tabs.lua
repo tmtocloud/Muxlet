@@ -76,6 +76,17 @@ function MuxTab:init(opts)
     }, host._tabBarBox)
     label:setStyleSheet(theme.tabInactiveCss or "")
     host:_echoTabLabel(label, self.name, false, false, theme)
+    -- Re-echo with the hover text colour on enter/leave (Qt won't recolour rich
+    -- text via ::hover). Reads live state so it tracks active + theme changes.
+    local tabObj = self
+    label:setOnEnter(function()
+        local th = Mux.activeTheme()
+        host:_echoTabLabel(label, tabObj.name, host._activeTabId == tabObj.id, false, th, tabObj.nameAlign, true)
+    end)
+    label:setOnLeave(function()
+        local th = Mux.activeTheme()
+        host:_echoTabLabel(label, tabObj.name, host._activeTabId == tabObj.id, false, th, tabObj.nameAlign, false)
+    end)
     if not host._isSubTabHost then host._tabBarBox:organize() end
 
     self.label     = label
@@ -84,15 +95,18 @@ function MuxTab:init(opts)
 end
 
 -- nameAlign is an optional 6th arg ("left", "center", "right"); defaults to "center".
-function MuxSurface:_echoTabLabel(label, name, isActive, isChosen, theme, nameAlign)
+function MuxSurface:_echoTabLabel(label, name, isActive, isChosen, theme, nameAlign, hovered)
+    local fs = theme.tabFontSize or 11
+    -- Text colour is set inline: Qt's QLabel::hover{color} doesn't recolour rich
+    -- text, so hover is handled by re-echoing with the hover colour (see addTab).
     local tc
-    if isChosen       then tc = theme.tabMovingTextColor   or "#ffaaaa"
-    elseif isActive   then tc = theme.tabActiveTextColor   or "#e1e1f2"
-    else                   tc = theme.tabInactiveTextColor or "#afb4cd"
+    if     isChosen then tc = theme.tabMovingTextColor   or "#ffaaaa"
+    elseif hovered  then tc = theme.tabHoverTextColor     or "#ffffff"
+    elseif isActive then tc = theme.tabActiveTextColor    or "#ffffff"
+    else                 tc = theme.tabInactiveTextColor  or "#ffffff"
     end
-    -- Use <span style='color:...'> so rgba() values parse correctly in Qt.
-    local spanFmt = "<span style='color:%s;font-size:11px;font-weight:bold;'>%s</span>"
-    local span    = string.format(spanFmt, tc, name)
+    local spanFmt = "<span style='color:" .. tc .. ";font-size:" .. tostring(fs) .. "px;font-weight:bold;'>%s</span>"
+    local span    = string.format(spanFmt, name)
     local align   = nameAlign or "center"
     if align == "left" then
         label:echo(string.format("<span style='margin-left:4px;'>%s</span>", span))

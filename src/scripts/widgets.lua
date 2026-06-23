@@ -795,12 +795,12 @@ local function w_segmented(row, c)
                or              "border-radius:0;"
         if isSelected then
             return string.format(
-                "QLabel{background:%s;color:%s;font-size:10px;font-weight:bold;border:1px solid %s;%s}"
+                "QLabel{background:%s;color:%s;font-size:11px;font-weight:bold;border:1px solid %s;%s}"
                 .. "QLabel::hover{background:%s;}",
                 selBg, selFg, selBd, r, selHv)
         else
             return string.format(
-                "QLabel{background:%s;color:%s;font-size:10px;border:1px solid %s;%s}"
+                "QLabel{background:%s;color:%s;font-size:11px;border:1px solid %s;%s}"
                 .. "QLabel::hover{background:%s;}",
                 wBg, wFg, wBd, r, wHv)
         end

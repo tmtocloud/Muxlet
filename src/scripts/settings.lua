@@ -35,6 +35,7 @@ Mux.settings._onChange  = Mux.settings._onChange  or {}
 -- Format: "TopLabel" for a top-level tab, "TopLabel/SubLabel" for nested.
 -- Drives UI tab hierarchy only; has no effect on get/set/clear.
 Mux.settings._tabPaths  = Mux.settings._tabPaths  or {}
+Mux.settings._tabOrder  = Mux.settings._tabOrder  or {}
 Mux._persistentDir      = getMudletHomeDir() .. "/Muxlet_persistent"
 lfs.mkdir(Mux._persistentDir)
 Mux.settings._file      = Mux._persistentDir .. "/settings.json"
@@ -101,6 +102,9 @@ function Mux.settings.register(ns, key, cfg)
     if cfg.tab and not Mux.settings._tabPaths[ns] then
         Mux.settings._tabPaths[ns] = cfg.tab
     end
+    if cfg.order and not Mux.settings._tabOrder[ns] then
+        Mux.settings._tabOrder[ns] = cfg.order
+    end
 
     Mux.settings._registry[ns] = Mux.settings._registry[ns] or {}
     Mux.settings._order[ns]    = Mux.settings._order[ns]    or {}
@@ -112,6 +116,9 @@ function Mux.settings.register(ns, key, cfg)
         choices     = cfg.choices,
         min         = cfg.min,
         max         = cfg.max,
+        widget      = cfg.widget,   -- optional UI hint, e.g. "color" / "segmented"
+        label       = cfg.label,    -- optional pretty display name (else derived from key)
+        order       = cfg.order,    -- optional sub-tab ordering hint
     }
 
     local found = false
@@ -296,10 +303,11 @@ local function contentScreenPos(ns)
     local bi      = 2
     local cx      = (win.floatX or 0) + bi
     local cy      = (win.floatY or 0) + bi + (theme.titlebarHeight or 22) + tabBarH
-    -- Sub-tab namespaces have a second tab bar above the content.
+    -- Each extra path segment is another nested tab bar above the content.
     local path = Mux.settings._tabPaths[ns]
-    if path and path:find("/", 1, true) then
-        cy = cy + tabBarH
+    if path then
+        local _, slashes = path:gsub("/", "")
+        cy = cy + slashes * tabBarH
     end
     return cx, cy
 end
@@ -318,6 +326,16 @@ end
 local function hideTooltip() end  -- Qt native tooltips auto-dismiss; kept for call-site compat
 
 -- Builds a widget spec array from a settings namespace registration.
+-- snake_case setting key → Title Case display label ("tab_shape" → "Tab Shape").
+-- The raw key is still used for the command line; this is display-only.
+local function prettifySettingKey(key)
+    local words = {}
+    for w in tostring(key):gmatch("[^_%s]+") do
+        words[#words+1] = w:sub(1, 1):upper() .. w:sub(2)
+    end
+    return table.concat(words, " ")
+end
+
 local function buildNsSpecs(ns)
     local reg = Mux.settings._registry[ns]
     if not reg then return {} end
@@ -333,7 +351,7 @@ local function buildNsSpecs(ns)
         local cfg = reg[key]
         if cfg then
             local spec = {
-                label        = key,
+                label        = cfg.label or prettifySettingKey(key),
                 desc         = cfg.description,
                 _settingsNs  = ns,
                 _settingsKey = key,
@@ -346,7 +364,20 @@ local function buildNsSpecs(ns)
                 end,
             }
 
-            if cfg.choices then
+            if cfg.widget == "color" then
+                spec.type = "color"
+            elseif cfg.choices and (cfg.widget == "segmented" or #cfg.choices <= 4) then
+                -- Small choice sets render as side-by-side buttons (no popup).
+                spec.type    = "array"
+                spec.display = "segmented"
+                spec.options = {}
+                for _, c in ipairs(cfg.choices) do
+                    spec.options[#spec.options+1] = { value = c, label = tostring(c) }
+                end
+                -- Give each button room for its label rather than splitting a
+                -- narrow default width across all options.
+                spec.widgetWidth = math.max(120, #cfg.choices * 58)
+            elseif cfg.choices then
                 spec.type    = "array"
                 spec.display = "dropdown"
                 spec.options = {}
@@ -373,12 +404,9 @@ local function buildNsSpecs(ns)
     return specs
 end
 
-local settingsFormOpts = {
-    rowHeight     = 56,
-    textRowHeight = 64,
-    widgetWidth   = 130,
-    widgetHeight  = 26,
-}
+-- Match the pane/tab properties windows, which use buildForm's defaults — keep
+-- this empty so settings rows get the same row heights and widget sizing.
+local settingsFormOpts = {}
 
 local function buildRows(ns, contentLbl)
     local cw = contentLbl:get_width()
@@ -418,55 +446,65 @@ local function buildRows(ns, contentLbl)
     return formHandle, formHandle.totalHeight + 2
 end
 
--- Builds the tab hierarchy from _tabPaths and the registered namespaces.
--- Returns a sorted list: { {label, ns, children={label,ns}...}, ... }
--- Entries without children are leaf tabs; entries with children are package tabs
--- whose sub-tabs hold the actual settings content.
+-- Builds the tab hierarchy as a tree from _tabPaths and the registered namespaces.
+-- A node is { label, ns?, main?, children? }. Leaf nodes carry a settings ns (or
+-- the `main` flag for the Muxlet main-pane tab); nodes with children render as a
+-- (sub-)tab bar. Supports arbitrary depth (e.g. Muxlet → Tabs → Style/Colors).
 local function tabHierarchy()
-    local tops = {}   -- {topLabel → {ns=..., children={...}}}
+    local root = { children = {}, _map = {} }
 
+    -- Descend the slash-path, creating intermediate nodes, attaching ns at the leaf.
     for ns in pairs(Mux.settings._registry) do
-        local path    = Mux.settings._tabPaths[ns] or ns
-        local parts   = {}
-        for p in path:gmatch("[^/]+") do parts[#parts+1] = p end
-        local topLabel = parts[1]
-        tops[topLabel] = tops[topLabel] or {}
-        if #parts == 1 then
-            tops[topLabel].ns = ns
-        else
-            local subLabel = table.concat(parts, "/", 2)
-            tops[topLabel].children = tops[topLabel].children or {}
-            table.insert(tops[topLabel].children, {label = subLabel, ns = ns})
+        local path = Mux.settings._tabPaths[ns] or ns
+        local node = root
+        for part in path:gmatch("[^/]+") do
+            node._map[part] = node._map[part] or { label = part, children = {}, _map = {} }
+            local child = node._map[part]
+            -- track insertion into the parent's children list once
+            if not child._linked then
+                child._linked = true
+                node.children[#node.children + 1] = child
+            end
+            node = child
         end
+        node.ns    = ns
+        node.order = Mux.settings._tabOrder[ns]
     end
 
-    -- When a top-level entry has both a direct ns AND sub-path children, promote
-    -- the direct ns to a first "General" child so all content flows through the
-    -- sub-tab system. Downstream packages can register with a simple top-level path
-    -- (e.g. "Fed2-Tools") even when sibling namespaces use sub-paths (e.g. "Fed2-Tools/Map").
-    for _, info in pairs(tops) do
-        if info.ns and info.children and #info.children > 0 then
-            table.insert(info.children, 1, {label = "General", ns = info.ns})
-            info.ns = nil
+    -- A node with both a direct ns AND children: promote the ns to a "General" child.
+    local function promote(node)
+        if node.ns and node.children and #node.children > 0 then
+            local gen = { label = "General", ns = node.ns, children = {}, _map = {} }
+            table.insert(node.children, 1, gen)
+            node.ns = nil
         end
+        for _, c in ipairs(node.children or {}) do promote(c) end
+    end
+    promote(root)
+
+    -- Muxlet gets a "Main" tab (main-pane properties) between General and Tabs.
+    local muxNode = root._map["Muxlet"]
+    if muxNode then
+        muxNode.children[#muxNode.children + 1] =
+            { label = "Main", main = true, children = {}, _map = {} }
     end
 
-    local result = {}
-    for label, info in pairs(tops) do
-        table.insert(result, {label = label, ns = info.ns, children = info.children})
+    -- Order children by (order or 99) then label; "Muxlet" pinned first at top level.
+    local function sortNode(node, top)
+        table.sort(node.children, function(a, b)
+            if top then
+                if a.label == "Muxlet" then return true  end
+                if b.label == "Muxlet" then return false end
+            end
+            local ao, bo = a.order or 99, b.order or 99
+            if ao ~= bo then return ao < bo end
+            return a.label < b.label
+        end)
+        for _, c in ipairs(node.children) do sortNode(c, false) end
     end
-    table.sort(result, function(a, b)
-        -- "Muxlet" always first, then alphabetical
-        if a.label == "Muxlet" then return true  end
-        if b.label == "Muxlet" then return false end
-        return a.label < b.label
-    end)
-    for _, entry in ipairs(result) do
-        if entry.children then
-            table.sort(entry.children, function(a, b) return a.label < b.label end)
-        end
-    end
-    return result
+    sortNode(root, true)
+
+    return root.children
 end
 
 -- Activate the tab (or sub-tab) that corresponds to namespace ns.
@@ -474,22 +512,25 @@ function Mux.settings.showTab(ns)
     closeDropdown(); hideTooltip()
     local pane = settingsUi.window
     if not pane then return end
-    for _, tab in ipairs(pane._tabs or {}) do
-        if tab._settingsNs == ns then
-            pane:activateTab(tab.id)
-            settingsUi.currentTab = ns
-            return
-        end
-        -- Check one level of sub-tabs
-        for _, subTab in ipairs(tab._tabs or {}) do
-            if subTab._settingsNs == ns then
-                pane:activateTab(tab.id)
-                tab:activateTab(subTab.id)
-                settingsUi.currentTab = ns
-                return
+    -- Depth-first search for the (sub-)tab whose namespace matches, recording the
+    -- ancestor chain so each level can be activated in turn (supports any depth).
+    local function find(host, chain)
+        for _, tab in ipairs(host._tabs or {}) do
+            local c2 = {}
+            for i = 1, #chain do c2[i] = chain[i] end
+            c2[#c2 + 1] = { host = host, tab = tab }
+            if tab._settingsNs == ns then return c2 end
+            if tab._tabs then
+                local r = find(tab, c2)
+                if r then return r end
             end
         end
+        return nil
     end
+    local chain = find(pane, {})
+    if not chain then return end
+    for _, link in ipairs(chain) do link.host:activateTab(link.tab.id) end
+    settingsUi.currentTab = ns
 end
 
 local function measureNsHeight(ns)
@@ -682,6 +723,42 @@ local function buildMainPaneContent(targetTab, bgColor)
     resizeWindow("mux_set_cl_mainpane", cw - 8, math.max(totalH or 1, 1))
 end
 
+-- Settings content is registered the same way pane/tab properties are
+-- (mux_properties): an internal content def applied to each settings (sub-)tab via
+-- Mux._applyContent, rather than built ad-hoc. This gives the settings forms the
+-- same managed lifecycle as any other pane content — _applyContent owns
+-- attach/detach and child-cleanup, and the reposition/relayout cascade treats them
+-- like every other content target instead of free-floating widgets.
+--
+-- Which body to build is selected by flags set on the tab before apply:
+--   target._settingsMain → the Main pane's live property form
+--   target._settingsNs    → the settings form for that namespace
+-- internal=true lets it apply onto the settings tabs even though they set
+-- contentable=false (same exemption mux_properties relies on).
+-- NOTE: settings.lua loads before content.lua, so Mux.registerContent doesn't
+-- exist yet here. The def is defined now (capturing the builder locals) and
+-- registered in the deferred muxletReady timer at the bottom of this file.
+local muxSettingsContentDef = {
+    name     = "Settings",
+    internal = true,
+    apply = function(target)
+        local theme = Mux.activeTheme() or {}
+        local ui    = theme.ui or theme.settingsUi or {}
+        local bg    = ui.bg or "rgb(18, 18, 26)"
+        if target._settingsMain then
+            buildMainPaneContent(target, bg)
+        elseif target._settingsNs then
+            buildSettingsContent(target, target._settingsNs, bg)
+        end
+    end,
+    remove = function(_target)
+        -- Form widgets are children of the (sub-)tab's content container and are
+        -- torn down with the Settings pane; _applyContent hides them on swap. The
+        -- Settings window is fixed-size, so no resize() is needed — its absence
+        -- means the reposition cascade leaves the form untouched.
+    end,
+}
+
 local function buildWindow()
     local sw, sh = getMainWindowSize()
     local w = math.floor(sw * 0.34)
@@ -695,18 +772,18 @@ local function buildWindow()
     local bi         = 2   -- borderInset (must match pane.lua constant)
     local hierarchy  = tabHierarchy()
     local maxNeeded  = 200
-    for _, entry in ipairs(hierarchy) do
-        local levels = (entry.children and #entry.children > 0) and 2 or 1
-        local chrome = 2*bi + titleH_pre + levels*tabH_pre + footerPad
-        if entry.ns then
-            local needed = measureNsHeight(entry.ns) + chrome
+    -- Each leaf settings tab sits under `depth` tab bars (pane bar + sub-tab bars).
+    local function measureNode(node, depth)
+        if node.ns then
+            local chrome = 2*bi + titleH_pre + depth*tabH_pre + footerPad
+            local needed = measureNsHeight(node.ns) + chrome
             if needed > maxNeeded then maxNeeded = needed end
         end
-        for _, child in ipairs(entry.children or {}) do
-            local needed = measureNsHeight(child.ns) + chrome
-            if needed > maxNeeded then maxNeeded = needed end
+        for _, child in ipairs(node.children or {}) do
+            measureNode(child, depth + 1)
         end
     end
+    for _, entry in ipairs(hierarchy) do measureNode(entry, 1) end
     local maxH = math.floor(sh * 0.80)
     local h    = math.max(200, math.min(maxH, maxNeeded))
     local x    = math.floor((sw - w) / 2)
@@ -763,69 +840,43 @@ local function buildWindow()
     pane:enableTabs({ noDefaultTab = true })
 
     -- Build tabs from the hierarchy (already computed above for height pre-sizing).
-    for _, entry in ipairs(hierarchy) do
-        local tab = pane:addTab(entry.label)
+    -- Recurses for arbitrary depth (e.g. Muxlet → Tabs → Style / Colors).
+    local subTabBarCss = Mux.activeTheme().subTabBarCss
+        or "background-color:rgba(10,12,22,230);border-top:1px solid rgba(255,255,255,0.07);"
+    local function buildNode(parent, node)
+        local tab = parent:addTab(node.label)
         tab.renamable   = false
         tab.closeable   = false
         tab.movable     = false
         tab.contentable = false
         tab.contextMenu = false
-        tab._settingsNs   = entry.ns  -- nil for package-level grouper tabs
-
-        if entry.children and #entry.children > 0 then
-            -- Package tab: enable sub-tabs for each child namespace.
+        tab._settingsNs = node.ns
+        if node.children and #node.children > 0 then
             tab.tabsLocked = true
             tab:enableTabs({ noDefaultTab = true })
-            -- Give the sub-tab bar a visually distinct look so users can tell
-            -- which parent tab owns the sub-tabs they're currently browsing.
-            if tab._tabBar then
-                local theme = Mux.activeTheme()
-                tab._tabBar:setStyleSheet(
-                    theme.subTabBarCss or
-                    "background-color:rgba(10,12,22,230);border-top:1px solid rgba(255,255,255,0.07);")
-            end
-            for _, child in ipairs(entry.children) do
-                local subTab = tab:addTab(child.label)
-                subTab.renamable   = false
-                subTab.closeable   = false
-                subTab.movable     = false
-                subTab.contentable = false
-                subTab.contextMenu = false
-                subTab._settingsNs   = child.ns
-                buildSettingsContent(subTab, child.ns, bgColor)
-            end
-            -- Muxlet package: append a Main sub-tab for main pane properties.
-            if entry.label == "Muxlet" then
-                local mainTab = tab:addTab("Main")
-                mainTab.renamable   = false
-                mainTab.closeable   = false
-                mainTab.movable     = false
-                mainTab.contentable = false
-                mainTab.contextMenu = false
-                buildMainPaneContent(mainTab, bgColor)
-            end
-        elseif entry.ns then
-            -- Leaf tab: settings content goes directly here.
-            buildSettingsContent(tab, entry.ns, bgColor)
+            if tab._tabBar then tab._tabBar:setStyleSheet(subTabBarCss) end
+            for _, child in ipairs(node.children) do buildNode(tab, child) end
+        elseif node.main then
+            tab._settingsMain = true
+            Mux._applyContent(tab, "mux_settings")
+        elseif node.ns then
+            -- tab._settingsNs already set above.
+            Mux._applyContent(tab, "mux_settings")
         end
+        return tab
     end
+    for _, entry in ipairs(hierarchy) do buildNode(pane, entry) end
 
-    -- Geyser's hide() only covers children that existed at the time hide() was called.
-    -- Tab infrastructure (sub-tab bars, viewports, content) is added after the initial
-    -- hide, so non-active top-level tabs may still be visible. Re-hide them now that
-    -- all content is built — and do the same for each top tab's sub-tabs, otherwise a
-    -- non-active sub-tab (e.g. Main) stays drawn over the active one (General) on the
-    -- first open until the user switches tabs and back.
-    for _, topTab in ipairs(pane._tabs or {}) do
-        if topTab.id ~= pane._activeTabId then
-            topTab.content:hide()
-        end
-        for _, subTab in ipairs(topTab._tabs or {}) do
-            if subTab.id ~= topTab._activeTabId and subTab.content then
-                subTab.content:hide()
-            end
+    -- Geyser's hide() only covers children that existed when hide() was called; tab
+    -- infrastructure is added afterwards, so re-hide every non-active (sub-)tab at
+    -- all depths now that content is built, or stale tabs draw over the active one.
+    local function hideInactive(host)
+        for _, t in ipairs(host._tabs or {}) do
+            if t.id ~= host._activeTabId and t.content then t.content:hide() end
+            if t._tabs then hideInactive(t) end
         end
     end
+    hideInactive(pane)
 
     -- Set the current tab namespace (first tab was already activated by addTab).
     if pane._tabs and #pane._tabs > 0 then
@@ -916,6 +967,7 @@ Mux.settings.register("mux", "welcome_shown", {
 
 Mux.settings.onChange("mux", "theme", function(value)
     if Mux.applyTheme then Mux.applyTheme(value) end
+    if Mux._applyTabStyle then Mux._applyTabStyle() end   -- re-apply tab styling on top of the new theme
     -- Rebuild the settings window immediately so its widgets reflect the new theme.
     if settingsUi.window then
         local wasVisible = settingsUi.visible
@@ -972,12 +1024,181 @@ Mux.settings.onChange("mux", "debug", function(value)
     Mux.debug = value
 end)
 
+-- ── Tab styling (Settings → Muxlet → Tabs → Style / Colors) ───────────────────
+-- Look-and-feel knobs applied to every tab on the workspace at once. Values write
+-- immediately and live-apply. Split across two sub-tabs: Style (dimensions, shape,
+-- borders, hover behaviour, bar chrome) and Colors (all colour pickers). Tab text
+-- colours are set inline by _echoTabLabel (hover included) so they always apply.
+
+-- Style sub-tab.
+Mux.settings.register("muxtab", "tab_height", {
+    tab = "Muxlet/Tabs/Style", order = 1, label = "Bar Height",
+    description = "Tab bar height in pixels", default = 30, min = 16, max = 48,
+})
+Mux.settings.register("muxtab", "tab_font_size", {
+    label = "Font Size", description = "Tab label font size in pixels", default = 12, min = 6, max = 24,
+})
+Mux.settings.register("muxtab", "tab_shape", {
+    widget = "segmented", label = "Shape", description = "Tab shape",
+    default = "Round", choices = { "Square", "Round", "Pill", "Circle" },
+})
+Mux.settings.register("muxtab", "tab_h_gap", {
+    label = "Horizontal Gap", description = "Space between tabs and at the ends of the bar (px)",
+    default = 0, min = 0, max = 40,
+})
+Mux.settings.register("muxtab", "tab_v_gap", {
+    label = "Vertical Gap", description = "Space above/below each tab within the bar (px)",
+    default = 1, min = 0, max = 16,
+})
+Mux.settings.register("muxtab", "tab_border_width", {
+    label = "Border Width", description = "Inactive tab border thickness (px)", default = 1, min = 0, max = 6,
+})
+Mux.settings.register("muxtab", "tab_active_border_width", {
+    label = "Active Border Width", description = "Active tab border thickness (px)", default = 1, min = 0, max = 6,
+})
+Mux.settings.register("muxtab", "tab_hover_mode", {
+    widget = "segmented", label = "Hover Mode",
+    description = "Hover highlights the whole tab (Fill) or just its border (Border)",
+    default = "Border", choices = { "Fill", "Border" },
+})
+Mux.settings.register("muxtab", "tab_bar_background", {
+    label = "Tab Bar Background",
+    description = "Show the tab bar's own (black) background. Off makes the bar invisible (only tabs + the + button show)",
+    default = true,
+})
+
+-- Colors sub-tab.
+Mux.settings.register("muxtabc", "tab_text_color", {
+    tab = "Muxlet/Tabs/Colors", order = 2, widget = "color", label = "Text", default = "#ffffff",
+    description = "Inactive tab text color",
+})
+Mux.settings.register("muxtabc", "tab_active_text_color", {
+    widget = "color", label = "Active Text", description = "Active tab text color", default = "#ffffff",
+})
+Mux.settings.register("muxtabc", "tab_bg_color", {
+    widget = "color", label = "Background", description = "Inactive tab background", default = "#1c1c1c",
+})
+Mux.settings.register("muxtabc", "tab_active_bg_color", {
+    widget = "color", label = "Active Background", description = "Active tab background", default = "#373737",
+})
+Mux.settings.register("muxtabc", "tab_border_color", {
+    widget = "color", label = "Border", description = "Inactive tab border color", default = "#484848",
+})
+Mux.settings.register("muxtabc", "tab_active_border_color", {
+    widget = "color", label = "Active Border", description = "Active tab border color", default = "#9b9b9b",
+})
+Mux.settings.register("muxtabc", "tab_hover_bg_color", {
+    widget = "color", label = "Hover Highlight",
+    description = "Tab hover highlight color (fills the tab, or its border in Border mode)", default = "#ffffff",
+})
+Mux.settings.register("muxtabc", "tab_hover_text_color", {
+    widget = "color", label = "Hover Text", description = "Tab hover text color", default = "#ffffff",
+})
+
+-- Compose tab CSS from the Style + Colors settings, write it into the active theme
+-- so new tabs and activations pick it up, then restyle/resize every live tab host.
+-- Tab text colour is applied inline by _echoTabLabel, not via CSS.
+function Mux._applyTabStyle()
+    local theme = Mux.activeTheme and Mux.activeTheme() or nil
+    if not theme then return end
+    local function g(ns, k, d) local v = Mux.settings.get(ns, k); if v == nil then return d end; return v end
+    local h     = g("muxtab",  "tab_height", 30)
+    local fs    = g("muxtab",  "tab_font_size", 12)
+    local shape = g("muxtab",  "tab_shape", "Round")
+    local hg    = g("muxtab",  "tab_h_gap", 0)
+    local vg    = g("muxtab",  "tab_v_gap", 1)
+    local bw    = g("muxtab",  "tab_border_width", 1)
+    local abw   = g("muxtab",  "tab_active_border_width", 1)
+    local hmode = g("muxtab",  "tab_hover_mode", "Border")
+    local barBg = g("muxtab",  "tab_bar_background", true)
+    local tcol  = g("muxtabc", "tab_text_color", "#ffffff")
+    local atc   = g("muxtabc", "tab_active_text_color", "#ffffff")
+    local bg    = g("muxtabc", "tab_bg_color", "#1c1c1c")
+    local abg   = g("muxtabc", "tab_active_bg_color", "#373737")
+    local bc    = g("muxtabc", "tab_border_color", "#484848")
+    local abc   = g("muxtabc", "tab_active_border_color", "#9b9b9b")
+    local hbg   = g("muxtabc", "tab_hover_bg_color", "#ffffff")
+    local htc   = g("muxtabc", "tab_hover_text_color", "#ffffff")
+
+    -- border-radius only renders when a border is present; the default border
+    -- width of 1 keeps Pill/Circle visibly rounded.
+    local radius
+    if     shape == "Square" then radius = "0px"
+    elseif shape == "Pill"   then radius = tostring(math.floor(h / 2)) .. "px"
+    elseif shape == "Circle" then radius = tostring(math.floor(h / 2)) .. "px"
+    else                          radius = "6px" end   -- Round
+
+    -- Hover honours the mode (text colour is handled by _echoTabLabel re-echo):
+    local function hover(borderW, bcol)
+        if hmode == "Border" then
+            return string.format("QLabel::hover{ border:%dpx solid %s; }", (borderW > 0 and borderW or 1), hbg)
+        end
+        return string.format("QLabel::hover{ background-color:%s; }", hbg)
+    end
+
+    theme.tabInactiveCss = string.format(
+        "QLabel{ background-color:%s; border:%dpx solid %s; border-radius:%s; margin:%dpx %dpx; padding:0 4px; } %s",
+        bg, bw, bc, radius, vg, hg, hover(bw, bc))
+    theme.tabActiveCss = string.format(
+        "QLabel{ background-color:%s; border:%dpx solid %s; border-radius:%s; margin:%dpx %dpx; padding:0 4px; } %s",
+        abg, abw, abc, radius, vg, hg, hover(abw, abc))
+    theme.tabActiveParentCss   = theme.tabActiveCss
+    theme.tabInactiveTextColor = tcol
+    theme.tabActiveTextColor   = atc
+    theme.tabHoverTextColor    = htc
+    theme.tabFontSize          = fs
+    theme.tabBarHeight         = h
+    -- Tab bar's own chrome is always black when shown, transparent when hidden.
+    theme.tabBarCss = barBg and "background-color: #000000; border: none;"
+        or "background-color: transparent; border: none;"
+
+    for _, host in pairs(Mux._tabHosts or {}) do
+        if host._tabsEnabled then
+            pcall(function()
+                if host._tabBar then
+                    host._tabBar:resize(nil, Mux._toPx(h)); host._tabBar:reposition()
+                    host._tabBar:setStyleSheet(theme.tabBarCss)
+                end
+                if host._tabViewport then
+                    host._tabViewport:move(nil, Mux._toPx(h)); host._tabViewport:reposition()
+                end
+                for _, tab in ipairs(host._tabs or {}) do
+                    if tab.label then
+                        local isActive = (host._activeTabId == tab.id)
+                        tab.label:setStyleSheet(isActive and theme.tabActiveCss or theme.tabInactiveCss)
+                        host:_echoTabLabel(tab.label, tab.name, isActive, false, theme, tab.nameAlign)
+                    end
+                end
+                if host._tabBarBox then host._tabBarBox:organize() end
+                if host.content   then Mux._relayoutContent(host) end
+            end)
+        end
+    end
+end
+
+for _, k in ipairs({
+    "tab_height", "tab_font_size", "tab_shape", "tab_h_gap", "tab_v_gap",
+    "tab_border_width", "tab_active_border_width", "tab_hover_mode", "tab_bar_background",
+}) do
+    Mux.settings.onChange("muxtab", k, function() Mux._applyTabStyle() end)
+end
+for _, k in ipairs({
+    "tab_text_color", "tab_active_text_color", "tab_bg_color", "tab_active_bg_color",
+    "tab_border_color", "tab_active_border_color", "tab_hover_bg_color", "tab_hover_text_color",
+}) do
+    Mux.settings.onChange("muxtabc", k, function() Mux._applyTabStyle() end)
+end
+
 -- tempTimer(0) defers past the synchronous script-loading stack so all Muxlet
 -- functions are defined before this runs. raiseEvent("muxletReady") fires last
 -- so downstream packages can register a handler and be guaranteed Muxlet's full
 -- API is available when they receive it.
 
 tempTimer(0, function()
+    -- content.lua is loaded by now, so the content registry exists.
+    if Mux.registerContent then
+        Mux.registerContent("mux_settings", muxSettingsContentDef)
+    end
     local savedTheme = Mux.settings.get("mux", "theme")
     if savedTheme and Mux.applyTheme and savedTheme ~= Mux._activeThemeName then
         Mux.applyTheme(savedTheme)

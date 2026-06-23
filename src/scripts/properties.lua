@@ -59,14 +59,12 @@ if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets
             return {}   -- collapsed: heading only
         end
 
-        -- Selectable, larger-font value line. Background matches the dialog so it
-        -- doesn't read as a console box; autoWrap keeps it from trailing off.
-        local mc = Geyser.MiniConsole:new({
-            name = uid .. "_mc", x = c.padL, y = 30, width = availW, height = 38,
-            color = "#24283e", autoWrap = true,
-        }, row)
-        mc:setFontSize(13)
-        if mc.disableScrollBar then mc:disableScrollBar() end
+        -- Styled, larger-font readout. Mudlet has no selectable-text widget other
+        -- than a console, and the MiniConsole proved unreliable here, so this is a
+        -- plain label: not selectable, but always renders the full value, live.
+        local lbl = Geyser.Label:new(
+            { name = uid .. "_v", x = c.padL + 2, y = 28, width = availW - 4, height = 40 }, row)
+        lbl:setStyleSheet("background: transparent; border: none;")
 
         local last
         local function paint()
@@ -78,16 +76,20 @@ if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets
                 x, y, w, h = pane.floatX, pane.floatY, pane.floatW, pane.floatH
             end
             local function n(v) return v and tostring(math.floor(v)) or "—" end
-            local s = string.format("x %s   y %s   %s × %s px   ·   id %s",
+            local s = string.format(
+                "<div style='font-size:14px;line-height:19px;color:#dfe3f4;'>"
+                .. "<b>x</b> %s&nbsp;&nbsp;&nbsp;<b>y</b> %s&nbsp;&nbsp;&nbsp;"
+                .. "<b>w</b> %s&nbsp;&nbsp;&nbsp;<b>h</b> %s<br>"
+                .. "<span style='color:#7f8bbf;'>id %s</span></div>",
                 n(x), n(y), n(w), n(h), tostring(pane and pane.id or "—"))
-            if s == last then return end   -- no change → don't disturb a selection
+            if s == last then return end
             last = s
-            mc:clear(); mc:echo(s)
+            lbl:echo(s)
         end
         paint()
 
         return { refresh = paint }   -- live; repaints only on change
-    end, { rowHeight = 74, layout = "block" })
+    end, { rowHeight = 72, layout = "block" })
 end
 
 
@@ -103,7 +105,7 @@ local function paneRows(pane)
         type      = "geomSection",
         pane      = pane,
         expanded  = geomExpanded,
-        rowHeight = geomExpanded and 74 or 34,
+        rowHeight = geomExpanded and 72 or 34,
         onToggle  = function()
             pane._geomExpanded = not pane._geomExpanded
             if refreshPaneProperties then refreshPaneProperties(pane) end

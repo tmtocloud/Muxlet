@@ -207,6 +207,7 @@ function Mux.applyWorkspace(name)
         if sw and sw.window and sw.visible then sw.window:raise() end
         Mux.raiseFloatingPanes()
         if Mux._resolveSavedAnchors then Mux._resolveSavedAnchors() end
+        if Mux._applyTabStyle then Mux._applyTabStyle() end
         Mux._scheduleAutoSave()
     end)
 
