@@ -169,6 +169,19 @@ jobs:
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
+      - name: Delete pre-release for this version
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if gh release view "$VERSION" &>/dev/null; then
+            gh release delete "$VERSION" --yes --cleanup-tag
+            echo "Deleted pre-release $VERSION and its tag"
+          else
+            echo "No pre-release found for $VERSION, nothing to delete"
+          fi
+
       - name: Create tagged release
         if: steps.version.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2

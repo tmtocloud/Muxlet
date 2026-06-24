@@ -73,6 +73,11 @@ function Mux._applyAnchor(pane)
     pane.floatX, pane.floatY = X, Y
     if pane.outer then pane.outer:move(X, Y); pane.outer:reposition() end
     pane._atAnchor = true
+    -- Anchoring moves a floating pane (possibly into the panespace region) without
+    -- going through the normal float path; explicitly raise so it stays above
+    -- embedded panes. _reanchorAll is called per-frame during drags and must stay
+    -- cheap, so the raise belongs here in _applyAnchor only.
+    if pane.raise then pane:raise() end
     return true
 end
 

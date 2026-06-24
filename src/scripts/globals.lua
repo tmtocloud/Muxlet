@@ -35,6 +35,9 @@ function Mux._notifyAllReposition()
         if Mux._relayoutContent then Mux._relayoutContent(p) end
     end
     if Mux._reanchorAll then Mux._reanchorAll() end
+    -- Keep floating panes above embedded ones after any structural layout change.
+    -- raise() is z-order only; conditionally-hidden floating panes stay hidden.
+    if Mux.raiseFloatingPanes then Mux.raiseFloatingPanes() end
 end
 
 -- User-facing IDs (pane_N, split_N, ps_N) recycle freed numbers via _idFree.

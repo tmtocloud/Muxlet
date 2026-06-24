@@ -144,8 +144,9 @@ function Mux.revealUI(id)
                 n = n + 1
             end
         end
+        Mux.raiseFloatingPanes()
         Mux._echo(string.format(
-            "\n<green>[Muxlet]<reset> Revealed controls on all %d pane(s).\n", n))
+            "\n<green>[Muxlet]<reset> Revealed controls on all %d pane(s); floating panes raised.\n", n))
         return
     end
 
@@ -163,12 +164,15 @@ function Mux.revealUI(id)
         target.propertiesButton = true
         if Mux._revealContent then Mux._revealContent(target) end
         _revealPane(host)
+        Mux.raiseFloatingPanes()
         Mux._echo(string.format(
             "\n<green>[Muxlet]<reset> Revealed controls on tab '<white>%s<reset>'.\n", id))
     else
         _revealPane(target)
+        Mux.raiseFloatingPanes()
         Mux._echo(string.format(
-            "\n<green>[Muxlet]<reset> Revealed controls on pane '<white>%s<reset>'.\n", id))
+            "\n<green>[Muxlet]<reset> Revealed controls on pane '<white>%s<reset>'%s.\n",
+            id, target.floating and "; pane raised" or ""))
     end
 end
 

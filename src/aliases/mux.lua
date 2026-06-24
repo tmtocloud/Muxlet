@@ -51,9 +51,11 @@ if sub == "help" then
 
   <white>Recovery<reset>
   mux panes                    — list every pane/tab with its id and hidden state
-  mux reveal <id>              — restore hidden titlebar/Properties on one pane/tab
-  mux reveal all               — restore them across the whole workspace
-                                 (escape hatch for a UI you've hidden from yourself)
+  mux reveal <id>              — restore hidden titlebar/Properties on one pane/tab;
+                                 also raises floating panes to the front
+  mux reveal all               — restore them across the whole workspace and raise
+                                 all floating panes (escape hatch for a UI you've
+                                 hidden or buried)
 
   <white>Diagnostics<reset>
   mux debug [on|off]           — toggle debug output
