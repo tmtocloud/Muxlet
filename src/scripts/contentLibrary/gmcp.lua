@@ -699,6 +699,12 @@ end
 insDrawBody = function(st)
     if not st.bodyContent then return end
 
+    -- Recompute content width from the live scrollbox size on every draw so the
+    -- body always tracks pane resizes without needing an explicit resize hook call.
+    if st.bodyScroll then
+        st.contentWidth = math.max(50, st.bodyScroll:get_width())
+    end
+
     for _, r in ipairs(st.rows or {}) do
         if r and r.delete then r:delete() end
     end
@@ -1267,11 +1273,30 @@ local function insApply(target)
     local bodyScroll = Geyser.ScrollBox:new({
         name=pfx.."bsc", x=0, y=INS_HDR_H, width="100%", height=Mux._fromEdgePx(0),
     }, target.content)
-    if bodyScroll.setStyleSheet then
-        pcall(function() bodyScroll:setStyleSheet("background:rgba(10,12,22,0.97);border:none;") end)
-    end
+    -- Style the scroll area: suppress horizontal scrollbar so bodyContent can fill
+    -- the full width without triggering horizontal scroll when the vertical bar appears.
+    -- Vertical bar is styled to a fixed 8px so we know the overlap amount.
+    pcall(function()
+        bodyScroll:setStyleSheet([[
+            background: rgba(10,12,22,0.97); border: none;
+            QScrollBar:horizontal { height: 0px; max-height: 0px; }
+            QScrollBar:vertical {
+                background: rgba(14,18,30,0.95); width: 8px; border: none;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(70,90,135,0.80); border-radius: 4px; min-height: 16px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px; border: none;
+            }
+            QAbstractScrollArea::corner { background: rgba(10,12,22,0.97); }
+        ]])
+    end)
 
-    local contentW = math.max(50, bodyScroll:get_width() - 17)
+    -- bodyContent fills the full ScrollBox width; the 8px vertical scrollbar overlaps
+    -- only the rightmost 8px of the content (which is fine since rows are left-anchored).
+    -- Width is recomputed on every draw so it tracks pane size changes correctly.
+    local contentW = math.max(50, bodyScroll:get_width())
     local bodyContent = Geyser.Label:new({
         name=pfx.."bc", x=0, y=0, width=contentW, height=60,
     }, bodyScroll)
@@ -1347,10 +1372,9 @@ Mux.registerContent("gmcp_inspector", {
     singleton   = false,
     apply       = insApply,
     remove      = insRemove,
-    resize      = function(target)
+    resize = function(target)
         local st = _inspectors[target.id]
         if not (st and st.bodyScroll) then return end
-        st.contentWidth = math.max(50, st.bodyScroll:get_width() - 17)
         insDrawBody(st)
     end,
     serialize = function(target)
