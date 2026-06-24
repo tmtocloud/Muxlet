@@ -475,8 +475,8 @@ function MuxSurface:enableTabs(opts)
     else
         buildTabInfrastructure(self)
     end
-    -- Content now belongs in tabs; hide the pane-level add-content controls.
-    if self.contentBtn then self.contentBtn:hide() end
+    -- Content now belongs in tabs; update button visibility (hides contentBtn via _contentEnabled).
+    if self._syncButtons then self:_syncButtons(true) end
     if self._tabBar and not self.tabsLocked then self:_setAddTabBtnVisible(true) end
     if not opts.noDefaultTab and #self._tabs == 0 then
         local priorContent = self._activeContent
@@ -516,11 +516,9 @@ function MuxSurface:_hideTabBar()
     if self._tabViewport then self._tabViewport:hide() end
     self.contentBg:show()
     self:_updatePlaceholder()
-    -- Restore content button if tabs are fully gone and tabs are disabled.
-    -- (If tabs are still enabled but empty, the button stays hidden.)
-    if self.contentBtn and self:_contentEnabled() then
-        self.contentBtn:show()
-    end
+    -- Restore button visibility; _contentEnabled() now returns true so _syncButtons
+    -- will show contentBtn if appropriate (respects compact_titlebar mode).
+    if self._syncButtons then self:_syncButtons(true) end
 end
 
 function MuxSurface:_collapseIfDone()

@@ -135,7 +135,8 @@ function Mux.settings.get(ns, key)
     local v = Mux.settings._data[ns][key]
     if v ~= nil then return v end
     local reg = Mux.settings._registry[ns] and Mux.settings._registry[ns][key]
-    return reg and reg.default or nil
+    if reg then return reg.default end
+    return nil
 end
 
 function Mux.settings.set(ns, key, value)
@@ -629,7 +630,7 @@ local function buildMainPaneContent(targetTab, bgColor)
         readFn     = function() return mainPane.addable end,
         writeFn    = function(v)
             mainPane.addable = v
-            mainPane:_checkOverflow(true)
+            mainPane:_syncButtons(true)
         end,
     }
 
@@ -1317,7 +1318,7 @@ Mux.settings._order["mux"] = {
 
 Mux.settings.onChange("mux", "compact_titlebar", function()
     for _, pane in pairs(Mux._panes or {}) do
-        if pane._checkOverflow then pane:_checkOverflow() end
+        if pane._syncButtons then pane:_syncButtons(true) end
     end
 end)
 

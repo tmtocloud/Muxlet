@@ -243,12 +243,12 @@ function MuxPane:init(opts)
     self:_buildCornerHandles(theme)
     self:_updatePlaceholder()
 
-    -- Chain _checkOverflow into every pane's onReposition so button overflow
+    -- Chain _syncButtons into every pane's onReposition so button visibility
     -- is re-evaluated whenever a split handle is dragged or the window resizes.
     local prevOnRepos = self.onReposition
     self.onReposition = function(p)
         if prevOnRepos then prevOnRepos(p) end
-        if p.titlebar then p:_checkOverflow() end
+        if p.titlebar then p:_syncButtons() end
     end
 
     Mux._panes[self.id] = self
@@ -998,7 +998,7 @@ function MuxPane:setNameAlign(align)
     if not self.titlebar then return end
     self:_layoutTitlebarButtons()
     self:_refreshTitlebarName()
-    self:_checkOverflow()
+    self:_syncButtons()
 end
 
 -- ── Anchoring ────────────────────────────────────────────────────────────────
@@ -1041,102 +1041,86 @@ function MuxPane:armAnchorMode(on)
     if self.titlebar then self.titlebar:setCursor(self:_titlebarCursor()) end
 end
 
--- Checks whether visible buttons fit in the current header width and repositions them.
--- If too narrow: hides action buttons (overflow mode — right-click shows them as a menu).
--- If wide enough: restores button visibility without calling _applyTitlebarVisibility().
-function MuxPane:_checkOverflow(force)
+-- Single authority for all titlebar button visibility. Called after any state
+-- change that could affect what buttons should show. With force=true it always
+-- re-applies; without force it skips re-apply when the overflow state is unchanged
+-- (safe for per-frame onReposition calls during live handle drags).
+function MuxPane:_syncButtons(force)
     if not self.titlebarVisible then return end
-    -- During a live handle drag this is called for every pane on every reposition
-    -- frame. Anchored titlebar buttons already track position via reposition, so
-    -- only overflow *visibility* could change — and that can wait until the drag
-    -- ends (MuxSplit:_flushRatio re-runs this once across the sub-tree). Skipping
-    -- the per-frame width query keeps resize cheap with many panes.
-    if Mux._resizing then return end
+    -- During a live handle drag this is called on every reposition frame.
+    -- Skip the per-frame width query; _flushRatio re-runs once after the drag ends.
+    if Mux._resizing and not force then return end
     local headerW = self.header:get_width()
-    if headerW < 10 then return end  -- not yet laid out; skip
+    if headerW < 10 then return end  -- not yet laid out
 
-    -- Refresh button anchors if alignment / name width changed. This is gated
-    -- internally, so during a live resize (where those inputs are stable) it is a
-    -- no-op and the buttons track the header edge via Geyser's reposition cascade.
     self:_layoutTitlebarButtons()
 
-    local compact = Mux.settings.get and Mux.settings.get("mux", "compact_titlebar")
+    -- Dialogs (_dialog = true) are system UI and always show their controls
+    -- regardless of the compact_titlebar workspace preference.
+    local compact = (not self._dialog) and Mux.settings.get and Mux.settings.get("mux", "compact_titlebar")
     local align   = self.nameAlign or "left"
 
     local showInfo = self.infoBtn and self.contextMenu
         and (self.showSettingsInMenu or self.propertiesButton)
     local infoBtnW    = showInfo and 22 or 0
-    local contentBtnW = self:_contentEnabled() and 26 or 0   -- now part of the left cluster
+    local contentBtnW = self:_contentEnabled() and 26 or 0
     local anchorBtnW  = (self.anchorBtn and self.floating and self.anchorable and not compact) and 26 or 0
     local nameW       = self:_titlebarNameWidth()
 
-    -- Always-visible close + min cluster.
     local closeMinW = 22
     if self.floating and self.minimizable then closeMinW = closeMinW + 22 end
-
-    -- Width of the right-anchored action cluster in the current state.
     local rightW = closeMinW
-    if self.zoomable and (self._split or self.floating or self._zoomed)          then rightW = rightW + 28 end
-    if self.swappable and self._split and not self.floating      then rightW = rightW + 26 end
-    if self.splittable and not self.floating                     then rightW = rightW + 44 end
-    rightW = rightW + anchorBtnW   -- floating-only anchor button now lives in the right cluster
+    if self.zoomable and (self._split or self.floating or self._zoomed) then rightW = rightW + 28 end
+    if self.swappable and self._split and not self.floating             then rightW = rightW + 26 end
+    if self.splittable and not self.floating                            then rightW = rightW + 44 end
+    rightW = rightW + anchorBtnW
 
     local newOverflow
     if align == "right" then
-        -- Cluster stays on the right; the name reserves a slot to its right.
-        -- Same shape as center plus the name slot. namePad / clusterGap match
-        -- _layoutTitlebarButtons.
         local namePad, clusterGap = 6, 6
         local leftW = 6 + infoBtnW + contentBtnW
-        newOverflow = compact
-            or (headerW < leftW + rightW + namePad + nameW + clusterGap + 10)
+        newOverflow = compact or (headerW < leftW + rightW + namePad + nameW + clusterGap + 10)
+    elseif align == "center" then
+        local leftW = 6 + infoBtnW + contentBtnW
+        newOverflow = compact or (headerW < leftW + nameW + rightW + 10)
     else
-        if align == "center" then
-            local leftW = 6 + infoBtnW + contentBtnW
-            newOverflow = compact or (headerW < leftW + nameW + rightW + 10)
-        else  -- left
-            local leftW = 16 + nameW + 4 + infoBtnW + contentBtnW
-            newOverflow = compact or (headerW < leftW + rightW + 10)
-        end
+        local leftW = 16 + nameW + 4 + infoBtnW + contentBtnW
+        newOverflow = compact or (headerW < leftW + rightW + 10)
     end
 
-    -- Normally we skip the visibility re-apply when the overflow state is
-    -- unchanged. But _applyTitlebarVisibility() force-calls us after a property
-    -- toggle: it has just :show()n every eligible button, so even when the pane
-    -- is still too narrow (overflow unchanged) we must re-run the apply pass to
-    -- re-hide the secondary buttons. Without `force` those shows would stick,
-    -- resetting the compact view. (force also re-applies the now-current
-    -- eligibility, which the right-click menu reads independently.)
     if not force and newOverflow == self._overflowMode then return end
     self._overflowMode = newOverflow
 
     if newOverflow then
-        -- Secondary action buttons collapse into the right-click context menu.
-        -- closeBtn and minBtn are primary window controls; they stay visible so
-        -- panes without a context menu (dialogs, settings) always have a close target.
-        if self.infoBtn     then self.infoBtn:hide()     end
-        if self.zoomBtn     then self.zoomBtn:hide()     end
-        if self.swapBtn     then self.swapBtn:hide()     end
-        if self.splitHBtn   then self.splitHBtn:hide()   end
-        if self.splitVBtn   then self.splitVBtn:hide()   end
-        if self.contentBtn  then self.contentBtn:hide()  end
-        if self.anchorBtn   then self.anchorBtn:hide()   end
-        if self.addPaneBtn  then self.addPaneBtn:hide()  end
+        -- Overflow or compact: collapse secondary buttons to the right-click menu.
+        if self.infoBtn    then self.infoBtn:hide()    end
+        if self.zoomBtn    then self.zoomBtn:hide()    end
+        if self.swapBtn    then self.swapBtn:hide()    end
+        if self.splitHBtn  then self.splitHBtn:hide()  end
+        if self.splitVBtn  then self.splitVBtn:hide()  end
+        if self.contentBtn then self.contentBtn:hide() end
+        if self.anchorBtn  then self.anchorBtn:hide()  end
+        if self.addPaneBtn then self.addPaneBtn:hide() end
+        if compact then
+            -- compact_titlebar = true: only the pane name is visible; all controls via right-click.
+            self.closeBtn:hide()
+            self.minBtn:hide()
+        end
     else
-        -- Restore ideal visibility without recursing into _applyTitlebarVisibility.
+        -- Full visibility: restore per-state buttons.
         if self.infoBtn then
             if showInfo then self.infoBtn:show() else self.infoBtn:hide() end
         end
-        if not self.closeable then
-            self.closeBtn:hide()
-        else
-            self.closeBtn:show()
-        end
+        if not self.closeable then self.closeBtn:hide() else self.closeBtn:show() end
         if self.addPaneBtn then
             if self.addable then self.addPaneBtn:show() else self.addPaneBtn:hide() end
         end
         if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
-        if self.zoomable and (self._split or self.floating or self._zoomed) then self.zoomBtn:show() else self.zoomBtn:hide() end
+        if self.zoomable and (self._split or self.floating or self._zoomed) then
+            self.zoomBtn:show()
+        else
+            self.zoomBtn:hide()
+        end
         if self.splittable and not self.floating then
             self.splitVBtn:show(); self.splitHBtn:show()
         else
@@ -1151,7 +1135,7 @@ function MuxPane:_checkOverflow(force)
             if self:_contentEnabled() then self.contentBtn:show() else self.contentBtn:hide() end
         end
         if self.anchorBtn then
-            if self.floating and self.anchorable and not compact then
+            if self.floating and self.anchorable then
                 self.anchorBtn:show(); self._refreshAnchorBtn()
             else
                 self.anchorBtn:hide()
@@ -1172,43 +1156,7 @@ function MuxPane:_applyTitlebarVisibility()
         self.content:reposition()
         if self._syncConnScreenGeometry then self:_syncConnScreenGeometry() end
         self.titlebar:show()
-        if self.infoBtn then
-            local showInfo = self.contextMenu
-                and (self.showSettingsInMenu or self.propertiesButton)
-            if showInfo then self.infoBtn:show() else self.infoBtn:hide() end
-        end
-        if not self.closeable then
-            self.closeBtn:hide()
-        else
-            self.closeBtn:show()
-        end
-        if self.addPaneBtn then
-            if self.addable then self.addPaneBtn:show() else self.addPaneBtn:hide() end
-        end
-        if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
-        if self.zoomable and (self._split or self.floating or self._zoomed) then self.zoomBtn:show() else self.zoomBtn:hide() end
-        if self.splittable and not self.floating then
-            self.splitVBtn:show(); self.splitHBtn:show()
-        else
-            self.splitVBtn:hide(); self.splitHBtn:hide()
-        end
-        if self.swappable and not self.floating and self._split then
-            self.swapBtn:show()
-        else
-            self.swapBtn:hide()
-        end
-        if self.contentBtn then
-            if self:_contentEnabled() then self.contentBtn:show() else self.contentBtn:hide() end
-        end
-        if self.anchorBtn then
-            local compact = Mux.settings.get and Mux.settings.get("mux", "compact_titlebar")
-            if self.floating and self.anchorable and not compact then
-                self.anchorBtn:show(); self._refreshAnchorBtn()
-            else
-                self.anchorBtn:hide()
-            end
-        end
-        self:_checkOverflow(true)
+        self:_syncButtons(true)
         self.reveal:hide()
     else
         local h = theme.revealStripHeight
@@ -1306,7 +1254,7 @@ function MuxPane:setName(text)
     self:_refreshTitlebarName()
     self:_updateInfoBtnPos()
     self:_updatePlaceholder()
-    self:_checkOverflow()
+    self:_syncButtons()
 end
 
 -- Returns true when the pane-level Content Library button and menu item should
@@ -1452,16 +1400,10 @@ function MuxPane:_detachToFloat()
     self.outer:move(self.floatX, self.floatY)
     self.outer:resize(self.floatW, self.floatH)
     self.outer:reposition()
-    self:_applyTitlebarVisibility()   -- floating state now set: reveal floating-only buttons (anchor, zoom)
+    self:_applyTitlebarVisibility()   -- floating state now set; _syncButtons(true) inside handles all buttons
     self:raise()
     self.frame:setStyleSheet(self:_baseFrameCss())
     if self.resizable then self:_showCornerHandles() else self:_hideCornerHandles() end
-    if self.titlebarVisible and self.minimizable then
-        self.minBtn:show()
-    end
-    if self.splitVBtn then self.splitVBtn:hide() end
-    if self.splitHBtn then self.splitHBtn:hide() end
-    if self.swapBtn   then self.swapBtn:hide()   end
     -- Always leave a ghost slot in the vacated split slot. Ghosts persist until
     -- explicitly dismissed (×) or the pane is closed; they never auto-vanish.
     if self._split then
@@ -1500,23 +1442,10 @@ function MuxPane:embed(slot)
     self.outer:reposition()
     self.frame:setStyleSheet(self:_baseFrameCss())
     self:_hideCornerHandles()
-    if self.titlebarVisible then
-        -- _minBtnVisible checks self._split.direction which may not be set yet at
-        -- embed() time (split.place() runs after embed()); _checkOverflow fixes it up.
-        if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
-        if self.splittable then
-            if self.splitVBtn then self.splitVBtn:show() end
-            if self.splitHBtn then self.splitHBtn:show() end
-        end
-        if self.swappable and self._split then
-            if self.swapBtn then self.swapBtn:show() end
-        end
-    else
-        self.minBtn:hide()
-    end
-    tempTimer(0, function() if self.titlebar then self:_checkOverflow() end end)
+    -- _split may not be wired until split.place() runs after embed(); defer so
+    -- _syncButtons sees the final split state when computing min/swap/zoom eligibility.
+    tempTimer(0, function() if self.titlebar then self:_syncButtons(true) end end)
     if self.onEmbed then self.onEmbed(self) end
-    self:_updateZoomBtn()
     if self._split then self._split:_updateHandleResizability() end
     Mux._scheduleAutoSave()
     Mux._log("MuxPane embedded: %s", self.id)
@@ -1557,10 +1486,7 @@ function MuxPane:zoom()
         if self.consoleBorders and self._paneSpace then
             self._paneSpace.outer:hide()
         end
-        if self.splitVBtn then self.splitVBtn:hide() end
-        if self.splitHBtn then self.splitHBtn:hide() end
-        if self.swapBtn   then self.swapBtn:hide()   end
-        tempTimer(0, function() if self.titlebar then self:_checkOverflow() end end)
+        tempTimer(0, function() if self.titlebar then self:_syncButtons(true) end end)
     end
     self.outer:move(0, 0)
     self.outer:resize("100%", "100%")
@@ -1571,7 +1497,6 @@ function MuxPane:zoom()
     -- popup dialogs (free floating panes) are never obscured by the zoom.
     self:raise()
     Mux._raiseFreeFloatingPanes()
-    self:_updateZoomBtn()
     Mux._log("MuxPane zoomed: %s", self.id)
 end
 
@@ -1586,9 +1511,7 @@ function MuxPane:_unzoom()
         self.outer:resize(state.floatW, state.floatH)
         self.outer:reposition()
         if self.resizable then self:_showCornerHandles() else self:_hideCornerHandles() end
-        if self.titlebarVisible and self.minimizable then
-            self.minBtn:show()
-        end
+        tempTimer(0, function() if self.titlebar then self:_syncButtons(true) end end)
     else
         -- Re-embed into the original slot and remove the ghost we left behind.
         if state.slot then
@@ -1603,46 +1526,16 @@ function MuxPane:_unzoom()
         self.outer:reposition()
         self.frame:setStyleSheet(self:_baseFrameCss())
         self:_hideCornerHandles()
-        self.minBtn:hide()
         if self.consoleBorders and self._paneSpace then
             self._paneSpace.outer:show()
         end
-        if self.titlebarVisible then
-            if self.splittable then
-                if self.splitVBtn then self.splitVBtn:show() end
-                if self.splitHBtn then self.splitHBtn:show() end
-            end
-            if self.swappable and self._split then
-                if self.swapBtn then self.swapBtn:show() end
-            end
-        end
-        tempTimer(0, function() if self.titlebar then self:_checkOverflow() end end)
+        tempTimer(0, function() if self.titlebar then self:_syncButtons(true) end end)
     end
     if self.onReposition then self.onReposition(self) end
     Mux.raiseFloatingPanes()
-    self:_updateZoomBtn()
     Mux._log("MuxPane unzoomed: %s", self.id)
 end
 
-function MuxPane:_updateZoomBtn()
-    if not self.zoomBtn then return end
-    if self._zoomBtnEcho then self._zoomBtnEcho(false) end
-    self.zoomBtn:setToolTip(self._zoomed and "UnZoom" or "Zoom")
-    if self.zoomable and (self._split or self.floating or self._zoomed) then
-        self.zoomBtn:show()
-    else
-        self.zoomBtn:hide()
-    end
-end
-
-function MuxPane:_updateSwapBtn()
-    if not self.swapBtn then return end
-    if self.swappable and not self.floating and self._split then
-        self.swapBtn:show()
-    else
-        self.swapBtn:hide()
-    end
-end
 
 function MuxPane:raise()
     -- raiseAll on a Container iterates windowList and raises each native child.
@@ -1831,7 +1724,6 @@ function MuxPane:applyTheme()
     end
     if self.zoomBtn    then
         self.zoomBtn:setStyleSheet(theme.btnCss or "")
-        self:_updateZoomBtn()
     end
     if self.swapBtn then
         self.swapBtn:setStyleSheet(theme.btnCss or "")
@@ -1995,7 +1887,7 @@ function MuxPane:_buildCornerHandles(theme)
             pane.outer:move(newX, newY)
             pane.outer:resize(newW, newH)
             pane.outer:reposition()
-            pane:_checkOverflow()
+            pane:_syncButtons()
             if Mux._relayoutContent then Mux._relayoutContent(pane) end
         end)
 

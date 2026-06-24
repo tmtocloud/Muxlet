@@ -89,7 +89,6 @@ local function _revealPane(p)
         p:setTitlebarVisible(true)
     end
     if p._applyTitlebarVisibility then p:_applyTitlebarVisibility() end
-    if p._checkOverflow then p:_checkOverflow() end
     if Mux._revealContent then Mux._revealContent(p) end
 end
 

@@ -410,7 +410,7 @@ function MuxSplit:_flushRatio()
     local function recheck(node)
         if not node then return end
         if node.outer then
-            if node.titlebar and node._checkOverflow then node:_checkOverflow() end
+            if node.titlebar and node._syncButtons then node:_syncButtons() end
         else
             recheck(node.childA)
             recheck(node.childB)
@@ -431,8 +431,7 @@ function MuxSplit:place(child, side)
         child._slot     = slot
         child._split    = self
         child._slotSide = side
-        if child._updateZoomBtn then child:_updateZoomBtn() end
-        if child._updateSwapBtn then child:_updateSwapBtn() end
+        if child._syncButtons then child:_syncButtons(true) end
     elseif child.box then
         rootWidget          = child.box
         child._parentSlot   = slot
@@ -498,8 +497,7 @@ function MuxSplit:collapseSlot(closedSide)
             sibling._slot     = parentContainer
             sibling._split    = self._parentSplit
             sibling._slotSide = self._parentSide
-            if sibling._updateZoomBtn then sibling:_updateZoomBtn() end
-            if sibling._updateSwapBtn then sibling:_updateSwapBtn() end
+            if sibling._syncButtons then sibling:_syncButtons(true) end
 
             if self._parentSplit then
                 if self._parentSide == "a" then self._parentSplit.childA = sibling
@@ -533,8 +531,7 @@ function MuxSplit:collapseSlot(closedSide)
             sibling._split    = nil
             sibling._slot     = nil
             sibling._slotSide = nil
-            if sibling._updateZoomBtn then sibling:_updateZoomBtn() end
-            if sibling._updateSwapBtn then sibling:_updateSwapBtn() end
+            if sibling._syncButtons then sibling:_syncButtons(true) end
             sibling = nil
         end
     end
@@ -598,8 +595,7 @@ function MuxSplit:collapseSlot(closedSide)
             sibling._slot     = parentContainer
             sibling._slotSide = nil
         end
-        if sibling._updateZoomBtn then sibling:_updateZoomBtn() end
-        if sibling._updateSwapBtn then sibling:_updateSwapBtn() end
+        if sibling._syncButtons then sibling:_syncButtons(true) end
     elseif sibling.box then
         sibling._parentSplit = self._parentSplit
         sibling._parentSide  = self._parentSide
@@ -710,8 +706,7 @@ function MuxSplit:_splitAndEmbed(existingPane, floatingPane, direction, floatOnS
     if existingGoesToSide == "a" then newSplit.childA = existingPane
     else                             newSplit.childB = existingPane
     end
-    if existingPane._updateZoomBtn then existingPane:_updateZoomBtn() end
-    if existingPane._updateSwapBtn then existingPane:_updateSwapBtn() end
+    if existingPane._syncButtons then existingPane:_syncButtons(true) end
 
     local floatSlot = (floatOnSide == "a") and newSplit.slotA or newSplit.slotB
     floatingPane._slot     = floatSlot
