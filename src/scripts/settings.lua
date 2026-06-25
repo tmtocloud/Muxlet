@@ -717,6 +717,33 @@ local function buildMainPaneContent(targetTab, bgColor)
     }
 
     rows[#rows+1] = {
+        label      = "Minimizable",
+        desc       = "Show the minimize (–) button in the titlebar",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return mainPane.minimizable end,
+        writeFn    = function(v)
+            mainPane.minimizable = v
+            mainPane:_applyTitlebarVisibility()
+        end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Name Align",
+        desc       = "Where the pane name sits in the titlebar",
+        type       = "segmentedControl",
+        widgetWidth = 138,
+        options    = {
+            { value = "left",   label = "Left"   },
+            { value = "center", label = "Center" },
+            { value = "right",  label = "Right"  },
+        },
+        readFn     = function() return mainPane.nameAlign or "left" end,
+        writeFn    = function(v) mainPane:setNameAlign(v) end,
+    }
+
+    rows[#rows+1] = {
         label      = "addPane",
         desc       = "Show a + button in the titlebar (and right-click menu when compact) to add a new floating pane",
         type       = "toggle",
@@ -780,6 +807,33 @@ local function buildMainPaneContent(targetTab, bgColor)
             if not v then mainPane:_hideCornerHandles() end
             if mainPane._split then mainPane._split:_updateHandleResizability() end
         end,
+    }
+
+    rows[#rows+1] = {
+        label      = "Bordered",
+        desc       = "Draw the pane's frame border. When off, content fills edge-to-edge",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return mainPane.bordered ~= false end,
+        writeFn    = function(v) mainPane:setBordered(v) end,
+    }
+
+    rows[#rows+1] = {
+        label   = "Border Color",
+        desc    = "Custom border color. Leave unset to use theme default",
+        type    = "color",
+        readFn  = function()
+            if mainPane.borderColor then return mainPane.borderColor end
+            local theme = Mux.activeTheme() or {}
+            local css = theme.paneOuterCss or ""
+            local r, g, b = css:match("border:%s*%S+%s+%S+%s+rgb%((%d+),%s*(%d+),%s*(%d+)%)")
+            if r then
+                return string.format("#%02x%02x%02x", tonumber(r), tonumber(g), tonumber(b))
+            end
+            return "#444455"
+        end,
+        writeFn = function(hex) mainPane:setBorderColor(hex) end,
     }
 
     rows[#rows+1] = {
