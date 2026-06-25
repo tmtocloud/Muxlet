@@ -460,7 +460,12 @@ end
 function MuxSplit:collapseSlot(closedSide)
     -- Clear split/slot refs on the closed-side child if it is a floating pane so
     -- it can re-embed anywhere once this split is retired.
-    local closedChild = (closedSide == "a") and self.childA or self.childB
+    -- Resolve the closed-side child explicitly. NOTE: a `(cond) and self.childX
+    -- or self.childY` idiom is unsafe here because childA/childB can legitimately
+    -- be nil (an empty slot holding only a ghost), in which case the idiom falls
+    -- through to the wrong child. Use if/else so nil is preserved.
+    local closedChild
+    if closedSide == "a" then closedChild = self.childA else closedChild = self.childB end
     if closedChild and closedChild.outer and closedChild.floating then
         closedChild._split    = nil
         closedChild._slot     = nil
@@ -470,7 +475,11 @@ function MuxSplit:collapseSlot(closedSide)
     local parentContainer = self.box.container
 
     local siblingSide = (closedSide == "a") and "b" or "a"
-    local sibling = (siblingSide == "a") and self.childA or self.childB
+    -- Same nil-safety concern as above: when the sibling side holds only a ghost,
+    -- childA/childB is nil and the and/or idiom would wrongly return the other
+    -- (closed) child, skipping ghost promotion and stranding the ghost as void.
+    local sibling
+    if siblingSide == "a" then sibling = self.childA else sibling = self.childB end
 
     if sibling and sibling.outer and sibling.floating then
         -- Ghost slot lookup is by slot container (not pane→ghost) so promotion
@@ -490,9 +499,7 @@ function MuxSplit:collapseSlot(closedSide)
                 Mux.raiseFloatingPanes()
             end
 
-            sibGhost.slot  = parentContainer
-            sibGhost.split = self._parentSplit
-            sibGhost.side  = self._parentSide
+            Mux._reassignGhost(sibGhost, parentContainer, self._parentSplit, self._parentSide)
 
             sibling._slot     = parentContainer
             sibling._split    = self._parentSplit
@@ -570,9 +577,7 @@ function MuxSplit:collapseSlot(closedSide)
             if parentContainer then parentContainer:remove(self.box) end
             Mux._splits[self.id] = nil
 
-            promotedGhost.slot  = parentContainer
-            promotedGhost.split = self._parentSplit
-            promotedGhost.side  = self._parentSide
+            Mux._reassignGhost(promotedGhost, parentContainer, self._parentSplit, self._parentSide)
 
             -- Remove any additional ghosts that belonged to this split.
             local extraKeys = {}
@@ -581,7 +586,7 @@ function MuxSplit:collapseSlot(closedSide)
                     extraKeys[#extraKeys + 1] = key
                 end
             end
-            for _, key in ipairs(extraKeys) do Mux._removeGhostSlot(key) end
+            for _, key in ipairs(extraKeys) do Mux._dissolveGhost(key) end
 
             -- Clear the parent's child reference for our slot so future
             -- collapseSlot calls on the parent see nil rather than stale self.
@@ -607,7 +612,7 @@ function MuxSplit:collapseSlot(closedSide)
                 if ghost.split == self then keysToRemove[#keysToRemove + 1] = key end
             end
             for _, key in ipairs(keysToRemove) do
-                Mux._removeGhostSlot(key)
+                Mux._dissolveGhost(key)
             end
             if self._parentSplit then
                 self._parentSplit:collapseSlot(self._parentSide)

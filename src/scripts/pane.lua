@@ -431,6 +431,19 @@ function MuxPane:_buildTitlebar(theme)
         end
         local newX = drag.paneX + (event.globalX - drag.startX)
         local newY = drag.paneY + (event.globalY - drag.startY)
+        -- Keep the pane on-screen. Mudlet/Geyser interpret a negative window
+        -- coordinate as an offset measured from the opposite edge (the convention
+        -- Mux._fromEdgePx relies on), so a left/top overrun teleports the pane to
+        -- the far side — clamping x/y >= 0 prevents that. A right/bottom overrun
+        -- does not teleport but slides the pane off-screen with no way to grab it
+        -- back, so the far edges are clamped too. A pane larger than the screen on
+        -- an axis pins to 0 on that axis (max becomes 0).
+        local sw, sh = getMainWindowSize()
+        local pw, ph = self.outer:get_width(), self.outer:get_height()
+        local maxX = math.max(0, sw - pw)
+        local maxY = math.max(0, sh - ph)
+        if newX < 0 then newX = 0 elseif newX > maxX then newX = maxX end
+        if newY < 0 then newY = 0 elseif newY > maxY then newY = maxY end
         self.outer:move(newX, newY)
         self.outer:reposition()
         self.floatX = newX
@@ -461,56 +474,68 @@ function MuxPane:_buildTitlebar(theme)
         local gx, gy = event.globalX, event.globalY
         if not drag.dropTargets then snapshotDropTargets() end
 
-        -- Ghost slot hover: highlight whichever slot the cursor is over.
-        local newHoverGhost = nil
-        for _, g in ipairs(drag.ghostRects) do
-            if gx >= g.x and gx <= g.x + g.w and gy >= g.y and gy <= g.y + g.h then
-                newHoverGhost = g.key
+        -- Detection order matters. Insertion zones live on the 20% edges of real,
+        -- embedded panes; a ghost slot can be large (especially after promotion)
+        -- and may overlap a neighbouring pane's edge zone. Previously ghost-hover
+        -- was tested first and suppressed insertion entirely whenever the cursor sat
+        -- over any ghost rect, which made it impossible to insert "within" a region
+        -- that still contained a ghost. So: test pane-edge insertion FIRST. If the
+        -- cursor is in a pane's edge zone, that wins (and we clear any ghost
+        -- highlight). Only when no insertion edge is found do we treat the position
+        -- as a ghost hover (return-home into the ghost's interior). The two states
+        -- are kept mutually exclusive so the preview and the drop always agree.
+        local insertPane, insertEdge, rect = nil, nil, nil
+        for _, t in ipairs(drag.dropTargets) do
+            if gx >= t.x and gx <= t.x + t.w and gy >= t.y and gy <= t.y + t.h then
+                local minPx, maxPx = 30, 80
+                local edgeH = Mux._clamp(t.h * 0.20, minPx, maxPx)
+                local edgeW = Mux._clamp(t.w * 0.20, minPx, maxPx)
+                if gy <= t.y + edgeH then
+                    insertEdge = "top"
+                elseif gy >= t.y + t.h - edgeH then
+                    insertEdge = "bottom"
+                elseif gx <= t.x + edgeW then
+                    insertEdge = "left"
+                elseif gx >= t.x + t.w - edgeW then
+                    insertEdge = "right"
+                end
+                if insertEdge then insertPane, rect = t.pane, t end
                 break
             end
         end
-        if newHoverGhost ~= drag.lastHoverGhostKey then
+
+        if insertPane then
+            -- Insertion wins: clear any ghost highlight so the two are exclusive.
             if drag.lastHoverGhostKey then
                 local prev = Mux._ghostSlots[drag.lastHoverGhostKey]
                 if prev then Mux._unhighlightGhostSlot(prev) end
+                drag.lastHoverGhostKey = nil
             end
-            if newHoverGhost then
-                Mux._highlightGhostSlot(Mux._ghostSlots[newHoverGhost])
-            end
-            drag.lastHoverGhostKey = newHoverGhost
-        end
+            Mux._showInsertionGhost(rect.x, rect.y, rect.w, rect.h, insertEdge)
+            drag.insertTarget = { pane = insertPane, edge = insertEdge }
+        else
+            -- No insertion edge under the cursor — fall back to ghost-slot hover
+            -- (return-home / drop-into-ghost) for whichever slot the cursor is over.
+            Mux._hideInsertionGhost()
+            drag.insertTarget = nil
 
-        -- Insertion zone detection (only when not over a ghost slot).
-        if not newHoverGhost then
-            local insertPane, insertEdge, rect = nil, nil, nil
-            for _, t in ipairs(drag.dropTargets) do
-                if gx >= t.x and gx <= t.x + t.w and gy >= t.y and gy <= t.y + t.h then
-                    local minPx, maxPx = 30, 80
-                    local edgeH = Mux._clamp(t.h * 0.20, minPx, maxPx)
-                    local edgeW = Mux._clamp(t.w * 0.20, minPx, maxPx)
-                    if gy <= t.y + edgeH then
-                        insertEdge = "top"
-                    elseif gy >= t.y + t.h - edgeH then
-                        insertEdge = "bottom"
-                    elseif gx <= t.x + edgeW then
-                        insertEdge = "left"
-                    elseif gx >= t.x + t.w - edgeW then
-                        insertEdge = "right"
-                    end
-                    if insertEdge then insertPane, rect = t.pane, t end
+            local newHoverGhost = nil
+            for _, g in ipairs(drag.ghostRects) do
+                if gx >= g.x and gx <= g.x + g.w and gy >= g.y and gy <= g.y + g.h then
+                    newHoverGhost = g.key
                     break
                 end
             end
-            if insertPane then
-                Mux._showInsertionGhost(rect.x, rect.y, rect.w, rect.h, insertEdge)
-                drag.insertTarget = { pane = insertPane, edge = insertEdge }
-            else
-                Mux._hideInsertionGhost()
-                drag.insertTarget = nil
+            if newHoverGhost ~= drag.lastHoverGhostKey then
+                if drag.lastHoverGhostKey then
+                    local prev = Mux._ghostSlots[drag.lastHoverGhostKey]
+                    if prev then Mux._unhighlightGhostSlot(prev) end
+                end
+                if newHoverGhost then
+                    Mux._highlightGhostSlot(Mux._ghostSlots[newHoverGhost])
+                end
+                drag.lastHoverGhostKey = newHoverGhost
             end
-        else
-            Mux._hideInsertionGhost()
-            drag.insertTarget = nil
         end
     end)
 
@@ -1396,7 +1421,7 @@ function MuxPane:_detachToFloat()
         if self._slotSide == "a" then self._split.childA = nil
         else                          self._split.childB = nil
         end
-        Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace)
+        Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace, self)
         -- Raise ALL floating panes so none are obscured by the new ghost.
         Mux.raiseFloatingPanes()
     end
@@ -1429,7 +1454,6 @@ function MuxPane:embed(slot)
     self.outer:move("0%", "0%")
     self.outer:resize("100%", "100%")
     self.outer:reposition()
-    Mux._notifyAllReposition()
     self.frame:setStyleSheet(self:_baseFrameCss())
     self:_hideCornerHandles()
     -- _split may not be wired until split.place() runs after embed(); defer so
@@ -1469,7 +1493,7 @@ function MuxPane:zoom()
         self.outer:changeContainer(Geyser)
         self.frame:setStyleSheet(self:_baseFrameCss())
         if self._split then
-            Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace)
+            Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace, self)
         end
         -- consoleBorders panes have a transparent frame; hiding the pane space
         -- prevents other panes from showing through while zoomed.
@@ -1873,8 +1897,14 @@ function MuxPane:_buildCornerHandles(theme)
             pane.floatY = newY
             pane.floatW = newW
             pane.floatH = newH
-            pane.outer:move(newX, newY)
-            pane.outer:resize(newW, newH)
+            -- Same negative-coordinate guard as the titlebar drag: if a left/top
+            -- resize pushes the edge past the screen origin, pin that edge to 0 and
+            -- absorb the overshoot into the size so the opposite edge stays put,
+            -- rather than letting Geyser read the negative as a from-far-edge jump.
+            if pane.floatX < 0 then pane.floatW = pane.floatW + pane.floatX; pane.floatX = 0 end
+            if pane.floatY < 0 then pane.floatH = pane.floatH + pane.floatY; pane.floatY = 0 end
+            pane.outer:move(pane.floatX, pane.floatY)
+            pane.outer:resize(pane.floatW, pane.floatH)
             pane.outer:reposition()
             pane:_syncButtons()
             if pane._tabBarBox then pane:_relayoutTabLabels() end
