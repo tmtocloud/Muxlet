@@ -287,6 +287,49 @@ function Mux._relayoutContent(target)
     pcall(def.resize, target)
 end
 
+-- Systemic conversion reflow.  Called whenever a pane/tab changes its embedding
+-- (float→embed, embed→float, return-to-ghost, zoom/unzoom).  The stock Geyser
+-- reposition cascade run by those paths updates Container children but does NOT
+-- recurse through Geyser.Label parents, so any widget nested inside a Label
+-- (e.g. a button embedded in a labelled cell) keeps stale geometry after the
+-- conversion even though the pane itself resized.  Mux._applyGeometry walks the
+-- full windowList tree — Labels included — and pushes each widget's
+-- constraint-derived geometry natively, the same deep pass the split-drag resize
+-- path already uses.  This is what makes "everything inside a pane resizes to
+-- match the embed it converts to" work for ALL content with no per-content code.
+-- _relayoutContent then fires the optional resize() hook for content that lays
+-- itself out in pixels rather than constraints.
+function Mux._reflowContent(target)
+    if not target or not target.content then return end
+
+    -- Deep geometry pass first so the content area and the tab bar carry their
+    -- new pixel size before anything measures against it.
+    if Mux._applyGeometry then
+        pcall(Mux._applyGeometry, target.content)
+    end
+
+    -- Tabbed host: relayout the tab bar (tab label widths track the content
+    -- width).  onReposition normally does this, but the conversion paths do not
+    -- fire onReposition, so it must be done explicitly here or the tab strip
+    -- keeps its pre-conversion width.
+    if target._tabBarBox and type(target._relayoutTabLabels) == "function" then
+        pcall(function() target:_relayoutTabLabels() end)
+    end
+
+    -- Cascade into the active tab; the visible content (and its own widgets,
+    -- possibly nested in Labels) lives there, not directly under target.content.
+    if target._tabsEnabled and target._activeTabId and target._findTab then
+        local t = target:_findTab(target._activeTabId)
+        if t then Mux._reflowContent(t) end
+    end
+
+    -- Force the resize() hook to run (the normal call is gated on a pixel-size
+    -- change vs the last reflow; a conversion may land on the same size yet still
+    -- need a re-layout, so clear the gate first).
+    target._lastContentW, target._lastContentH = nil, nil
+    Mux._relayoutContent(target)
+end
+
 -- Optional per-instance content persistence.  A content type may implement
 --   serialize(target) -> table        capture this instance's config/state
 --   restore(target, data)             reapply it (called after apply on load)

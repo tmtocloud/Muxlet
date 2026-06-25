@@ -212,7 +212,9 @@ render = function(target)
             addI:setClickCallback(function()
                 cfg.buttons[#cfg.buttons + 1] = { label = "Button", width = 1, bg = "#1c2a4e", fg = "#96c8ff",
                     fontSize = 12, shape = "rounded", action = { type = "command", text = "" } }
-                scheduleSave(); render(target); openButtonEditor(target, #cfg.buttons)
+                -- Just add it; the user clicks the new button (in edit mode) to
+                -- customise it.  Auto-opening the editor here was intrusive.
+                scheduleSave(); render(target)
             end)
             st.widgets[#st.widgets + 1] = addI
 
@@ -224,6 +226,12 @@ render = function(target)
             st.widgets[#st.widgets + 1] = setI
         end
     end
+
+    -- Re-creating the button labels above puts them at the top of the local
+    -- stacking order, which would cover an open editor / grid-settings dialog
+    -- (those re-render on every live-preview keystroke).  Re-assert dialog z-order
+    -- so dialogs always draw above the grid they are editing.
+    if Mux.raiseFloatingPanes then Mux.raiseFloatingPanes() end
 end
 
 -- ── Button editor (dialog) ────────────────────────────────────────────────────────

@@ -1404,10 +1404,32 @@ function MuxPane:_detachToFloat()
     if self.content then self.content:show() end
     self.floating = true
     if self.titlebar then self.titlebar:setCursor(self:_titlebarCursor()) end
+    -- A pane that spans (nearly) the full panespace in a dimension has almost no
+    -- room to travel on that axis once floating — awkward, especially with edge
+    -- borders. Shrink any maxed dimension to 70% of its size and re-centre it in
+    -- the old span so the resulting float has room to move on that axis.
+    do
+        local psOuter = self._paneSpace and self._paneSpace.outer
+        if psOuter and psOuter.get_width then
+            local pw, ph = psOuter:get_width(), psOuter:get_height()
+            if pw and pw > 0 and self.floatW >= pw * 0.95 then
+                local newW = math.floor(self.floatW * 0.7)
+                self.floatX = self.floatX + math.floor((self.floatW - newW) / 2)
+                self.floatW = newW
+            end
+            if ph and ph > 0 and self.floatH >= ph * 0.95 then
+                local newH = math.floor(self.floatH * 0.7)
+                self.floatY = self.floatY + math.floor((self.floatH - newH) / 2)
+                self.floatH = newH
+            end
+        end
+    end
     self.outer:changeContainer(Geyser)
     self.outer:move(self.floatX, self.floatY)
     self.outer:resize(self.floatW, self.floatH)
     self.outer:reposition()
+    -- Deep-reflow so Label-nested widgets pick up the new floating size.
+    Mux._reflowContent(self)
     self:_applyTitlebarVisibility()   -- floating state now set; _syncButtons(true) inside handles all buttons
     self:raise()
     self.frame:setStyleSheet(self:_baseFrameCss())
@@ -1454,11 +1476,19 @@ function MuxPane:embed(slot)
     self.outer:move("0%", "0%")
     self.outer:resize("100%", "100%")
     self.outer:reposition()
+    -- Deep-reflow the content subtree so widgets nested inside Labels pick up the
+    -- new embedded size (stock reposition above does not recurse through Labels).
+    Mux._reflowContent(self)
     self.frame:setStyleSheet(self:_baseFrameCss())
     self:_hideCornerHandles()
     -- _split may not be wired until split.place() runs after embed(); defer so
     -- _syncButtons sees the final split state when computing min/swap/zoom eligibility.
-    tempTimer(0, function() if self.titlebar then self:_syncButtons(true) end end)
+    tempTimer(0, function()
+        if self.titlebar then self:_syncButtons(true) end
+        -- Re-reflow once the final embedded geometry has settled (split.place may
+        -- run after embed() returns), so the size is the slot's real size.
+        Mux._reflowContent(self)
+    end)
     if self.onEmbed then self.onEmbed(self) end
     if self._split then self._split:_updateHandleResizability() end
     Mux._scheduleAutoSave()
@@ -1506,6 +1536,7 @@ function MuxPane:zoom()
     self.outer:resize("100%", "100%")
     self.outer:reposition()
     if self.onReposition then self.onReposition(self) end
+    Mux._reflowContent(self)
     self._zoomed = true
     -- Raise above everything, then let free floaters come back on top so that
     -- popup dialogs (free floating panes) are never obscured by the zoom.
@@ -1546,6 +1577,7 @@ function MuxPane:_unzoom()
         tempTimer(0, function() if self.titlebar then self:_syncButtons(true) end end)
     end
     if self.onReposition then self.onReposition(self) end
+    Mux._reflowContent(self)
     Mux.raiseFloatingPanes()
     Mux._log("MuxPane unzoomed: %s", self.id)
 end
