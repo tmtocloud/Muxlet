@@ -1461,6 +1461,14 @@ Mux.settings.register("mux", "compact_titlebar", {
     default     = false,
 })
 
+-- Downstream packages (e.g. fed2-tools) set this to true in their muxletReady
+-- handler to suppress the "Started — type mux help" message.
+Mux.settings.register("mux", "quietStart", {
+    tab         = "Muxlet/General",
+    description = "Suppress the 'Started' message printed after mux start",
+    default     = false,
+})
+
 -- Explicit display order for the Muxlet/General tab.  Registration order would
 -- otherwise decide this; listing it here keeps the tab curated.  update_* are
 -- registered later (update.lua) — pre-listing them positions them without
@@ -1468,6 +1476,7 @@ Mux.settings.register("mux", "compact_titlebar", {
 Mux.settings._order["mux"] = {
     "welcome_shown",
     "auto_start",
+    "quietStart",
     "compact_titlebar",
     "confirmPaneClose",
     "confirmTabClose",

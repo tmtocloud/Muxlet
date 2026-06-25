@@ -166,13 +166,15 @@ function Mux._applyContent(target, contentName, force)
         destroyContentSlot(target)
     end
 
-    target._activeContent = contentName
-    if def.singleton then def._activeTargetRef = target end
-
     -- Create a fresh slot container that covers the full content area.
     -- target.content is temporarily remapped to the slot so all widgets the
     -- apply function creates land inside it.  The slot is what gets deleted
     -- on the next content change or explicit removal.
+    --
+    -- _activeContent is set AFTER apply returns, not before.  Setting it before
+    -- the call causes apply functions that call enableTabs() to see the new
+    -- content name as "prior content" and recursively call _removeContent,
+    -- which destroys the slot while apply is still using it.
     local realContent = target.content
     local slot = Geyser.Container:new({
         name   = target._gid .. "_cslot",
@@ -183,6 +185,9 @@ function Mux._applyContent(target, contentName, force)
 
     local ok, err = pcall(def.apply, target)
     target.content = realContent   -- always restore, even on apply error
+
+    target._activeContent = contentName
+    if def.singleton then def._activeTargetRef = target end
 
     if not ok then
         Mux._err("content '%s' apply error: %s", contentName, tostring(err))

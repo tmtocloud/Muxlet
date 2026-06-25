@@ -457,7 +457,9 @@ function Mux.fullStart()
     Mux.applyWorkspace(wsName)
     Mux._running = true
     tempTimer(2, function()
-        Mux._echo("\n<cyan>[Muxlet]<reset> Started — type <cyan>mux help<reset> for commands.\n")
+        if not Mux.settings.get("mux", "quietStart") then
+            Mux._echo("\n<cyan>[Muxlet]<reset> Started — type <cyan>mux help<reset> for commands.\n")
+        end
     end)
     raiseEvent("muxletStarted")
 end
