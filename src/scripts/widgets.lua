@@ -153,6 +153,9 @@ local function deriveCss(uiTheme)
             .. "QLabel::hover{color:rgba(220,180,80,0.85);border-color:rgba(220,180,80,0.55);}",
         styleCss    = styleCssMap,
         styleFg     = styleFgMap,
+        dividerRow   = "background:transparent;border:none;",
+        dividerLabel = string.format("background:transparent;color:%s;font-size:10px;font-weight:bold;letter-spacing:1px;", descText),
+        dividerLine  = string.format("background:%s;border:none;", divider),
     }
 end
 
@@ -171,6 +174,7 @@ end
 function Mux.ui.specHeight(spec, opts)
     opts = opts or {}
     if spec.rowHeight then return spec.rowHeight end   -- explicit per-row override
+    if spec.type == "divider" then return opts.dividerHeight or 24 end
     local cw = Mux.ui._widgets[spec.type]
     if cw then return cw.rowHeight or opts.rowHeight or 42 end
     if spec.type == "color" then return opts.colorRowHeight or 92 end
@@ -963,6 +967,38 @@ function Mux.ui.buildForm(parent, specs, opts)
     end
 
     for i, spec in ipairs(specs) do
+        local uid = prefix .. "_w" .. i
+
+        -- ── Divider / section header ──────────────────────────────────────────
+        if spec.type == "divider" then
+            local divH = spec.rowHeight or opts.dividerHeight or 24
+            local divRow = Geyser.Label:new({
+                name=uid.."_row", x=0, y=yPos, width=formW, height=divH,
+            }, parent)
+            divRow:setStyleSheet(css.dividerRow)
+            if spec.label and spec.label ~= "" then
+                local textW = math.min(math.max(60, #spec.label * 8 + 8), formW - padL - padR - 20)
+                local nl = Geyser.Label:new({
+                    name=uid.."_n", x=padL, y=math.floor((divH-14)/2), width=textW, height=14,
+                }, divRow)
+                nl:setStyleSheet(css.dividerLabel)
+                nl:rawEcho(spec.label)
+                local lineX = padL + textW + 6
+                local lw    = formW - lineX - padR
+                if lw > 4 then
+                    local line = Geyser.Label:new({
+                        name=uid.."_l", x=lineX, y=math.floor(divH/2), width=lw, height=1,
+                    }, divRow)
+                    line:setStyleSheet(css.dividerLine)
+                end
+            else
+                local line = Geyser.Label:new({
+                    name=uid.."_l", x=padL, y=math.floor(divH/2), width=formW-padL-padR, height=1,
+                }, divRow)
+                line:setStyleSheet(css.dividerLine)
+            end
+            yPos = yPos + divH
+        else
         -- ── Resolve type aliases ──────────────────────────────────────────────
         local specType    = spec.type
         local specDisplay = spec.display
@@ -988,7 +1024,6 @@ function Mux.ui.buildForm(parent, specs, opts)
         local isColor = (specType == "color")
         local isWide  = (specType == "string") and (specDisplay == "text") and not isReadOnly
         local thisH   = spec.rowHeight or (customW and customW.rowHeight) or (isColor and colorH or (isWide and textH or rowH))
-        local uid     = prefix .. "_w" .. i
 
         -- Per-row widget width override (e.g. wider segmented controls).
         local thisWidgetW = resolveWidgetW(spec, opts)
@@ -1044,6 +1079,7 @@ function Mux.ui.buildForm(parent, specs, opts)
         end
 
         yPos = yPos + thisH
+        end  -- divider else
     end
 
     return {

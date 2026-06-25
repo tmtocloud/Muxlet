@@ -162,7 +162,7 @@ local function paneRows(pane)
     if pane.titlebarHideable then
         rows[#rows+1] = {
             label      = "Titlebar",
-            desc       = "Visible: shows the titlebar strip. Hidden: collapses to a thin reveal strip",
+            desc       = "Visible: shows the titlebar. Hidden: collapses completely (restore via mux reveal <id>)",
             type       = "toggle",
             trueLabel  = "Visible",
             falseLabel = "Hidden",
@@ -268,15 +268,6 @@ local function paneRows(pane)
             if not v then pane:removeAnchor() end
             pane:_applyTitlebarVisibility()
         end,
-    }
-    rows[#rows+1] = {
-        label      = "Bordered",
-        desc       = "Draw the pane's frame border. When off, the border is hidden and content fills edge-to-edge.",
-        type       = "toggle",
-        trueLabel  = "Yes",
-        falseLabel = "No",
-        readFn     = function() return pane.bordered ~= false end,
-        writeFn    = function(v) pane:setBordered(v) end,
     }
     rows[#rows+1] = {
         label      = "Movable",
@@ -432,7 +423,7 @@ local function paneRows(pane)
     local ctype = cspec.type or "always"
 
     local function setType(t)
-        pane._propsActiveGroup = "Rules"
+        pane._propsActiveGroup = "General"
         cspec.type = (t == "always") and nil or t
         if not cspec.type then
             pane:setCondition(nil)
@@ -515,12 +506,44 @@ local function paneRows(pane)
     for _, r in ipairs(rows) do
         if GENERAL[r.label] then general[#general+1] = r else behavior[#behavior+1] = r end
     end
+    -- "Show when" condition rows live at the bottom of General.
+    for _, r in ipairs(rules) do general[#general+1] = r end
+
+    -- Style tab: border appearance controls.
+    local style = {}
+    style[#style+1] = {
+        label      = "Bordered",
+        desc       = "Draw the pane's frame border. When off, the border is hidden and content fills edge-to-edge.",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.bordered ~= false end,
+        writeFn    = function(v) pane:setBordered(v) end,
+    }
+    style[#style+1] = {
+        label   = "Border Color",
+        desc    = "Custom border color. Leave unset (use theme default) or pick a color below.",
+        type    = "color",
+        readFn  = function()
+            if pane.borderColor then return pane.borderColor end
+            local theme = Mux.activeTheme() or {}
+            if pane.overlay then return "#cda228" end
+            -- Extract a reasonable default from the theme's pane CSS if possible.
+            local css = theme.paneOuterCss or ""
+            local r, g, b = css:match("border:%s*%S+%s+%S+%s+rgb%((%d+),%s*(%d+),%s*(%d+)%)")
+            if r then
+                return string.format("#%02x%02x%02x", tonumber(r), tonumber(g), tonumber(b))
+            end
+            return "#444455"
+        end,
+        writeFn = function(hex) pane:setBorderColor(hex) end,
+    }
 
     return {
         _grouped = true,
         { label = "General",  rows = general, _geomTab = true },
         { label = "Behavior", rows = behavior },
-        { label = "Rules",    rows = rules },
+        { label = "Style",    rows = style },
     }
 end
 

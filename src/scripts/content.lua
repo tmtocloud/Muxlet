@@ -207,7 +207,9 @@ function Mux._removeContent(target)
         end
     end
     target._activeContent = nil
-    if target.contentBg and type(target.contentBg.show) == "function" then
+    if type(target._updatePlaceholder) == "function" then
+        target:_updatePlaceholder()
+    elseif target.contentBg and type(target.contentBg.show) == "function" then
         pcall(target.contentBg.show, target.contentBg)
     end
     Mux._scheduleAutoSave()

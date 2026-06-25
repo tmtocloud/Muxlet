@@ -90,8 +90,6 @@ function MuxTab:init(opts)
         local th = Mux.activeTheme()
         host:_echoTabLabel(label, tabObj.name, host._activeTabId == tabObj.id, false, th, tabObj.nameAlign, false)
     end)
-    if not host._isSubTabHost then host._tabBarBox:organize() end
-
     self.label     = label
     self.content   = content
     self.contentBg = contentBg
@@ -197,7 +195,7 @@ end
 -- HTML in some Mudlet builds.
 function MuxSurface:_clearDragSpace()
     if not self._tabBarBox then return end
-    self._tabBarBox:organize()
+    self:_relayoutTabLabels()
     if Mux._tabGapPane == self then Mux._tabGapPane = nil end
     local theme = Mux.activeTheme()
     for _, tab in ipairs(self._tabs or {}) do
@@ -389,7 +387,7 @@ function MuxSurface:_setAddTabBtnVisible(visible)
         -- "-0px" = parent_width - 0: fills the full tab bar.
         self._tabBarBox:resize(Mux._fromEdgePx(0), nil)
     end
-    self._tabBarBox:organize()
+    self:_relayoutTabLabels()
 end
 
 -- Resize the HBox for a sub-tab host to be exactly numTabs×subTabWidth pixels
@@ -404,6 +402,50 @@ function MuxSurface:_resizeSubTabBar()
     if n > 0 then
         self._tabBarBox:resize(Mux._toPx(n * tabW), nil)
         self._tabBarBox:organize()
+    end
+end
+
+-- Layout tab labels in the bar.  Sub-tab hosts delegate to _resizeSubTabBar
+-- (fixed-width per tab).  Regular panes fill the full bar width while
+-- guaranteeing each tab is at least as wide as its text: natural widths are
+-- computed from the name length, any bar space beyond the natural total is
+-- shared equally, and when the total natural width exceeds the bar the tabs
+-- shrink proportionally down to minTabWidth.
+function MuxSurface:_relayoutTabLabels()
+    if not self._tabBarBox then return end
+    if self._isSubTabHost then self:_resizeSubTabBar(); return end
+    local tabs = self._tabs
+    if not tabs or #tabs == 0 then return end
+    local theme  = Mux.activeTheme()
+    local charPx = theme.tabCharWidth or 8
+    local minW   = theme.minTabWidth  or 50
+    local padW   = theme.tabLabelPad  or 20
+    local barW   = self._tabBarBox:get_width()
+    local n      = #tabs
+    local nats, total = {}, 0
+    for _, tab in ipairs(tabs) do
+        local w = math.max(minW, #(tab.name or "") * charPx + padW)
+        nats[#nats + 1] = w
+        total = total + w
+    end
+    local widths = {}
+    if total <= barW then
+        local extra  = barW - total
+        local perTab = math.floor(extra / n)
+        local rem    = barW - (total + perTab * n)
+        for idx = 1, n do
+            widths[idx] = nats[idx] + perTab + (idx <= rem and 1 or 0)
+        end
+    else
+        for idx = 1, n do
+            widths[idx] = math.max(minW, math.floor(nats[idx] / total * barW))
+        end
+    end
+    local x = 0
+    for idx, tab in ipairs(tabs) do
+        tab.label:resize(widths[idx])
+        tab.label:move(x)
+        x = x + widths[idx]
     end
 end
 
@@ -462,6 +504,13 @@ function MuxSurface:enableTabs(opts)
     -- Sub-tab hosts use a different code path for infrastructure setup.
     local isSubTabHost = (self.pane ~= nil)
     if self._tabsEnabled then return end
+    -- Capture and fully remove existing pane content before building tab infrastructure.
+    -- The inline partial teardown used to run after buildTabInfrastructure, leaving the
+    -- old content widgets as live siblings of the new tab bar and viewport inside
+    -- self.content — the tab infrastructure would cover them but they'd reappear when
+    -- tabs were later removed.  Removing first keeps self.content clean.
+    local priorContent = self._activeContent
+    if priorContent then Mux._removeContent(self) end
     self._tabsEnabled  = true
     self._tabs         = self._tabs or {}
     self._activeTabId  = nil
@@ -479,17 +528,8 @@ function MuxSurface:enableTabs(opts)
     if self._syncButtons then self:_syncButtons(true) end
     if self._tabBar and not self.tabsLocked then self:_setAddTabBtnVisible(true) end
     if not opts.noDefaultTab and #self._tabs == 0 then
-        local priorContent = self._activeContent
         local tab1 = self:addTab("Tab 1")
         if tab1 and priorContent then
-            local def = Mux._content and Mux._content[priorContent]
-            if def and type(def.remove) == "function" then
-                pcall(def.remove, self)
-            end
-            if def and def.singleton and def._activeTargetRef == self then
-                def._activeTargetRef = nil
-            end
-            self._activeContent = nil
             Mux._applyContent(tab1, priorContent)
         end
     end
@@ -538,7 +578,7 @@ function MuxSurface:addTab(name, pos)
 
     table.insert(self._tabs, pos, tab)
     if pos < #self._tabs then self:_syncHBoxOrder() end
-    if self._isSubTabHost then self:_resizeSubTabBar() end
+    self:_relayoutTabLabels()
     self:_wireTabLabel(tab)
     if not self._activeTabId then self:_activateTabObj(tab) end
     -- New tab content widgets must not appear above floating panes / dialogs.
@@ -564,7 +604,7 @@ function MuxSurface:removeTab(tabId)
     end
     self._tabBarBox:remove(tab.label)
     tab.label:hide()
-    if not self._isSubTabHost then self._tabBarBox:organize() end
+    self:_relayoutTabLabels()
     if not (self._activeTabId == tabId) then tab.content:hide() end
     if tab._connScreen then tab._connScreen:hide() end
     if tab._connectionAware then
@@ -873,7 +913,7 @@ function MuxSurface:_reorderTab(fromIdx, toIdx)
     local tab = table.remove(self._tabs, fromIdx)
     table.insert(self._tabs, toIdx, tab)
     self:_syncHBoxOrder()
-    self._tabBarBox:organize()
+    self:_relayoutTabLabels()
     Mux._scheduleAutoSave()
 end
 
@@ -909,9 +949,8 @@ function MuxSurface:_receiveTab(tab, fromPane, insertPos)
 
     fromPane._tabBarBox:remove(tab.label)
     tab.label:hide()
-    if not fromPane._isSubTabHost then fromPane._tabBarBox:organize() end
     table.remove(fromPane._tabs, srcIdx)
-    if fromPane._isSubTabHost then fromPane:_resizeSubTabBar() end
+    fromPane:_relayoutTabLabels()
 
     if fromPane._activeTabId == tab.id then
         fromPane._activeTabId = nil
@@ -943,7 +982,7 @@ function MuxSurface:_receiveTab(tab, fromPane, insertPos)
     insertPos = insertPos or (#self._tabs + 1)
     table.insert(self._tabs, insertPos, tab)
     self:_syncHBoxOrder()
-    if self._isSubTabHost then self:_resizeSubTabBar() else self._tabBarBox:organize() end
+    self:_relayoutTabLabels()
 
     self:_wireTabLabel(tab)
     self:_activateTabObj(tab)
@@ -1076,6 +1115,7 @@ function MuxSurface:_applyTabTheme()
         if tab.contentBg then tab.contentBg:setStyleSheet(theme.contentCss or "") end
         if self._refreshTabConnScreen then self:_refreshTabConnScreen(tab) end
     end
+    self:_relayoutTabLabels()
 end
 
 Mux.registerContent("mux_close_tab_confirm", {

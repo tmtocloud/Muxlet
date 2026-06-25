@@ -65,9 +65,7 @@ function MuxPane:_buildConnScreen()
     if self._connScreen then return end
     local theme    = Mux.activeTheme()
     local bi       = _paneInset
-    local hdrH     = self.titlebarVisible
-        and theme.titlebarHeight
-        or  theme.revealStripHeight
+    local hdrH     = self.titlebarVisible and theme.titlebarHeight or 0
     local contentY = bi + hdrH
     self._connScreen = Geyser.Label:new({
         name   = self._gid .. "_conn",
@@ -87,9 +85,7 @@ function MuxPane:_syncConnScreenGeometry()
     if not self._connScreen then return end
     local theme    = Mux.activeTheme()
     local bi       = _paneInset
-    local hdrH     = self.titlebarVisible
-        and theme.titlebarHeight
-        or  theme.revealStripHeight
+    local hdrH     = self.titlebarVisible and theme.titlebarHeight or 0
     local contentY = bi + hdrH
     self._connScreen:move(Mux._toPx(bi), Mux._toPx(contentY))
     self._connScreen:resize(Mux._fromEdgePx(bi), Mux._fromEdgePx(bi))

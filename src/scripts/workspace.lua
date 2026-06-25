@@ -255,6 +255,7 @@ local function serializeNode(obj)
     if not obj.contextMenu       then node.contextMenu        = false end
     if not obj.insertable        then node.insertable         = false end
     if not obj.bordered          then node.bordered           = false end
+    if obj.borderColor           then node.borderColor        = obj.borderColor end
     if obj.showSettingsInMenu    then node.showSettingsInMenu = true  end
     if obj.mainConsoleHost and not obj.addable then node.addable = false end
     if obj.nameAlign and obj.nameAlign ~= "left" then node.nameAlign = obj.nameAlign end
@@ -531,6 +532,7 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             contextMenu      = node.contextMenu ~= false,
             insertable       = node.insertable ~= false,
             bordered         = node.bordered ~= false,
+            borderColor      = node.borderColor,
             anchorable       = node.anchorable ~= false,
             showSettingsInMenu = node.showSettingsInMenu or false,
             nameAlign        = node.nameAlign or "left",

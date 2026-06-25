@@ -10,7 +10,6 @@
 --       titlebar (Geyser.Label) — drag surface and title text.
 --       minBtn   (Geyser.Label) — minimize button (floating only).
 --       closeBtn (Geyser.Label) — close button.
---       reveal   (Geyser.Label) — thin strip shown when titlebar is hidden.
 --     content(Geyser.Container) — fills the remainder; consumers attach widgets here.
 --
 -- outer is a Container (not a Label) because Containers are purely logical —
@@ -123,10 +122,11 @@ function MuxPane:init(opts)
         if Mux.raisePane then Mux.raisePane(self) end
     end)
 
-    local hdrH = self.titlebarVisible and tbH or rvH
+    local hdrH = self.titlebarVisible and tbH or 0
     -- bordered: when false, the pane has no visible frame border and content fills
     -- edge-to-edge (the inset that normally reveals the 2px border collapses to 0).
-    self.bordered = opts.bordered ~= false
+    self.bordered     = opts.bordered ~= false
+    self.borderColor  = opts.borderColor or nil
     -- Reactive condition (see conditional.lua): an inline spec table, or nil =
     -- always visible. type "always" (or no type) is normalised to nil.
     self.condition   = opts.condition
@@ -846,26 +846,6 @@ function MuxPane:_buildTitlebar(theme)
     end)
     self.anchorBtn:hide()   -- shown by _applyTitlebarVisibility / _checkOverflow when eligible
 
-    -- reveal strip: shown when titlebar is hidden; right-click only via Alt+[ or mux titlebar
-    -- to prevent accidental re-show.
-    self.reveal = Geyser.Label:new({
-        name    = self._gid .. "_reveal",
-        x       = "0%",
-        y       = "0%",
-        width   = "100%",
-        height  = "100%",
-        fillBg  = 1,
-    }, self.header)
-    self.reveal:setStyleSheet(theme.revealStripCss or "")
-    self.reveal:setToolTip("Press Alt+[ to restore titlebar")
-    self.reveal:setOnEnter(function()
-        self.reveal:setStyleSheet(theme.revealStripHoverCss or theme.revealStripCss)
-    end)
-    self.reveal:setOnLeave(function()
-        self.reveal:setStyleSheet(theme.revealStripCss or "")
-    end)
-    self.reveal:setClickCallback(function() end)
-
     self:_refreshTitlebarName()
     self:_applyTitlebarVisibility()
 end
@@ -1157,11 +1137,9 @@ function MuxPane:_applyTitlebarVisibility()
         if self._syncConnScreenGeometry then self:_syncConnScreenGeometry() end
         self.titlebar:show()
         self:_syncButtons(true)
-        self.reveal:hide()
     else
-        local h = theme.revealStripHeight
-        self.header:resize(nil, Mux._toPx(h))
-        self.content:move(nil, Mux._toPx(bi + h))
+        self.header:resize(nil, "0px")
+        self.content:move(nil, Mux._toPx(bi))
         self.content:resize(nil, Mux._fromEdgePx(bi))
         self.header:reposition()
         self.content:reposition()
@@ -1176,7 +1154,6 @@ function MuxPane:_applyTitlebarVisibility()
         if self.swapBtn    then self.swapBtn:hide()    end
         if self.contentBtn then self.contentBtn:hide() end
         if self.anchorBtn  then self.anchorBtn:hide()  end
-        self.reveal:show()
     end
     -- The content container was just resized to span the reclaimed titlebar space;
     -- force the inner content widget to re-fit (clearing the size cache so the
@@ -1558,7 +1535,7 @@ function MuxPane:updateConsoleBorders()
     if not self.consoleBorders then return end
     local theme = Mux.activeTheme()
     local bi = 2
-    local tb = self.titlebarVisible and theme.titlebarHeight or theme.revealStripHeight
+    local tb = self.titlebarVisible and theme.titlebarHeight or 0
     local sw, sh = getMainWindowSize()
     local px = self.outer:get_x()
     local py = self.outer:get_y()
@@ -1747,7 +1724,6 @@ function MuxPane:applyTheme()
         self.contentBtn:setStyleSheet(theme.btnCss or "")
         if self._contentBtnEcho then self._contentBtnEcho(false) end
     end
-    if self.reveal     then self.reveal:setStyleSheet(theme.revealStripCss or "")       end
     if self._cornerHandles then
         local css = theme.cornerHandleCss or ""
         for _, lbl in ipairs(self._cornerHandles) do lbl:setStyleSheet(css) end
@@ -1947,6 +1923,12 @@ function MuxPane:setBordered(on)
     Mux._scheduleAutoSave()
 end
 
+function MuxPane:setBorderColor(hex)
+    self.borderColor = (hex and hex ~= "") and hex or nil
+    if self.frame then self.frame:setStyleSheet(self:_baseFrameCss()) end
+    Mux._scheduleAutoSave()
+end
+
 function MuxPane:_baseFrameCss()
     if not self.bordered then
         return "background-color: transparent; border: none;"
@@ -1959,10 +1941,16 @@ function MuxPane:_baseFrameCss()
         ]]
     end
     local theme = Mux.activeTheme()
+    local base
     if self.overlay then
-        return (theme.paneOuterCss or "") .. "\n" .. (theme.floatingExtraCss or "")
+        base = (theme.paneOuterCss or "") .. "\n" .. (theme.floatingExtraCss or "")
+    else
+        base = (theme.paneOuterCss or "")
     end
-    return (theme.paneOuterCss or "")
+    if self.borderColor then
+        return base .. string.format("\nborder: 2px solid %s;", self.borderColor)
+    end
+    return base
 end
 
 function MuxPane:absX()   return self.outer:get_x()      end

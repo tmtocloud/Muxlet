@@ -294,6 +294,7 @@ function MuxDialog:init(opts)
         convertible      = opts.convertible or false,
         anchorable       = opts.anchorable or false,   -- special dialogs don't anchor by default
         minimizable      = opts.minimizable or false,
+        borderColor      = opts.borderColor,
     })
 
     self._dialog = true   -- marks this pane for dialog cascade bookkeeping
