@@ -536,24 +536,85 @@ function MuxSplit:collapseSlot(closedSide)
         end
     end
 
-    -- No live embedded sibling — retire this split, sweep its ghost slots, and
-    -- cascade upward so the parent fills the vacated space.
+    -- No live embedded sibling — retire this split. If a ghost is in our other
+    -- slot, promote it to fill the parent so the floating pane can still be
+    -- dragged back to it. The ghost is dismissed by the user (×), at which point
+    -- the parent split cascades the collapse normally. If there is no ghost,
+    -- sweep any ghost slots and cascade the collapse upward immediately.
     if not sibling then
-        self.box:hide()
-        if parentContainer then parentContainer:remove(self.box) end
-        Mux._splits[self.id] = nil
-        local keysToRemove = {}
+        local promotedGhost, promotedGhostKey = nil, nil
         for key, ghost in pairs(Mux._ghostSlots) do
-            if ghost.split == self then keysToRemove[#keysToRemove + 1] = key end
+            if ghost.split == self then
+                promotedGhost    = ghost
+                promotedGhostKey = key
+                break
+            end
         end
-        for _, key in ipairs(keysToRemove) do
-            Mux._removeGhostSlot(key)
-        end
-        if self._parentSplit then
-            self._parentSplit:collapseSlot(self._parentSide)
+
+        if promotedGhost then
+            -- Move the ghost label into the parent slot BEFORE hiding this split's
+            -- box: hiding the box first would hide the ghost (a descendant) and it
+            -- would stay hidden even after reparenting. Move it out first, then
+            -- hide and remove the box. Mirror the same ordering as the floating-
+            -- sibling ghost-promotion path above.
+            promotedGhost.label:changeContainer(parentContainer)
+            promotedGhost.label:move("0%", "0%")
+            promotedGhost.label:resize("100%", "100%")
+            promotedGhost.label:reposition()
+            if promotedGhost.dismissBtn then
+                promotedGhost.dismissBtn:raiseAll()
+                Mux.raiseFloatingPanes()
+            end
+
+            self.box:hide()
+            if parentContainer then parentContainer:remove(self.box) end
+            Mux._splits[self.id] = nil
+
+            promotedGhost.slot  = parentContainer
+            promotedGhost.split = self._parentSplit
+            promotedGhost.side  = self._parentSide
+
+            -- Remove any additional ghosts that belonged to this split.
+            local extraKeys = {}
+            for key, ghost in pairs(Mux._ghostSlots) do
+                if ghost.split == self and key ~= promotedGhostKey then
+                    extraKeys[#extraKeys + 1] = key
+                end
+            end
+            for _, key in ipairs(extraKeys) do Mux._removeGhostSlot(key) end
+
+            -- Clear the parent's child reference for our slot so future
+            -- collapseSlot calls on the parent see nil rather than stale self.
+            if self._parentSplit then
+                if self._parentSide == "a" then self._parentSplit.childA = nil
+                else                           self._parentSplit.childB = nil
+                end
+            else
+                for _, ps in pairs(Mux._paneSpaces) do
+                    if ps.root == self then ps.root = nil; break end
+                end
+            end
+
+            Mux._notifyAllReposition()
         else
-            for _, ps in pairs(Mux._paneSpaces) do
-                if ps.root == self then ps.root = nil; break end
+            -- No ghost: hide/remove the box, sweep any lingering ghost records,
+            -- and cascade the collapse upward so the parent fills the vacated space.
+            self.box:hide()
+            if parentContainer then parentContainer:remove(self.box) end
+            Mux._splits[self.id] = nil
+            local keysToRemove = {}
+            for key, ghost in pairs(Mux._ghostSlots) do
+                if ghost.split == self then keysToRemove[#keysToRemove + 1] = key end
+            end
+            for _, key in ipairs(keysToRemove) do
+                Mux._removeGhostSlot(key)
+            end
+            if self._parentSplit then
+                self._parentSplit:collapseSlot(self._parentSide)
+            else
+                for _, ps in pairs(Mux._paneSpaces) do
+                    if ps.root == self then ps.root = nil; break end
+                end
             end
         end
         return

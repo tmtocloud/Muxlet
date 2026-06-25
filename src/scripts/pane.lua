@@ -1407,6 +1407,12 @@ function MuxPane:_detachToFloat()
     -- Always leave a ghost slot in the vacated split slot. Ghosts persist until
     -- explicitly dismissed (×) or the pane is closed; they never auto-vanish.
     if self._split then
+        -- Clear our child reference in the parent split so collapseSlot sees nil
+        -- (ghost-only) rather than a stale floating-pane pointer if the sibling
+        -- is later closed before this pane re-embeds.
+        if self._slotSide == "a" then self._split.childA = nil
+        else                          self._split.childB = nil
+        end
         Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace)
         -- Raise ALL floating panes so none are obscured by the new ghost.
         Mux.raiseFloatingPanes()
