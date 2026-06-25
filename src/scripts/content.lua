@@ -40,6 +40,23 @@
 Mux._content     = Mux._content     or {}
 Mux._contentFile = Mux._persistentDir .. "/content.json"
 
+-- Destroy a target's active content slot — the disposable Geyser.Container
+-- that the framework creates around each apply() call.
+-- Geyser.Container:delete() is recursive: it deletes all descendants (including
+-- ScrollBox children), calls type_delete() (deleteLabel / deleteScrollBox), and
+-- unregisters from Geyser.windowList / Geyser.parentWindows.
+-- This is the single teardown path for all content, regardless of widget depth.
+local function destroyContentSlot(target)
+    if target._contentSlot then
+        pcall(target._contentSlot.delete, target._contentSlot)
+        target._contentSlot = nil
+    end
+end
+
+-- Exposed so _clearWorkspace (manager.lua) can tear down every pane's active
+-- content before wiping the pane registry.
+Mux._destroyContentWidgets = destroyContentSlot
+
 local function saveContentCatalog()
     local catalog = {}
     for id, def in pairs(Mux._content) do
@@ -100,7 +117,9 @@ end
 --- Apply the named content to a pane or tab target.
 -- If the target already has different content applied, calls that content's
 -- remove() first (for non-widget teardown: event handlers, timers, state), then
--- automatically hides all direct children of target.content.
+-- destroys the previous content slot container (removing all descendant widgets).
+-- A fresh slot container is created and target.content is temporarily remapped
+-- to it during the apply call so all new widgets land inside the slot.
 -- Singleton content is blocked if already active on another pane or tab;
 -- a dialog tells the user where it is currently open.
 -- Tracking uses a direct object reference (def._activeTargetRef) so it works
@@ -141,28 +160,36 @@ function Mux._applyContent(target, contentName, force)
                 pcall(old.remove, target)
             end
         end
-        -- Auto-cleanup: hide every direct child of target.content so content
-        -- authors never need widget-hiding logic in their remove() callbacks.
-        if target.content and target.content.children then
-            for _, child in ipairs(target.content.children) do
-                if type(child.hide) == "function" then
-                    pcall(child.hide, child)
-                end
-            end
-        end
+        -- Destroy the previous content slot.  Geyser.Container:delete() is
+        -- recursive, so this removes all descendant widgets (including nested
+        -- ScrollBox children) without any per-content cleanup contract.
+        destroyContentSlot(target)
     end
 
     target._activeContent = contentName
     if def.singleton then def._activeTargetRef = target end
 
+    -- Create a fresh slot container that covers the full content area.
+    -- target.content is temporarily remapped to the slot so all widgets the
+    -- apply function creates land inside it.  The slot is what gets deleted
+    -- on the next content change or explicit removal.
+    local realContent = target.content
+    local slot = Geyser.Container:new({
+        name   = target._gid .. "_cslot",
+        x = "0%", y = "0%", width = "100%", height = "100%",
+    }, realContent)
+    target._contentSlot = slot
+    target.content      = slot
+
     local ok, err = pcall(def.apply, target)
+    target.content = realContent   -- always restore, even on apply error
+
     if not ok then
         Mux._err("content '%s' apply error: %s", contentName, tostring(err))
     end
 
-    -- Geyser's hide() only covers children that existed at the moment hide() was
-    -- called; widgets born inside apply() above escape it and render at their raw
-    -- screen coordinates. Re-hiding the outer collapses those new children too.
+    -- If the pane was hidden before the apply (e.g. minimized), re-hide the outer
+    -- so the newly-created slot and all its widgets collapse with the pane.
     if target._conditionHidden and target.outer then
         target.outer:hide()
     end
@@ -201,11 +228,7 @@ function Mux._removeContent(target)
         if def.singleton and def._activeTargetRef == target then def._activeTargetRef = nil end
         if type(def.remove) == "function" then pcall(def.remove, target) end
     end
-    if target.content and target.content.children then
-        for _, child in ipairs(target.content.children) do
-            if type(child.hide) == "function" then pcall(child.hide, child) end
-        end
-    end
+    destroyContentSlot(target)
     target._activeContent = nil
     if type(target._updatePlaceholder) == "function" then
         target:_updatePlaceholder()

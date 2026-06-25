@@ -349,6 +349,28 @@ function Mux._clearWorkspace()
             pane._propertiesDialogs = nil
         end
     end
+    -- Tear down active content on every pane and tab before destroying PaneSpace
+    -- containers or wiping the registry.  This fires remove() callbacks (event
+    -- handler / timer cleanup) and deletes slot containers so native widgets such
+    -- as the embedded mapper are properly closed before the Geyser tree is torn down.
+    -- The settings overlay pane is excluded — it persists across workspace changes.
+    local savedSet    = Mux._settings_ui and Mux._settings_ui.window or nil
+    local function _teardownContent(target)
+        if not target._activeContent then return end
+        local cDef = Mux._content and Mux._content[target._activeContent]
+        if cDef and type(cDef.remove) == "function" then pcall(cDef.remove, target) end
+        if Mux._destroyContentWidgets then Mux._destroyContentWidgets(target) end
+        target._activeContent = nil
+    end
+    for _, pane in pairs(Mux._panes) do
+        if pane ~= savedSet then
+            for _, tab in ipairs(pane._tabs or {}) do
+                for _, subTab in ipairs(tab._tabs or {}) do _teardownContent(subTab) end
+                _teardownContent(tab)
+            end
+            _teardownContent(pane)
+        end
+    end
     for _, ps in pairs(Mux._paneSpaces) do
         if ps.destroy then ps:destroy() end
     end
@@ -358,7 +380,6 @@ function Mux._clearWorkspace()
         if pane.floating and pane.outer then pane.outer:hide() end
     end
     -- Preserve the settings UI pane across registry wipes.
-    local savedSet = Mux._settings_ui and Mux._settings_ui.window or nil
     Mux._panes    = {}
     Mux._splits   = {}
     Mux._paneSpaces = {}

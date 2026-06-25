@@ -1155,6 +1155,7 @@ function MuxPane:_applyTitlebarVisibility()
         if self.swapBtn    then self.swapBtn:hide()    end
         if self.contentBtn then self.contentBtn:hide() end
         if self.anchorBtn  then self.anchorBtn:hide()  end
+        if self.addPaneBtn then self.addPaneBtn:hide() end
     end
     -- The content container was just resized to span the reclaimed titlebar space;
     -- force the inner content widget to re-fit (clearing the size cache so the
@@ -1253,6 +1254,10 @@ function MuxSurface:_updatePlaceholder()
     if not self.contentBg then return end
     if self._activeContent  then return end
     if self.consoleBorders then return end
+    -- Reset the stylesheet: content authors may have set it transparent, and
+    -- since the slot container is now deleted, contentBg is visible again.
+    local theme = Mux.activeTheme and Mux.activeTheme() or {}
+    self.contentBg:setStyleSheet(theme.contentCss or "")
     self.contentBg:show()
     local ds = "color:rgba(75,82,115,0.75);font-size:10px;font-family:'Consolas','Monaco',monospace;"
     local cs = "color:rgba(110,155,215,0.65);font-size:9px;font-family:'Consolas','Monaco',monospace;"
