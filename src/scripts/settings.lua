@@ -1525,10 +1525,6 @@ tempTimer(1.5, function()
         if Mux.settings.get("mux", "auto_start") then
             if not Mux.settings.get("mux", "welcome_shown") then return end
             if Mux.fullStart then Mux.fullStart() end
-        else
-            Mux._echo(
-                "  <dim_grey>Type <cyan>mux start<reset><dim_grey> to begin"
-                .. "  •  <cyan>mux workspaces<reset> to browse  •  <cyan>mux help<reset> for all commands<reset>\n")
         end
     end
 
