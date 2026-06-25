@@ -613,8 +613,29 @@ function MuxSurface:removeTab(tabId)
     end
     if tab._activeContent and Mux._content then
         local def = Mux._content[tab._activeContent]
-        if def and def.singleton and def._activeTargetRef == tab then
-            def._activeTargetRef = nil
+        if def then
+            if def.singleton and def._activeTargetRef == tab then
+                def._activeTargetRef = nil
+            end
+            if type(def.remove) == "function" then pcall(def.remove, tab) end
+        end
+        if Mux._destroyContentWidgets then Mux._destroyContentWidgets(tab) end
+        tab._activeContent = nil
+    end
+    -- Clean up content on any sub-tabs this tab hosted.
+    if tab._tabs then
+        for _, subTab in ipairs(tab._tabs) do
+            if subTab._activeContent and Mux._content then
+                local subDef = Mux._content[subTab._activeContent]
+                if subDef then
+                    if subDef.singleton and subDef._activeTargetRef == subTab then
+                        subDef._activeTargetRef = nil
+                    end
+                    if type(subDef.remove) == "function" then pcall(subDef.remove, subTab) end
+                end
+                if Mux._destroyContentWidgets then Mux._destroyContentWidgets(subTab) end
+                subTab._activeContent = nil
+            end
         end
     end
     if tab._tabsEnabled and tab._gid then

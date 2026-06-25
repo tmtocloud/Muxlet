@@ -1429,6 +1429,7 @@ function MuxPane:embed(slot)
     self.outer:move("0%", "0%")
     self.outer:resize("100%", "100%")
     self.outer:reposition()
+    Mux._notifyAllReposition()
     self.frame:setStyleSheet(self:_baseFrameCss())
     self:_hideCornerHandles()
     -- _split may not be wired until split.place() runs after embed(); defer so
