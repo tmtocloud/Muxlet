@@ -27,15 +27,17 @@
 -- NOTE: Geyser.CommandLine does not support setStyleSheet() — Mudlet limitation.
 
 Mux.settings = Mux.settings or {}
-Mux.settings._registry  = Mux.settings._registry  or {}
-Mux.settings._order     = Mux.settings._order     or {}
+-- Structural tables are rebuilt from scratch on every load so hot-reloads
+-- pick up tab-path changes. _data is preserved so user values survive reloads.
+Mux.settings._registry  = {}
+Mux.settings._order     = {}
 Mux.settings._data      = Mux.settings._data      or {}
-Mux.settings._onChange  = Mux.settings._onChange  or {}
+Mux.settings._onChange  = {}
 -- Tab path per namespace — set via the optional `tab` field in register() cfg.
 -- Format: "TopLabel" for a top-level tab, "TopLabel/SubLabel" for nested.
 -- Drives UI tab hierarchy only; has no effect on get/set/clear.
-Mux.settings._tabPaths  = Mux.settings._tabPaths  or {}
-Mux.settings._tabOrder  = Mux.settings._tabOrder  or {}
+Mux.settings._tabPaths  = {}
+Mux.settings._tabOrder  = {}
 Mux._persistentDir      = getMudletHomeDir() .. "/Muxlet_persistent"
 lfs.mkdir(Mux._persistentDir)
 Mux.settings._file      = Mux._persistentDir .. "/settings.json"
@@ -468,9 +470,33 @@ local function tabHierarchy()
             end
             node = child
         end
-        node.ns    = ns
-        node.order = Mux.settings._tabOrder[ns]
+        -- Accumulate all namespaces sharing this path into nsList.
+        -- ns order values control section sequence within the form, not the
+        -- tab's position in its parent bar — do not propagate to node.order.
+        node.nsList = node.nsList or {}
+        table.insert(node.nsList, ns)
     end
+
+    -- Convert single-namespace leaves to ns for backward compatibility.
+    -- Sort multi-namespace leaves by (_tabOrder or 99) then name.
+    local function consolidateNs(node)
+        if node.nsList then
+            if #node.nsList == 1 then
+                node.ns     = node.nsList[1]
+                node.nsList = nil
+                if not node.order then node.order = Mux.settings._tabOrder[node.ns] end
+            else
+                table.sort(node.nsList, function(a, b)
+                    local ao = Mux.settings._tabOrder[a] or 99
+                    local bo = Mux.settings._tabOrder[b] or 99
+                    if ao ~= bo then return ao < bo end
+                    return a < b
+                end)
+            end
+        end
+        for _, c in ipairs(node.children or {}) do consolidateNs(c) end
+    end
+    consolidateNs(root)
 
     -- A node with both a direct ns AND children: promote the ns to a "General" child.
     local function promote(node)
@@ -528,7 +554,13 @@ function Mux.settings.showTab(ns)
             local c2 = {}
             for i = 1, #chain do c2[i] = chain[i] end
             c2[#c2 + 1] = { host = host, tab = tab }
-            if tab._settingsNs == ns then return c2 end
+            local match = tab._settingsNs == ns
+            if not match and tab._settingsNsList then
+                for _, n in ipairs(tab._settingsNsList) do
+                    if n == ns then match = true; break end
+                end
+            end
+            if match then return c2 end
             if tab._tabs then
                 local r = find(tab, c2)
                 if r then return r end
@@ -566,6 +598,65 @@ local function buildSettingsContent(targetTab, ns, bgCol)
     local formHandle, totalH = buildRows(ns, contentLbl)
     targetTab._settingsForm = formHandle
     resizeWindow("mux_set_cl_" .. safeName, cw - 8, math.max(totalH or 1, 1))
+end
+
+-- Builds a single scrollable form for a list of namespaces, inserting a labelled
+-- divider before each group so the sections remain visually distinct.
+local function buildMultiNsContent(targetTab, nsList, bgCol)
+    targetTab.contentBg:hide()
+    local firstNs  = nsList[1]
+    local safeName = "multi_" .. firstNs:gsub("[^%w_]", "_")
+    local scrollBox = Geyser.ScrollBox:new({
+        name = "mux_set_sb_" .. safeName,
+        x = 0, y = 0, width = "100%", height = "100%",
+    }, targetTab.content)
+    local cw = targetTab.content:get_width()
+    if cw < 50 then cw = 400 end
+    local contentLbl = Geyser.Label:new({
+        name = "mux_set_cl_" .. safeName,
+        x = 0, y = 0, width = cw - 8, height = 100,
+    }, scrollBox)
+    contentLbl:setStyleSheet(string.format("background:%s; border:none;", bgCol))
+
+    local allSpecs = {}
+    for _, ns in ipairs(nsList) do
+        local divLabel = prettifySettingKey(ns)
+        allSpecs[#allSpecs+1] = { type = "divider", label = divLabel }
+        for _, spec in ipairs(buildNsSpecs(ns)) do
+            allSpecs[#allSpecs+1] = spec
+        end
+    end
+
+    if #allSpecs == 0 then return end
+
+    local formHandle
+    local formOpts = {
+        width         = cw - 8,
+        prefix        = "mxs_" .. safeName,
+        rowHeight     = settingsFormOpts.rowHeight,
+        textRowHeight = settingsFormOpts.textRowHeight,
+        widgetWidth   = settingsFormOpts.widgetWidth,
+        widgetHeight  = settingsFormOpts.widgetHeight,
+        showReset     = true,
+        onReset       = function(i, spec)
+            local ok, err = Mux.settings.clear(spec._settingsNs, spec._settingsKey)
+            if ok then
+                Mux._echo(string.format(
+                    "\n<green>[mux settings]<reset> <cyan>%s.%s<reset> reset to default: <yellow>%s<reset>\n",
+                    spec._settingsNs, spec._settingsKey,
+                    tostring(Mux.settings.get(spec._settingsNs, spec._settingsKey))))
+                if formHandle then formHandle.refresh(i) end
+            else
+                Mux._echo(string.format("\n<red>[mux settings]<reset> %s\n", err or "error"))
+            end
+        end,
+        getContentScreenPos = function()
+            return contentScreenPos(firstNs)
+        end,
+    }
+    formHandle = Mux.ui.buildForm(contentLbl, allSpecs, formOpts)
+    targetTab._settingsForm = formHandle
+    resizeWindow("mux_set_cl_" .. safeName, cw - 8, math.max(formHandle.totalHeight + 2, 1))
 end
 
 local function buildMainPaneContent(targetTab, bgColor)
@@ -1039,6 +1130,8 @@ local muxSettingsContentDef = {
             buildMainPaneContent(target, bg)
         elseif target._settingsCustom == "actions" then
             buildActionsManager(target, bg)
+        elseif target._settingsNsList then
+            buildMultiNsContent(target, target._settingsNsList, bg)
         elseif target._settingsNs then
             buildSettingsContent(target, target._settingsNs, bg)
         end
@@ -1069,6 +1162,15 @@ local function buildWindow()
         if node.ns then
             local chrome = 2*bi + titleH_pre + depth*tabH_pre + footerPad
             local needed = measureNsHeight(node.ns) + chrome
+            if needed > maxNeeded then maxNeeded = needed end
+        elseif node.nsList then
+            local chrome = 2*bi + titleH_pre + depth*tabH_pre + footerPad
+            local allSpecs = {}
+            for _, ns in ipairs(node.nsList) do
+                allSpecs[#allSpecs+1] = { type = "divider" }
+                for _, spec in ipairs(buildNsSpecs(ns)) do allSpecs[#allSpecs+1] = spec end
+            end
+            local needed = Mux.ui.formHeight(allSpecs, settingsFormOpts) + 2 + chrome
             if needed > maxNeeded then maxNeeded = needed end
         elseif node.custom or node.main then
             -- Managers (Actions/Conditions) and Main need a workable height.
@@ -1160,6 +1262,9 @@ local function buildWindow()
             Mux._applyContent(tab, "mux_settings")
         elseif node.custom then
             tab._settingsCustom = node.custom
+            Mux._applyContent(tab, "mux_settings")
+        elseif node.nsList then
+            tab._settingsNsList = node.nsList
             Mux._applyContent(tab, "mux_settings")
         elseif node.ns then
             -- tab._settingsNs already set above.
