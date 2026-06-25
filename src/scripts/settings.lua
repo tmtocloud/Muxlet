@@ -606,18 +606,10 @@ local function buildMultiNsContent(targetTab, nsList, bgCol)
     targetTab.contentBg:hide()
     local firstNs  = nsList[1]
     local safeName = "multi_" .. firstNs:gsub("[^%w_]", "_")
-    local scrollBox = Geyser.ScrollBox:new({
-        name = "mux_set_sb_" .. safeName,
-        x = 0, y = 0, width = "100%", height = "100%",
-    }, targetTab.content)
-    local cw = targetTab.content:get_width()
-    if cw < 50 then cw = 400 end
-    local contentLbl = Geyser.Label:new({
-        name = "mux_set_cl_" .. safeName,
-        x = 0, y = 0, width = cw - 8, height = 100,
-    }, scrollBox)
-    contentLbl:setStyleSheet(string.format("background:%s; border:none;", bgCol))
 
+    -- Build allSpecs first so we can pre-size contentLbl correctly.
+    -- Transparent divider rows must sit within contentLbl's painted area or they
+    -- fall through to the ScrollBox's white Qt background and appear white.
     local allSpecs = {}
     for _, ns in ipairs(nsList) do
         local divLabel = prettifySettingKey(ns)
@@ -628,6 +620,19 @@ local function buildMultiNsContent(targetTab, nsList, bgCol)
     end
 
     if #allSpecs == 0 then return end
+
+    local scrollBox = Geyser.ScrollBox:new({
+        name = "mux_set_sb_" .. safeName,
+        x = 0, y = 0, width = "100%", height = "100%",
+    }, targetTab.content)
+    local cw = targetTab.content:get_width()
+    if cw < 50 then cw = 400 end
+    local totalH = Mux.ui.formHeight(allSpecs, settingsFormOpts) + 2
+    local contentLbl = Geyser.Label:new({
+        name = "mux_set_cl_" .. safeName,
+        x = 0, y = 0, width = cw - 8, height = math.max(totalH, 10),
+    }, scrollBox)
+    contentLbl:setStyleSheet(string.format("background:%s; border:none;", bgCol))
 
     local formHandle
     local formOpts = {
@@ -656,7 +661,6 @@ local function buildMultiNsContent(targetTab, nsList, bgCol)
     }
     formHandle = Mux.ui.buildForm(contentLbl, allSpecs, formOpts)
     targetTab._settingsForm = formHandle
-    resizeWindow("mux_set_cl_" .. safeName, cw - 8, math.max(formHandle.totalHeight + 2, 1))
 end
 
 local function buildMainPaneContent(targetTab, bgColor)
