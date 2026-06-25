@@ -249,6 +249,7 @@ function MuxPane:init(opts)
     self.onReposition = function(p)
         if prevOnRepos then prevOnRepos(p) end
         if p.titlebar then p:_syncButtons() end
+        if p._tabBarBox then p:_relayoutTabLabels() end
     end
 
     Mux._panes[self.id] = self
@@ -1870,6 +1871,7 @@ function MuxPane:_buildCornerHandles(theme)
             pane.outer:resize(newW, newH)
             pane.outer:reposition()
             pane:_syncButtons()
+            if pane._tabBarBox then pane:_relayoutTabLabels() end
             if Mux._relayoutContent then Mux._relayoutContent(pane) end
         end)
 
