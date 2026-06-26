@@ -283,9 +283,9 @@ local function showSubmenu(submenuItems, parentMenuX, parentRowY)
         }, Geyser)
     end
     submenu.panel:setStyleSheet(theme.contextMenuCss or [[
-        background-color: rgba(18,18,28,252);
-        border: 1px solid rgba(100,160,255,0.50);
-        border-radius: 4px;
+        background-color: rgba(20, 22, 32, 0.985);
+        border: 1px solid rgba(140, 160, 210, 0.16);
+        border-radius: 11px;
     ]])
     submenu.panel:echo("")
     moveWindow("mux_submenu_panel", submenuX, submenuY)
@@ -293,13 +293,13 @@ local function showSubmenu(submenuItems, parentMenuX, parentRowY)
     submenu.panel:show()
     submenu.panel:raiseAll()
 
-    local itemCss      = theme.contextMenuItemCss        or "background-color:rgba(0,0,0,0);border:none;"
-    local itemHoverCss = theme.contextMenuItemHoverCss   or "background-color:rgba(100,160,255,0.18);border:none;"
-    local dangerCss    = theme.contextMenuDangerCss      or "background-color:rgba(0,0,0,0);border:none;"
-    local dangerHover  = theme.contextMenuDangerHoverCss or "background-color:rgba(180,40,40,0.30);border:none;"
-    local sepCss       = theme.contextMenuSepCss         or "background-color:transparent;border:none;border-top:1px solid rgba(255,255,255,0.12);"
-    local textColor    = theme.contextMenuTextColor       or "rgba(215, 215, 230, 0.95)"
-    local dangerColor  = theme.contextMenuDangerTextColor or "rgba(230, 100, 100, 0.95)"
+    local itemCss      = theme.contextMenuItemCss        or "background-color:rgba(0,0,0,0);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
+    local itemHoverCss = theme.contextMenuItemHoverCss   or "background-color:rgba(120,160,255,0.18);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
+    local dangerCss    = theme.contextMenuDangerCss      or "background-color:rgba(0,0,0,0);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
+    local dangerHover  = theme.contextMenuDangerHoverCss or "background-color:rgba(216,72,72,0.26);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
+    local sepCss       = theme.contextMenuSepCss         or "background-color:transparent;border:none;border-top:1px solid rgba(255,255,255,0.07);"
+    local textColor    = theme.contextMenuTextColor       or "rgba(220, 222, 235, 0.95)"
+    local dangerColor  = theme.contextMenuDangerTextColor or "rgba(232, 120, 120, 0.95)"
 
     local rowY = submenuY
     for index, item in ipairs(submenuItems) do
@@ -319,10 +319,7 @@ local function showSubmenu(submenuItems, parentMenuX, parentRowY)
             local hoverCss    = item.danger and dangerHover or itemHoverCss
             local itemColor   = item.danger and dangerColor or textColor
             label:setStyleSheet(normalCss)
-            label:echo(string.format(
-                "<table width='100%%' height='%d'><tr>"
-                .. "<td style='padding:0 14px;vertical-align:middle;color:%s;'>%s</td>"
-                .. "</tr></table>", thisH, itemColor, item.text))
+            label:echo(string.format("<span style='color:%s;'>%s</span>", itemColor, item.text))
             label:setOnEnter(function() label:setStyleSheet(hoverCss) end)
             label:setOnLeave(function() label:setStyleSheet(normalCss) end)
             local action = item.fn
@@ -351,8 +348,10 @@ function Mux._showItemMenu(globalX, globalY, items)
     local itemHeight = menu.itemHeight
     local menuWidth  = menu.menuWidth
     local sepH       = theme.contextMenuSepHeight or 8
+    local padX       = theme.contextMenuPadX or 7
+    local padY       = theme.contextMenuPadY or 7
 
-    local menuHeight = 0
+    local menuHeight = 2 * padY
     for _, item in ipairs(items) do
         menuHeight = menuHeight + (item.sep and sepH or itemHeight)
     end
@@ -378,9 +377,9 @@ function Mux._showItemMenu(globalX, globalY, items)
         }, Geyser)
     end
     menu.panel:setStyleSheet(theme.contextMenuCss or [[
-        background-color: rgba(18,18,28,252);
-        border: 1px solid rgba(100,160,255,0.50);
-        border-radius: 4px;
+        background-color: rgba(20, 22, 32, 0.985);
+        border: 1px solid rgba(140, 160, 210, 0.16);
+        border-radius: 11px;
     ]])
     menu.panel:echo("")
     moveWindow("mux_menu_panel", menuX, menuY)
@@ -390,20 +389,20 @@ function Mux._showItemMenu(globalX, globalY, items)
 
     ensureMenuRows(#items)
 
-    local itemCss      = theme.contextMenuItemCss        or "background-color:rgba(0,0,0,0);border:none;"
-    local itemHoverCss = theme.contextMenuItemHoverCss   or "background-color:rgba(100,160,255,0.18);border:none;"
-    local dangerCss    = theme.contextMenuDangerCss      or "background-color:rgba(0,0,0,0);border:none;"
-    local dangerHover  = theme.contextMenuDangerHoverCss or "background-color:rgba(180,40,40,0.30);border:none;"
-    local sepCss       = theme.contextMenuSepCss         or "background-color:transparent;border:none;border-top:1px solid rgba(255,255,255,0.12);"
-    local textColor    = theme.contextMenuTextColor       or "rgba(215, 215, 230, 0.95)"
-    local dangerColor  = theme.contextMenuDangerTextColor or "rgba(230, 100, 100, 0.95)"
+    local itemCss      = theme.contextMenuItemCss        or "background-color:rgba(0,0,0,0);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
+    local itemHoverCss = theme.contextMenuItemHoverCss   or "background-color:rgba(120,160,255,0.18);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
+    local dangerCss    = theme.contextMenuDangerCss      or "background-color:rgba(0,0,0,0);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
+    local dangerHover  = theme.contextMenuDangerHoverCss or "background-color:rgba(216,72,72,0.26);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
+    local sepCss       = theme.contextMenuSepCss         or "background-color:transparent;border:none;border-top:1px solid rgba(255,255,255,0.07);"
+    local textColor    = theme.contextMenuTextColor       or "rgba(220, 222, 235, 0.95)"
+    local dangerColor  = theme.contextMenuDangerTextColor or "rgba(232, 120, 120, 0.95)"
 
-    local rowY = menuY
+    local rowY = menuY + padY
     for index, item in ipairs(items) do
         local label  = menu.rowLabels[index]
         local thisH  = item.sep and sepH or itemHeight
-        moveWindow(label.name, menuX, rowY)
-        resizeWindow(label.name, menuWidth, thisH)
+        moveWindow(label.name, menuX + padX, rowY)
+        resizeWindow(label.name, menuWidth - 2 * padX, thisH)
 
         if item.sep then
             label:setStyleSheet(sepCss)
@@ -413,10 +412,7 @@ function Mux._showItemMenu(globalX, globalY, items)
             label:setClickCallback(function() Mux._closeContextMenu() end)
         elseif item.submenu then
             label:setStyleSheet(itemCss)
-            label:echo(string.format(
-                "<table width='100%%' height='%d'><tr>"
-                .. "<td style='padding:0 14px;vertical-align:middle;color:%s;'>%s</td>"
-                .. "</tr></table>", thisH, textColor, item.text))
+            label:echo(string.format("<span style='color:%s;'>%s</span>", textColor, item.text))
             local capturedSubmenuItems = item.submenu
             local capturedMenuX, capturedRowY = menuX, rowY
             label:setOnEnter(function()
@@ -433,10 +429,7 @@ function Mux._showItemMenu(globalX, globalY, items)
             local hoverCss    = item.danger and dangerHover or itemHoverCss
             local itemColor   = item.danger and dangerColor or textColor
             label:setStyleSheet(normalCss)
-            label:echo(string.format(
-                "<table width='100%%' height='%d'><tr>"
-                .. "<td style='padding:0 14px;vertical-align:middle;color:%s;'>%s</td>"
-                .. "</tr></table>", thisH, itemColor, item.text))
+            label:echo(string.format("<span style='color:%s;'>%s</span>", itemColor, item.text))
             label:setOnEnter(function() hideSubmenu(); label:setStyleSheet(hoverCss) end)
             label:setOnLeave(function() label:setStyleSheet(normalCss) end)
             local action = item.fn
@@ -504,89 +497,60 @@ end
 -- Overflow context menu: appears on titlebar right-click ONLY when the titlebar
 -- is too narrow to show all buttons (self._overflowMode == true).
 -- Items mirror what the buttons do, with the same show/hide conditions.
+-- The right-click / ⋯ menu is exactly the set of elements the placement engine
+-- folded off the titlebar (plus any menu-only content elements). One definition
+-- per element drives both its icon and this row, so they can never drift.
 function Mux._showContextMenu(pane, globalX, globalY)
+    if not pane or not pane.contextMenu then return end
     local menu  = Mux._contextMenu
     local theme = Mux.activeTheme()
     menu.itemHeight = theme.contextMenuItemHeight or 28
     menu.menuWidth  = theme.contextMenuWidth      or 188
 
+    local ctx   = (pane._elementCtx and pane:_elementCtx()) or { pane = pane }
     local items = {}
+    local lastGroup
 
-    -- Close (mirrors closeBtn)
-    local showClose = pane.closeable
-    if showClose then
-        items[#items+1] = { text="✕  Close Pane", fn=function() pane:_confirmClose() end, danger=true }
-    end
-
-    -- Minimize (mirrors minBtn — floating only)
-    if pane.floating and pane.minimizable then
-        items[#items+1] = { text="–  Minimize", fn=function() pane:toggleMinimize() end }
-    end
-
-    -- Zoom/Unzoom (mirrors zoomBtn) — only meaningful when in a split or already zoomed
-    if pane.zoomable and (pane._split or pane._zoomed) then
-        local zText = pane._zoomed and "⧉  Unzoom" or "□  Zoom"
-        items[#items+1] = { text=zText, fn=function() pane:zoom() end }
-    end
-
-    -- Anchoring (floating + anchorable). Before an anchor exists, a single
-    -- "Anchor" entry that arms anchor mode directly. Once anchored, it becomes a
-    -- submenu of re-anchor / return / remove.
-    if pane.floating and pane.anchorable then
-        if #items > 0 then items[#items+1] = { sep=true } end
-        if pane.anchor then
-            items[#items+1] = { text = "⚓  Anchor", submenu = {
-                { text = "Return to anchor", fn = function() pane:returnToAnchor() end },
-                { text = "Remove anchor",    fn = function() pane:removeAnchor() end, danger = true },
-            } }
-        else
-            items[#items+1] = { text = "⚓  Anchor", fn = function() pane:armAnchorMode(true) end }
+    local function addSpec(spec)
+        local ok, txt = pcall(function()
+            return (type(spec.menuText) == "function") and spec.menuText(ctx) or spec.menuText
+        end)
+        if not ok or not txt then return end
+        if lastGroup and spec.menuGroup and spec.menuGroup ~= lastGroup and #items > 0 then
+            items[#items + 1] = { sep = true }
         end
+        lastGroup = spec.menuGroup or lastGroup
+        local sub
+        if spec.submenu then
+            local ok2, s = pcall(spec.submenu, ctx)
+            if ok2 then sub = s end
+        end
+        local danger = spec.danger
+        if type(danger) == "function" then danger = danger(ctx) end
+        items[#items + 1] = {
+            text    = txt,
+            danger  = danger,
+            submenu = sub,
+            fn      = (not sub) and spec.run and function() spec.run(ctx) end or nil,
+        }
     end
 
-    -- Swap / Split (mirrors swapBtn, splitHBtn, splitVBtn)
-    if not pane.floating then
-        if (pane.swappable and pane._split) or pane.splittable then
-            if #items > 0 then items[#items+1] = { sep=true } end
-        end
-        if pane.swappable and pane._split then
-            items[#items+1] = { text="⇔  Swap with sibling", fn=function()
-                pane._split:swapSlots()
-            end }
-        end
-        if pane.splittable then
-            items[#items+1] = { text="║  Split Vertically", fn=function()
-                pane:split("h")
-            end }
-            items[#items+1] = { text="═  Split Horizontally", fn=function()
-                pane:split("v")
-            end }
-        end
-    end
+    -- 1) Folded icon-elements (builtins + content), already ordered for the menu.
+    for _, spec in ipairs(pane._foldedElements or {}) do addSpec(spec) end
 
-    -- Settings / Properties (mirrors infoBtn: showSettingsInMenu → Settings, else → Properties)
-    if pane.contextMenu then
-        if pane.showSettingsInMenu then
-            if #items > 0 then items[#items+1] = { sep=true } end
-            items[#items+1] = { text="⚙  Settings", fn=function() Mux.settings.toggle() end }
-        elseif pane.propertiesButton then
-            if #items > 0 then items[#items+1] = { sep=true } end
-            items[#items+1] = { text="≡  Properties", fn=function() Mux.showPaneProperties(pane) end }
+    -- 2) Menu-only content elements (iconable=false): always present, after a sep.
+    if ctx.content and ctx.content.titlebarElements then
+        local extra = {}
+        for _, s in ipairs(ctx.content.titlebarElements) do
+            if s.iconable == false then
+                local ok, vis = pcall(s.visible or function() return true end, ctx)
+                if ok and vis then extra[#extra + 1] = s end
+            end
         end
-    end
-
-    -- Content Library (opens library dialog) — hidden while tabs own the content slot.
-    if pane._contentEnabled and pane:_contentEnabled() then
-        if #items > 0 then items[#items+1] = { sep=true } end
-        items[#items+1] = { text="▥  Content Library…", fn=function()
-            Mux._showContentLibrary(pane)
-        end }
-    end
-
-    -- Add Floating Pane (mirrors addPaneBtn; shown here when compact/overflow hides the button).
-    if pane.addable then
-        if #items > 0 then items[#items+1] = { sep=true } end
-        items[#items+1] = { text="+  Add Floating Pane", fn=function() Mux._addFloatingPane() end }
+        table.sort(extra, function(a, b) return (a.menuOrder or 500) < (b.menuOrder or 500) end)
+        if #extra > 0 and #items > 0 then items[#items + 1] = { sep = true } end
+        lastGroup = nil
+        for _, s in ipairs(extra) do addSpec(s) end
     end
 
     if #items > 0 then
@@ -885,6 +849,9 @@ end
 function Mux._removeGhostSlot(slotKey)
     local ghost = Mux._ghostSlots[slotKey]
     if not ghost then return end
+    -- Any floating pane anchored to this ghost tile must stop tracking it (ghost
+    -- keys are used as anchor refs, so the standard helper catches them).
+    if Mux._dropAnchorsReferencing then Mux._dropAnchorsReferencing(slotKey) end
     ghost.label:hide()
     pcall(function() ghost.slot:remove(ghost.label) end)
     Mux._ghostSlots[slotKey] = nil

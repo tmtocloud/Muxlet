@@ -126,20 +126,22 @@ Mux.registerTheme("dark", {
 
     -- ── Context menu ──────────────────────────────────────────────────────────
     contextMenuCss = [[
-        background-color: rgba(18, 18, 28, 252);
-        border: 1px solid rgba(100, 160, 255, 0.50);
-        border-radius: 4px;
-        color: rgba(215, 215, 230, 0.95);
-        font-size: 11px;
+        background-color: rgba(20, 22, 32, 0.985);
+        border: 1px solid rgba(140, 160, 210, 0.16);
+        border-radius: 11px;
+        color: rgba(220, 222, 235, 0.96);
+        font-size: 12px;
     ]],
     contextMenuItemHeight     = 30,
-    contextMenuSepHeight      = 9,
-    contextMenuWidth          = 220,
-    contextMenuItemCss        = "color:rgba(215,215,230,0.95);background-color:rgba(0,0,0,0);border:none;font-size:11px;",
-    contextMenuItemHoverCss   = "color:rgba(255,255,255,1.0);background-color:rgba(100,160,255,0.22);border:none;font-size:11px;",
-    contextMenuDangerCss      = "color:rgba(230,100,100,0.95);background-color:rgba(0,0,0,0);border:none;font-size:11px;",
-    contextMenuDangerHoverCss = "color:rgba(255,150,150,1.0);background-color:rgba(180,40,40,0.35);border:none;font-size:11px;",
-    contextMenuSepCss         = "background-color:rgba(255,255,255,0.04);border:none;border-top:1px solid rgba(255,255,255,0.14);",
+    contextMenuSepHeight      = 11,
+    contextMenuWidth          = 224,
+    contextMenuPadX           = 7,
+    contextMenuPadY           = 7,
+    contextMenuItemCss        = "background-color:rgba(0,0,0,0);border:none;border-radius:7px;font-size:12px;padding-left:14px;padding-right:12px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    contextMenuItemHoverCss   = "background-color:rgba(120,160,255,0.18);border:none;border-radius:7px;font-size:12px;padding-left:14px;padding-right:12px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    contextMenuDangerCss      = "background-color:rgba(0,0,0,0);border:none;border-radius:7px;font-size:12px;padding-left:14px;padding-right:12px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    contextMenuDangerHoverCss = "background-color:rgba(216,72,72,0.26);border:none;border-radius:7px;font-size:12px;padding-left:14px;padding-right:12px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    contextMenuSepCss         = "background-color:transparent;border:none;border-top:1px solid rgba(255,255,255,0.07);",
 
     -- ── Ghost slot (empty slot left by a floating pane) ───────────────────────
     ghostSlotCss = [[
@@ -282,8 +284,8 @@ Mux.registerTheme("dark", {
     connScreenConnectingTitleColor   = "rgba(55,140,165,225)",
 
     -- ── Context menu text colors (CSS color ignored for HTML echo content) ─────
-    contextMenuTextColor       = "rgba(215, 215, 230, 0.95)",
-    contextMenuDangerTextColor = "rgba(230, 100, 100, 0.95)",
+    contextMenuTextColor       = "rgba(220, 222, 235, 0.95)",
+    contextMenuDangerTextColor = "rgba(232, 120, 120, 0.95)",
 
     -- ── Profile-level scrollbar skin (applied via setProfileStyleSheet) ───────
     -- Cascades to all QScrollArea/QScrollBar widgets in the profile.

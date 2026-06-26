@@ -316,6 +316,7 @@ local function serializeNode(obj)
         node.floatH   = obj.floatH
     end
     node.anchorable = obj.anchorable
+    if obj.showAnchorElement == false then node.showAnchorElement = false end
     if obj.anchor then
         node.anchor   = obj.anchor
         node.atAnchor = obj._atAnchor and true or false
@@ -576,6 +577,7 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             bordered         = node.bordered ~= false,
             borderColor      = node.borderColor,
             anchorable       = node.anchorable ~= false,
+            showAnchorElement = node.showAnchorElement ~= false,
             showSettingsInMenu = node.showSettingsInMenu or false,
             nameAlign        = node.nameAlign or "left",
             floatX           = node.floatX or 100,

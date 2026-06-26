@@ -121,20 +121,22 @@ Mux.registerTheme("light", {
 
     -- ── Context menu ──────────────────────────────────────────────────────────
     contextMenuCss = [[
-        background-color: rgba(232, 234, 244, 252);
-        border: 1px solid rgba(50, 100, 220, 0.45);
-        border-radius: 4px;
+        background-color: rgba(248, 249, 253, 0.985);
+        border: 1px solid rgba(40, 70, 140, 0.14);
+        border-radius: 11px;
         color: rgba(15, 15, 30, 0.95);
-        font-size: 11px;
+        font-size: 12px;
     ]],
     contextMenuItemHeight     = 30,
-    contextMenuSepHeight      = 9,
-    contextMenuWidth          = 220,
-    contextMenuItemCss        = "color:rgba(15,15,30,0.92);background-color:rgba(0,0,0,0);border:none;font-size:11px;",
-    contextMenuItemHoverCss   = "color:rgba(5,5,20,1.0);background-color:rgba(50,100,220,0.14);border:none;font-size:11px;",
-    contextMenuDangerCss      = "color:rgba(160,30,30,0.95);background-color:rgba(0,0,0,0);border:none;font-size:11px;",
-    contextMenuDangerHoverCss = "color:rgba(180,20,20,1.0);background-color:rgba(200,60,60,0.18);border:none;font-size:11px;",
-    contextMenuSepCss         = "background-color:rgba(0,0,0,0.03);border:none;border-top:1px solid rgba(0,0,0,0.20);",
+    contextMenuSepHeight      = 11,
+    contextMenuWidth          = 224,
+    contextMenuPadX           = 7,
+    contextMenuPadY           = 7,
+    contextMenuItemCss        = "background-color:rgba(0,0,0,0);border:none;border-radius:7px;font-size:12px;padding-left:14px;padding-right:12px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    contextMenuItemHoverCss   = "background-color:rgba(50,110,230,0.14);border:none;border-radius:7px;font-size:12px;padding-left:14px;padding-right:12px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    contextMenuDangerCss      = "background-color:rgba(0,0,0,0);border:none;border-radius:7px;font-size:12px;padding-left:14px;padding-right:12px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    contextMenuDangerHoverCss = "background-color:rgba(210,70,70,0.18);border:none;border-radius:7px;font-size:12px;padding-left:14px;padding-right:12px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    contextMenuSepCss         = "background-color:transparent;border:none;border-top:1px solid rgba(0,0,0,0.10);",
 
     -- ── Ghost slot (empty slot left by a floating pane) ───────────────────────
     ghostSlotCss = [[

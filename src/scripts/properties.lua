@@ -269,6 +269,20 @@ local function paneRows(pane)
             pane:_applyTitlebarVisibility()
         end,
     }
+    if pane.anchorable ~= false then
+        rows[#rows+1] = {
+            label      = "Anchor Icon",
+            desc       = "Show the ⚓ anchor button and menu entry. Hiding it keeps any existing anchor relationship intact — the pane still snaps to its anchor; only the control is hidden.",
+            type       = "toggle",
+            trueLabel  = "Visible",
+            falseLabel = "Hidden",
+            readFn     = function() return pane.showAnchorElement ~= false end,
+            writeFn    = function(v)
+                pane.showAnchorElement = v
+                pane:_applyTitlebarVisibility()
+            end,
+        }
+    end
     rows[#rows+1] = {
         label      = "Movable",
         desc       = "Floating: drag titlebar to reposition. Embedded: required together with Convertible to drag-float",
@@ -496,21 +510,49 @@ local function paneRows(pane)
         }
     end
 
-    -- Partition the flat rows above into the General / Behavior tabs by label.
+    -- Partition the flat rows above into General / Permissions / Style by label.
+    -- Permissions holds the behavioural -ables (what a pane may DO). Purely
+    -- display-driven toggles (titlebar visibility, properties button) live in Style.
     local GENERAL = {
         ["Position & Size"] = true, ["Tabs"] = true, ["Renamable"] = true,
         ["Name"] = true, ["Name Align"] = true, ["Width %"] = true,
         ["Height %"] = true, ["Connection Awareness"] = true,
     }
-    local general, behavior = {}, {}
+    local DISPLAY = { ["Titlebar"] = true, ["Properties Button"] = true, ["Anchor Icon"] = true }
+    -- Permissions order roughly follows the titlebar left→right / menu top→bottom
+    -- reading order of the elements these permissions govern. Non-icon permissions
+    -- (Movable, Convertible, Resizable) trail at the end.
+    local PERM_ORDER = {
+        ["Contentable"] = 1, ["Splittable"] = 2, ["Swappable"] = 3, ["Anchorable"] = 4,
+        ["Zoomable"] = 5, ["Minimizable"] = 6, ["Closeable"] = 7,
+        ["Movable"] = 20, ["Convertible"] = 21, ["Resizable"] = 22,
+    }
+    local general, behavior, displayRows = {}, {}, {}
     for _, r in ipairs(rows) do
-        if GENERAL[r.label] then general[#general+1] = r else behavior[#behavior+1] = r end
+        if GENERAL[r.label] then
+            general[#general+1] = r
+        elseif DISPLAY[r.label] then
+            displayRows[#displayRows+1] = r
+        else
+            behavior[#behavior+1] = r
+        end
+    end
+    -- Stable sort of the permission rows into reading order.
+    do
+        local idx = {}
+        for i, r in ipairs(behavior) do idx[r] = i end
+        table.sort(behavior, function(a, b)
+            local oa, ob = PERM_ORDER[a.label] or 50, PERM_ORDER[b.label] or 50
+            if oa ~= ob then return oa < ob end
+            return idx[a] < idx[b]
+        end)
     end
     -- "Show when" condition rows live at the bottom of General.
     for _, r in ipairs(rules) do general[#general+1] = r end
 
-    -- Style tab: border appearance controls.
+    -- Style tab: display toggles first, then border appearance controls.
     local style = {}
+    for _, r in ipairs(displayRows) do style[#style+1] = r end
     style[#style+1] = {
         label      = "Bordered",
         desc       = "Draw the pane's frame border. When off, the border is hidden and content fills edge-to-edge.",
@@ -541,9 +583,9 @@ local function paneRows(pane)
 
     return {
         _grouped = true,
-        { label = "General",  rows = general, _geomTab = true },
-        { label = "Behavior", rows = behavior },
-        { label = "Style",    rows = style },
+        { label = "General",     rows = general, _geomTab = true },
+        { label = "Permissions", rows = behavior },
+        { label = "Style",       rows = style },
     }
 end
 

@@ -21,13 +21,22 @@
 -- different pane, which is how the navigator pins its right edge to one pane and
 -- its top edge to another).
 
--- Screen-space edges of a pane by id, or nil if it isn't currently present.
+-- Screen-space edges of a pane by id, or of a ghost tile by its key (ghost keys
+-- share the internal-id namespace), or nil if neither is currently present.
 function Mux._paneEdges(id)
     local p = id and Mux.getPane and Mux.getPane(id) or nil
-    if not (p and p.outer and p.outer.get_x) then return nil end
-    local x, y = p.outer:get_x(), p.outer:get_y()
-    local w, h = p.outer:get_width(), p.outer:get_height()
-    return { left = x, top = y, right = x + w, bottom = y + h }
+    if p and p.outer and p.outer.get_x then
+        local x, y = p.outer:get_x(), p.outer:get_y()
+        local w, h = p.outer:get_width(), p.outer:get_height()
+        return { left = x, top = y, right = x + w, bottom = y + h }
+    end
+    local g = id and Mux._ghostSlots and Mux._ghostSlots[id]
+    if g and g.slot and g.slot.get_x then
+        local x, y = g.slot:get_x(), g.slot:get_y()
+        local w, h = g.slot:get_width(), g.slot:get_height()
+        return { left = x, top = y, right = x + w, bottom = y + h }
+    end
+    return nil
 end
 
 -- Derive X,Y,W,H from a pane's anchor, or nil if any constrained target is gone.
@@ -108,6 +117,9 @@ function Mux._resolveSavedAnchors()
         local A = p._pendingAnchor
         if A then
             p._pendingAnchor = nil
+            -- ref may be a pane id or a ghost key; _paneEdges resolves either. Ghost
+            -- keys regenerate on reload, so a saved ghost anchor simply drops if that
+            -- ghost is gone, leaving a plain floating pane.
             local ok = (not A.v or Mux._paneEdges(A.v.ref)) and (not A.h or Mux._paneEdges(A.h.ref))
             if ok then
                 p.anchor = A
@@ -157,35 +169,49 @@ end
 -- Docking is flush-OUTSIDE: dragging toward a pane's edge docks the dragged
 -- pane just beyond it (its opposite edge flush against that edge). A cursor in
 -- a corner region pins both axes to that pane.
-function Mux._anchorHitTest(targets, gx, gy, W, H)
-    for _, t in ipairs(targets) do
-        if gx >= t.x and gx <= t.x + t.w and gy >= t.y and gy <= t.y + t.h then
-            local edgeW = Mux._clamp(t.w * 0.20, 30, 80)
-            local edgeH = Mux._clamp(t.h * 0.20, 30, 80)
-            local nearL = gx <= t.x + edgeW
-            local nearR = gx >= t.x + t.w - edgeW
-            local nearT = gy <= t.y + edgeH
-            local nearB = gy >= t.y + t.h - edgeH
-            local id = t.pane.id
-            local A
-            if (nearL or nearR) and (nearT or nearB) then
-                A = {
-                    v = { ref = id, targetEdge = nearL and "left" or "right", myEdge = nearL and "left" or "right" },
-                    h = { ref = id, targetEdge = nearT and "top"  or "bottom", myEdge = nearT and "top"  or "bottom" },
-                }
-            elseif nearL or nearR then
-                local along = Mux._clamp(gy - t.y - H / 2, 0, math.max(0, t.h - H))
-                A = { v = { ref = id, targetEdge = nearL and "left" or "right", myEdge = nearL and "left" or "right" }, alongV = along }
-            elseif nearT or nearB then
-                local along = Mux._clamp(gx - t.x - W / 2, 0, math.max(0, t.w - W))
-                A = { h = { ref = id, targetEdge = nearT and "top" or "bottom", myEdge = nearT and "top" or "bottom" }, alongH = along }
-            end
-            if A then
-                local X, Y, w2, h2 = Mux._anchorGeom({ anchor = A, floatW = W, floatH = H, floating = true })
-                if X then return A, X, Y, w2, h2 end
-            end
-            return nil
+function Mux._anchorHitTest(targets, ghostTargets, gx, gy, W, H)
+    -- Shared edge/corner logic for a target rect. `ref` is a pane id or a ghost
+    -- key — both resolve through _paneEdges, and the float keeps its own W/H (this
+    -- is positional edge anchoring, not a resize-to-fill).
+    local function hit(t, ref)
+        if not (gx >= t.x and gx <= t.x + t.w and gy >= t.y and gy <= t.y + t.h) then return nil end
+        local edgeW = Mux._clamp(t.w * 0.20, 30, 80)
+        local edgeH = Mux._clamp(t.h * 0.20, 30, 80)
+        local nearL = gx <= t.x + edgeW
+        local nearR = gx >= t.x + t.w - edgeW
+        local nearT = gy <= t.y + edgeH
+        local nearB = gy >= t.y + t.h - edgeH
+        local A
+        if (nearL or nearR) and (nearT or nearB) then
+            A = {
+                v = { ref = ref, targetEdge = nearL and "left" or "right", myEdge = nearL and "left" or "right" },
+                h = { ref = ref, targetEdge = nearT and "top"  or "bottom", myEdge = nearT and "top"  or "bottom" },
+            }
+        elseif nearL or nearR then
+            local along = Mux._clamp(gy - t.y - H / 2, 0, math.max(0, t.h - H))
+            A = { v = { ref = ref, targetEdge = nearL and "left" or "right", myEdge = nearL and "left" or "right" }, alongV = along }
+        elseif nearT or nearB then
+            local along = Mux._clamp(gx - t.x - W / 2, 0, math.max(0, t.w - W))
+            A = { h = { ref = ref, targetEdge = nearT and "top" or "bottom", myEdge = nearT and "top" or "bottom" }, alongH = along }
         end
+        if A then
+            local X, Y, w2, h2 = Mux._anchorGeom({ anchor = A, floatW = W, floatH = H, floating = true })
+            if X then return A, X, Y, w2, h2 end
+        end
+        return nil
+    end
+
+    -- Ghosts take precedence: dropping near a ghost tile's border anchors the float
+    -- to that border (the float keeps its size and sits inside the ghost region).
+    for _, g in ipairs(ghostTargets or {}) do
+        local A, X, Y, w2, h2 = hit(g, g.key)
+        if A then return A, X, Y, w2, h2 end
+        if gx >= g.x and gx <= g.x + g.w and gy >= g.y and gy <= g.y + g.h then return nil end
+    end
+    for _, t in ipairs(targets) do
+        local A, X, Y, w2, h2 = hit(t, t.pane.id)
+        if A then return A, X, Y, w2, h2 end
+        if gx >= t.x and gx <= t.x + t.w and gy >= t.y and gy <= t.y + t.h then return nil end
     end
     return nil
 end

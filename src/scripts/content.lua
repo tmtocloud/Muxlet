@@ -188,6 +188,9 @@ function Mux._applyContent(target, contentName, force)
 
     target._activeContent = contentName
     if def.singleton then def._activeTargetRef = target end
+    -- Content may contribute titlebar elements; refresh the placement engine so
+    -- they appear (and fold into the menu) immediately.
+    if type(target._syncButtons) == "function" then target:_syncButtons(true) end
 
     if not ok then
         Mux._err("content '%s' apply error: %s", contentName, tostring(err))
@@ -235,6 +238,8 @@ function Mux._removeContent(target)
     end
     destroyContentSlot(target)
     target._activeContent = nil
+    -- Drop any content-contributed titlebar elements and re-layout.
+    if type(target._syncButtons) == "function" then target:_syncButtons(true) end
     if type(target._updatePlaceholder) == "function" then
         target:_updatePlaceholder()
     elseif target.contentBg and type(target.contentBg.show) == "function" then

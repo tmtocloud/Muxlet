@@ -192,6 +192,11 @@ function MuxPane:init(opts)
     -- convertible/insertable — nothing ever auto-anchors. self.anchor holds the
     -- spec (see anchor.lua); _atAnchor tracks whether it's currently snapped to it.
     self.anchorable         = opts.anchorable ~= false
+    -- showAnchorElement: display-only. When false the anchor icon AND menu element
+    -- are hidden, but any existing anchor relationship is preserved (the pane still
+    -- snaps). Independent of anchorable, which is a permission (turning anchorable
+    -- off still drops the anchor). Lives on the Style tab.
+    self.showAnchorElement  = opts.showAnchorElement ~= false
     self.anchor             = opts.anchor
     self._atAnchor          = false
     self._anchorArming      = false
@@ -461,7 +466,7 @@ function MuxPane:_buildTitlebar(theme)
             local agx, agy = event.globalX, event.globalY
             if not drag.dropTargets then snapshotDropTargets() end
             local aw, ah = self.outer:get_width(), self.outer:get_height()
-            local spec, ax, ay, aw2, ah2 = Mux._anchorHitTest(drag.dropTargets, agx, agy, aw, ah)
+            local spec, ax, ay, aw2, ah2 = Mux._anchorHitTest(drag.dropTargets, drag.ghostRects, agx, agy, aw, ah)
             if spec then
                 local corner = (spec.v and spec.h)
                     and { vx = spec.v.myEdge, hy = spec.h.myEdge } or nil
@@ -916,14 +921,10 @@ end
 -- Moves the left-anchored cluster (Properties, then Content Library to its right)
 -- to its correct position: trailing the name in left-align, parked at the far
 -- left otherwise. Called on name changes and from _layoutTitlebarButtons.
+-- Name/alignment changed: the placement engine recomputes the whole bar (left
+-- cluster position depends on the name width; right cluster too in right-align).
 function MuxPane:_updateInfoBtnPos()
-    if not (self.infoBtn or self.contentBtn) then return end
-    local theme = Mux.activeTheme and Mux.activeTheme() or {}
-    local y     = theme.btnTopMargin or 2
-    local btnSz = theme.btnSize or 22
-    local x0    = ((self.nameAlign or "left") == "left") and self:_infoBtnX() or 2
-    if self.infoBtn    then self.infoBtn:move(x0, y) end
-    if self.contentBtn then self.contentBtn:move(x0 + btnSz + 4, y) end
+    if self.titlebar then self:_syncButtons(true) end
 end
 
 -- Returns the HTML string for the titlebar name, styled for the current nameAlign.
@@ -951,57 +952,199 @@ function MuxPane:_refreshTitlebarName()
     if self.titlebar then self.titlebar:echo(self:_nameHtml()) end
 end
 
--- Sets the titlebar button anchors and name-label layout for the current
--- nameAlign. The button positions depend only on alignment, the name width, and
--- the top margin — never on the header width — so each button is anchored a
--- constant distance from the header's right edge (via _fromEdgePx, exactly like
--- the corner handles). Geyser's reposition cascade then tracks them for free
--- whenever the pane resizes, so this does NOT need to run per resize frame.
+-- ── Titlebar element placement system ───────────────────────────────────────────
+-- A single ordered model governs every titlebar element AND the right-click menu.
+-- Each element has ONE definition carrying both forms: an icon (titlebar) and a
+-- menu row (glyph + label + action, optional submenu). The engine places what
+-- fits as icons and folds the lowest-priority remainder into the menu — so the
+-- menu is exactly the complement of the visible icons, never a second hand-kept
+-- list. Nothing folded (and not compact) → no menu. A ⋯ overflow button appears
+-- only when something is folded, as the visible handle for the menu.
 --
--- A signature of those inputs gates the work: repeated calls with an unchanged
--- signature (the common case while a split handle is being dragged) return
--- immediately, which is what keeps embedded-pane resize cheap with many panes.
+-- Builtins are referenced by a resolver to their existing Label; content
+-- contributes its own and may "play in" any side/group/order but cannot remove or
+-- override a builtin (builtin ids are reserved).
 --
--- One model serves all three alignments. The titlebar Label always spans the
--- full header (a permanent "100%" anchor) and renders the name via CSS
--- (_nameHtml); the button cluster slides left by `nameSlot` so the name owns the
--- far-right edge in right-align. nameSlot is zero for left and center.
+-- Spec fields:
+--   id, side ("left"|"right"), group (cluster), order (pack order within side)
+--   priority   overflow fold order — lowest folds into the menu first; close is
+--              highest so it folds last (no hard exemption)
+--   visible(ctx) -> bool
+--   get(pane)  (builtins) -> existing Label   | icon/tooltip/onClick (content)
+--   menuText   string | function(ctx) -> string   (row glyph + label)
+--   run(ctx)             menu-row action (defaults to the icon onClick)
+--   submenu(ctx) -> items | nil                   (dynamic submenu)
+--   danger     bool                               (destructive styling)
+--   menuOrder  sequence within the menu; menuGroup keys separator insertion
+--   iconable   default true; false = menu-only, always in the menu, forces it
+local TB_GROUP_RANK = { window = 1, tiling = 2, info = 1, content = 2 }  -- right: lower = nearer edge
+
+-- Builtin pane elements. Each definition is the single source of truth for both
+-- the titlebar icon and the matching menu row.
+local BUILTIN_TB = {
+    -- right · window cluster
+    { id="close",  side="right", group="window", order=1, priority=100,
+      get=function(p) return p.closeBtn end,    visible=function(c) return c.pane.closeable end,
+      menuText="✕  Close Pane", danger=true, menuGroup="window", menuOrder=10,
+      run=function(c) c.pane:_confirmClose() end },
+    { id="add",    side="right", group="window", order=1, priority=100,
+      get=function(p) return p.addPaneBtn end,  visible=function(c) return c.pane.addable end,
+      menuText="+  Add Floating Pane", menuGroup="window", menuOrder=15,
+      run=function(c) Mux._addFloatingPane() end },
+    { id="min",    side="right", group="window", order=2, priority=90,
+      get=function(p) return p.minBtn end,       visible=function(c) return c.pane:_minBtnVisible() end,
+      menuText="–  Minimize", menuGroup="window", menuOrder=20,
+      run=function(c) c.pane:toggleMinimize() end },
+    { id="zoom",   side="right", group="window", order=3, priority=70,
+      get=function(p) return p.zoomBtn end,
+      visible=function(c) local p=c.pane; return p.zoomable and (p._split or p.floating or p._zoomed) and true or false end,
+      menuText=function(c) return c.pane._zoomed and "⧉  Unzoom" or "□  Zoom" end,
+      menuGroup="window", menuOrder=30, run=function(c) c.pane:zoom() end },
+    -- right · tiling cluster
+    { id="swap",   side="right", group="tiling", order=1, priority=50,
+      get=function(p) return p.swapBtn end,
+      visible=function(c) local p=c.pane; return p.swappable and not p.floating and p._split and true or false end,
+      menuText="⇔  Swap with sibling", menuGroup="tiling", menuOrder=50,
+      run=function(c) if c.pane._split then c.pane._split:swapSlots() end end },
+    { id="anchor", side="right", group="tiling", order=1, priority=50,
+      get=function(p) return p.anchorBtn end,
+      visible=function(c) local p=c.pane; return p.floating and p.anchorable and (p.showAnchorElement ~= false) and true or false end,
+      menuText="⚓  Anchor", menuGroup="tiling", menuOrder=40,
+      submenu=function(c) if c.pane.anchor then return {
+          { text="Return to anchor", fn=function() c.pane:returnToAnchor() end },
+          { text="Remove anchor",    fn=function() c.pane:removeAnchor() end, danger=true },
+      } end end,
+      run=function(c) if not c.pane.anchor then c.pane:armAnchorMode(true) end end },
+    { id="splitH", side="right", group="tiling", order=2, priority=40,
+      get=function(p) return p.splitHBtn end,
+      visible=function(c) local p=c.pane; return p.splittable and not p.floating and true or false end,
+      menuText="═  Split Horizontally", menuGroup="tiling", menuOrder=70,
+      run=function(c) c.pane:split("v") end },
+    { id="splitV", side="right", group="tiling", order=3, priority=40,
+      get=function(p) return p.splitVBtn end,
+      visible=function(c) local p=c.pane; return p.splittable and not p.floating and true or false end,
+      menuText="║  Split Vertically", menuGroup="tiling", menuOrder=60,
+      run=function(c) c.pane:split("h") end },
+    -- left · info cluster
+    { id="properties", side="left", group="info", order=2, priority=110,
+      get=function(p) return p.infoBtn end,
+      visible=function(c) local p=c.pane; return p.contextMenu and p.infoBtn and (p.showSettingsInMenu or p.propertiesButton) and true or false end,
+      menuText=function(c) return c.pane.showSettingsInMenu and "⚙  Settings" or "≡  Properties" end,
+      menuGroup="info", menuOrder=80,
+      run=function(c) if c.pane.showSettingsInMenu then Mux.settings.toggle() else Mux.showPaneProperties(c.pane) end end },
+    { id="content",    side="left", group="info", order=3, priority=80,
+      get=function(p) return p.contentBtn end,
+      visible=function(c) return c.pane:_contentEnabled() end,
+      menuText="▥  Content Library…", menuGroup="info", menuOrder=90,
+      run=function(c) Mux._showContentLibrary(c.pane) end },
+}
+local BUILTIN_TB_IDS = {}
+for _, s in ipairs(BUILTIN_TB) do BUILTIN_TB_IDS[s.id] = true end
+
+-- The state snapshot passed to every visible()/onClick(). Reads, never mutates.
+function MuxPane:_elementCtx()
+    return {
+        pane        = self,
+        isTab       = false,
+        isFloating  = self.floating and true or false,
+        isEmbedded  = (self._split ~= nil and not self.floating) and true or false,
+        content     = self._activeContent and Mux._content and Mux._content[self._activeContent] or nil,
+    }
+end
+
+-- Build a content-contributed titlebar Label (mirrors the builtin maker, minus
+-- the constructor-local closures). Returns { label, echo, spec }.
+function MuxPane:_makeTbButton(spec)
+    local theme = Mux.activeTheme()
+    local btnY  = theme.btnTopMargin or 2
+    local btn = Geyser.Label:new({
+        name = self._gid .. "_ctb_" .. spec.id, x = 2, y = tostring(btnY),
+        width = tostring(theme.btnSize), height = tostring((theme.btnSize or 22)), fillBg = 1,
+    }, self.header)
+    btn:setStyleSheet(theme.btnCss or "")
+    local hoverKey = spec.hoverCss or "minHoverCss"
+    local function echo(hovered)
+        local tc   = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
+        local icon = (type(spec.icon) == "function") and spec.icon(self:_elementCtx()) or spec.icon
+        btn:echo(string.format("<center><font color='%s'>%s</font></center>", tc, icon or "?"))
+    end
+    echo(false)
+    if spec.tooltip then btn:setToolTip(spec.tooltip) end
+    btn:setOnEnter(function() btn:setStyleSheet(Mux.activeTheme()[hoverKey] or Mux.activeTheme().btnCss); echo(true) end)
+    btn:setOnLeave(function() btn:setStyleSheet(Mux.activeTheme().btnCss or ""); echo(false) end)
+    if spec.onClick then
+        btn:setClickCallback(function(event) spec.onClick(self:_elementCtx(), event) end)
+    end
+    return { label = btn, echo = echo, spec = spec }
+end
+
+-- Content elements come from the active content def's `titlebarElements`. Rebuild
+-- the content Labels only when the active content changes (not per frame). Content
+-- ids that collide with a builtin are ignored — content cannot override builtins.
+function MuxPane:_syncContentTbButtons()
+    if self._contentTbSig == self._activeContent then return end
+    self._contentTbSig = self._activeContent
+    self._contentTbBtns = self._contentTbBtns or {}
+
+    local def   = self._activeContent and Mux._content and Mux._content[self._activeContent] or nil
+    local specs = (def and def.titlebarElements) or {}
+    local want  = {}
+    for _, s in ipairs(specs) do
+        if s.id and s.iconable ~= false and not BUILTIN_TB_IDS[s.id] then want[s.id] = s end
+    end
+    -- Drop buttons whose content went away or changed.
+    for id, b in pairs(self._contentTbBtns) do
+        if not want[id] then
+            pcall(function() b.label:hide() end)
+            pcall(function() if b.label.delete then b.label:delete() end end)
+            self._contentTbBtns[id] = nil
+        end
+    end
+    -- Create newcomers.
+    for id, s in pairs(want) do
+        if not self._contentTbBtns[id] then
+            self._contentTbBtns[id] = self:_makeTbButton(s)
+        end
+    end
+end
+
+-- Collect the visible elements for each side, ordered for packing. Builtins map
+-- to their existing Labels; content maps to its created Labels. Returns
+-- left/right arrays of { spec, label } plus a flat ascending-priority list for
+-- overflow folding.
+function MuxPane:_collectTbElements(ctx)
+    local left, right, all = {}, {}, {}
+    local function consider(spec, label)
+        if not label then return end
+        local ok, vis = pcall(spec.visible, ctx)
+        if not ok or not vis then return end
+        local entry = { spec = spec, label = label }
+        all[#all + 1] = entry
+        if spec.side == "left" then left[#left + 1] = entry else right[#right + 1] = entry end
+    end
+    for _, spec in ipairs(BUILTIN_TB) do consider(spec, spec.get(self)) end
+    if self._contentTbBtns then
+        for _, b in pairs(self._contentTbBtns) do consider(b.spec, b.label) end
+    end
+    local function sortSide(arr)
+        table.sort(arr, function(x, y)
+            local gx = TB_GROUP_RANK[x.spec.group] or 9
+            local gy = TB_GROUP_RANK[y.spec.group] or 9
+            if gx ~= gy then return gx < gy end
+            if (x.spec.order or 0) ~= (y.spec.order or 0) then return (x.spec.order or 0) < (y.spec.order or 0) end
+            return (x.spec.id or "") < (y.spec.id or "")
+        end)
+    end
+    sortSide(left); sortSide(right)
+    table.sort(all, function(x, y) return (x.spec.priority or 50) < (y.spec.priority or 50) end)
+    return left, right, all
+end
+
+-- Back-compat entry: the layout is now computed inside _syncButtons (visibility
+-- and packing are interdependent), so this just forces a full sync.
 function MuxPane:_layoutTitlebarButtons()
     if not self.titlebar then return end
-
-    local theme = Mux.activeTheme and Mux.activeTheme() or {}
-    local btnY  = theme.btnTopMargin or 2
-    local align = self.nameAlign or "left"
-    local nameW = self:_titlebarNameWidth()
-
-    -- nameW covers both the right-align cluster offset and the left-align infoBtn
-    -- position; btnY is the only other input. Nothing here tracks header width.
-    local sig = align .. ":" .. nameW .. ":" .. btnY
-    if sig == self._btnLayoutSig then return end
-    self._btnLayoutSig = sig
-
-    -- namePad is the gap from the header's right edge to the name; clusterGap
-    -- separates the button cluster from the name. namePad must match the
-    -- margin-right in _nameHtml.
-    local namePad, clusterGap = 6, 6
-    local nameSlot = (align == "right") and (namePad + nameW + clusterGap) or 0
-
-    local yPx = Mux._toPx(btnY)
-    local function rightAnchor(btn, offset)
-        if btn then btn:move(Mux._fromEdgePx(nameSlot + offset), yPx) end
-    end
-    rightAnchor(self.closeBtn,    20)
-    rightAnchor(self.addPaneBtn,  20)   -- shares the close slot; addable panes are not closeable
-    rightAnchor(self.minBtn,      42)
-    rightAnchor(self.zoomBtn,     70)
-    rightAnchor(self.swapBtn,     96)
-    rightAnchor(self.anchorBtn,   96)   -- floating-only; shares the (embedded-only) swap slot
-    rightAnchor(self.splitHBtn,  120)
-    rightAnchor(self.splitVBtn,  140)
-
-    -- Properties + Content Library anchor to the LEFT (Content sits just right of
-    -- Properties), trailing the name in left-align and parked far-left otherwise.
-    self:_updateInfoBtnPos()
+    self:_syncButtons(true)
 end
 
 -- Sets the name alignment and refreshes the titlebar layout.
@@ -1060,98 +1203,135 @@ end
 function MuxPane:_syncButtons(force)
     if not self.titlebarVisible then return end
     -- During a live handle drag this is called on every reposition frame.
-    -- Skip the per-frame width query; _flushRatio re-runs once after the drag ends.
     if Mux._resizing and not force then return end
     local headerW = self.header:get_width()
     if headerW < 10 then return end  -- not yet laid out
 
-    self:_layoutTitlebarButtons()
+    self:_syncContentTbButtons()
 
-    -- Dialogs (_dialog = true) are system UI and always show their controls
-    -- regardless of the compact_titlebar workspace preference.
-    local compact = (not self._dialog) and Mux.settings.get and Mux.settings.get("mux", "compact_titlebar")
+    local theme   = Mux.activeTheme() or {}
+    local btnSize = theme.btnSize or 22
+    local intraGap, groupGap, edgePad = 4, 8, 2
+    local namePad, clusterGap = 6, 6
     local align   = self.nameAlign or "left"
+    local nameW   = self:_titlebarNameWidth()
+    local btnY    = theme.btnTopMargin or 2
+    -- Dialogs (_dialog) always show their controls regardless of compact mode.
+    local compact = (not self._dialog) and Mux.settings.get and Mux.settings.get("mux", "compact_titlebar")
 
-    local showInfo = self.infoBtn and self.contextMenu
-        and (self.showSettingsInMenu or self.propertiesButton)
-    local infoBtnW    = showInfo and 22 or 0
-    local contentBtnW = self:_contentEnabled() and 26 or 0
-    local anchorBtnW  = (self.anchorBtn and self.floating and self.anchorable and not compact) and 26 or 0
-    local nameW       = self:_titlebarNameWidth()
+    local ctx          = self:_elementCtx()
+    local left, right, all = self:_collectTbElements(ctx)   -- visible iconable; no Geyser calls
 
-    local closeMinW = 22
-    if self.floating and self.minimizable then closeMinW = closeMinW + 22 end
-    local rightW = closeMinW
-    if self.zoomable and (self._split or self.floating or self._zoomed) then rightW = rightW + 28 end
-    if self.swappable and self._split and not self.floating             then rightW = rightW + 26 end
-    if self.splittable and not self.floating                            then rightW = rightW + 44 end
-    rightW = rightW + anchorBtnW
-
-    local newOverflow
-    if align == "right" then
-        local namePad, clusterGap = 6, 6
-        local leftW = 6 + infoBtnW + contentBtnW
-        newOverflow = compact or (headerW < leftW + rightW + namePad + nameW + clusterGap + 10)
-    elseif align == "center" then
-        local leftW = 6 + infoBtnW + contentBtnW
-        newOverflow = compact or (headerW < leftW + nameW + rightW + 10)
-    else
-        local leftW = 16 + nameW + 4 + infoBtnW + contentBtnW
-        newOverflow = compact or (headerW < leftW + rightW + 10)
+    -- Menu-only content elements (iconable=false) live only in the menu and force
+    -- it to exist (so the ⋯ handle appears) even if nothing folds.
+    local hasMenuExtra = false
+    if ctx.content and ctx.content.titlebarElements then
+        for _, s in ipairs(ctx.content.titlebarElements) do
+            if s.iconable == false and not BUILTIN_TB_IDS[s.id] then
+                local ok, vis = pcall(s.visible or function() return true end, ctx)
+                if ok and vis then hasMenuExtra = true; break end
+            end
+        end
     end
 
-    if not force and newOverflow == self._overflowMode then return end
-    self._overflowMode = newOverflow
-
-    if newOverflow then
-        -- Overflow or compact: collapse secondary buttons to the right-click menu.
-        if self.infoBtn    then self.infoBtn:hide()    end
-        if self.zoomBtn    then self.zoomBtn:hide()    end
-        if self.swapBtn    then self.swapBtn:hide()    end
-        if self.splitHBtn  then self.splitHBtn:hide()  end
-        if self.splitVBtn  then self.splitVBtn:hide()  end
-        if self.contentBtn then self.contentBtn:hide() end
-        if self.anchorBtn  then self.anchorBtn:hide()  end
-        if self.addPaneBtn then self.addPaneBtn:hide() end
-        if compact then
-            -- compact_titlebar = true: only the pane name is visible; all controls via right-click.
-            self.closeBtn:hide()
-            self.minBtn:hide()
-        end
-    else
-        -- Full visibility: restore per-state buttons.
-        if self.infoBtn then
-            if showInfo then self.infoBtn:show() else self.infoBtn:hide() end
-        end
-        if not self.closeable then self.closeBtn:hide() else self.closeBtn:show() end
-        if self.addPaneBtn then
-            if self.addable then self.addPaneBtn:show() else self.addPaneBtn:hide() end
-        end
-        if self:_minBtnVisible() then self.minBtn:show() else self.minBtn:hide() end
-        if self.zoomable and (self._split or self.floating or self._zoomed) then
-            self.zoomBtn:show()
-        else
-            self.zoomBtn:hide()
-        end
-        if self.splittable and not self.floating then
-            self.splitVBtn:show(); self.splitHBtn:show()
-        else
-            self.splitVBtn:hide(); self.splitHBtn:hide()
-        end
-        if self.swappable and not self.floating and self._split then
-            self.swapBtn:show()
-        else
-            self.swapBtn:hide()
-        end
-        if self.contentBtn then
-            if self:_contentEnabled() then self.contentBtn:show() else self.contentBtn:hide() end
-        end
-        if self.anchorBtn then
-            if self.floating and self.anchorable then
-                self.anchorBtn:show(); self._refreshAnchorBtn()
-            else
-                self.anchorBtn:hide()
+    -- Overflow: fold the lowest-priority elements into the right-click menu until
+    -- the bar fits. close is highest priority among the window/tiling controls so
+    -- it folds late; compact folds everything. The menu is reached by right-click.
+    local folded = {}
+    local function sideW(arr)
+        local w, pg = 0, nil
+        for _, e in ipairs(arr) do
+            if not folded[e.spec.id] then
+                if pg then w = w + ((pg ~= e.spec.group) and groupGap or intraGap) end
+                w = w + btnSize
+                pg = e.spec.group
             end
+        end
+        return w
+    end
+    local function fits()
+        local lw, rw = sideW(left), sideW(right)
+        local need
+        if align == "right" then
+            need = 6 + lw + clusterGap + nameW + namePad + rw + edgePad + 6
+        elseif align == "center" then
+            need = 6 + lw + nameW + rw + edgePad + 10
+        else
+            need = 16 + nameW + 4 + lw + rw + edgePad + 6
+        end
+        return headerW >= need
+    end
+
+    if compact then
+        for _, e in ipairs(all) do folded[e.spec.id] = true end
+    else
+        local i = 1
+        while not fits() and i <= #all do
+            folded[all[i].spec.id] = true
+            i = i + 1
+        end
+    end
+    -- A menu exists when something folded, a menu-only element is present, or compact.
+    self._overflowMode = compact or (next(folded) ~= nil) or hasMenuExtra or false
+
+    -- Result signature — nothing visual changes unless the visible/placed set does.
+    -- Positions are edge/name anchored (header-width independent), so a drag that
+    -- doesn't flip overflow produces the same signature and skips all Geyser work.
+    local parts = { align, nameW, btnY }
+    local function tag(label, arr)
+        parts[#parts + 1] = label
+        for _, e in ipairs(arr) do if not folded[e.spec.id] then parts[#parts + 1] = e.spec.id end end
+    end
+    tag("L", left); tag("R", right)
+    local sig = table.concat(parts, ":")
+    if not force and sig == self._tbSig then return end
+    self._tbSig = sig
+
+    -- Record the folded elements in the menu in the same sequence the icons read
+    -- left-to-right across the titlebar: the left cluster in pack order, then the
+    -- right cluster reversed (it packs inward from the right edge). One source of
+    -- truth for both the icon row and the menu order.
+    local foldedSpecs = {}
+    for _, e in ipairs(left) do
+        if folded[e.spec.id] then foldedSpecs[#foldedSpecs + 1] = e.spec end
+    end
+    for i = #right, 1, -1 do
+        if folded[right[i].spec.id] then foldedSpecs[#foldedSpecs + 1] = right[i].spec end
+    end
+    self._foldedElements = foldedSpecs
+
+    -- Hide all, then show + place the visible, non-folded set.
+    for _, s in ipairs(BUILTIN_TB) do local b = s.get(self); if b then b:hide() end end
+    if self._contentTbBtns then for _, b in pairs(self._contentTbBtns) do b.label:hide() end end
+
+    local yPx      = Mux._toPx(btnY)
+    local nameSlot = (align == "right") and (namePad + nameW + clusterGap) or 0
+
+    -- Right side: non-folded elements pack leftward from the edge, group gaps
+    -- between clusters.
+    local acc, pg = edgePad, nil
+    for _, e in ipairs(right) do
+        if not folded[e.spec.id] then
+            if pg and pg ~= e.spec.group then acc = acc + groupGap end
+            e.label:move(Mux._fromEdgePx(nameSlot + acc + btnSize), yPx)
+            e.label:show()
+            if e.spec.id == "anchor" and self._refreshAnchorBtn then self._refreshAnchorBtn() end
+            acc = acc + btnSize + intraGap
+            pg = e.spec.group
+        end
+    end
+
+    -- Left side: pack rightward, starting just past the name (left-align) or far
+    -- left otherwise. group gaps separate clusters (e.g. a content gear from info).
+    local x0 = (align == "left") and self:_infoBtnX() or 2
+    local lx, lpg = 0, nil
+    for _, e in ipairs(left) do
+        if not folded[e.spec.id] then
+            if lpg and lpg ~= e.spec.group then lx = lx + groupGap end
+            e.label:move(x0 + lx, yPx)
+            e.label:show()
+            lx = lx + btnSize + intraGap
+            lpg = e.spec.group
         end
     end
 end
@@ -1185,6 +1365,7 @@ function MuxPane:_applyTitlebarVisibility()
         if self.splitHBtn  then self.splitHBtn:hide()  end
         if self.swapBtn    then self.swapBtn:hide()    end
         if self.contentBtn then self.contentBtn:hide() end
+        if self._contentTbBtns then for _, b in pairs(self._contentTbBtns) do b.label:hide() end end
         if self.anchorBtn  then self.anchorBtn:hide()  end
         if self.addPaneBtn then self.addPaneBtn:hide() end
     end
@@ -1718,21 +1899,10 @@ function MuxPane:close()
     end
 
     if self.floating then
-        -- Find and clean up the ghost this pane left behind, then collapse the
-        -- slot. Resolve by the stable home key (survives promotion); fall back to
-        -- a slot lookup for safety.
-        local ghost, gKey
-        if self._homeGhostKey and Mux._ghostSlots[self._homeGhostKey] then
-            ghost, gKey = Mux._ghostSlots[self._homeGhostKey], self._homeGhostKey
-        elseif self._slot then
-            ghost, gKey = Mux._findGhostBySlot(self._slot)
-        end
-        if ghost then
-            local gSplit = ghost.split
-            local gSide  = ghost.side
-            Mux._removeGhostSlot(gKey)
-            if gSplit then gSplit:collapseSlot(gSide) end
-        end
+        -- Closing a floating pane no longer reclaims its home tile. The ghost is an
+        -- ownerless empty tile and simply persists (dismiss it via its ✕ to reclaim
+        -- the space). The pane's home-ghost link gave it a mild preference to return
+        -- there while it lived; now it's gone, the tile just stays as a vacancy.
         self.outer:hide()
     else
         if self._slot then self._slot:remove(self.outer) end
