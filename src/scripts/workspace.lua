@@ -116,6 +116,7 @@ function Mux.applyWorkspace(name)
 
     local paneMap   = {}
     local psDef     = def.paneSpace
+    Mux._pendingGhostLinks = {}   -- ghost→floating-owner re-links queued during buildNode
 
     -- Build the tree with Geyser's per-constraint-change reposition suppressed, so
     -- the organize() calls fired while assembling each split box are calc-only
@@ -157,7 +158,8 @@ function Mux.applyWorkspace(name)
 
     -- Restore floating panes after panespace geometry resolves.
     local floatingPanes = def.floatingPanes or {}
-    if #floatingPanes > 0 then
+    local hasGhostLinks = Mux._pendingGhostLinks and #Mux._pendingGhostLinks > 0
+    if #floatingPanes > 0 or hasGhostLinks then
         tempTimer(0.2, function()
             for _, fd in ipairs(floatingPanes) do
                 local p = buildNode(fd, Geyser, paneMap, nil)
@@ -179,6 +181,22 @@ function Mux.applyWorkspace(name)
                         p._pendingContentState = nil
                     end
                 end
+            end
+            -- Re-link each restored ghost to its now-built floating owner so the
+            -- floating pane knows its home slot (return-to-ghost / drop-on-ghost work)
+            -- and the ghost↔owner invariant holds, exactly as in a live float.
+            if Mux._pendingGhostLinks then
+                for _, link in ipairs(Mux._pendingGhostLinks) do
+                    local ghost = Mux._ghostSlots and Mux._ghostSlots[link.key]
+                    local owner = paneMap[link.ownerId]
+                    if ghost and owner then
+                        ghost.pane      = owner
+                        owner._slot     = ghost.slot
+                        owner._split    = ghost.split
+                        owner._slotSide = ghost.side
+                    end
+                end
+                Mux._pendingGhostLinks = nil
             end
             Mux.raiseFloatingPanes()
             if Mux._notifyAllReposition then Mux._notifyAllReposition() end
@@ -215,6 +233,21 @@ function Mux.applyWorkspace(name)
     return paneMap
 end
 
+-- A split slot can be occupied by a ghost (the placeholder left behind when its
+-- pane floats) rather than a child node. Such a slot has a nil childA/childB, so
+-- the recursive serialize would drop it and the slot would reload as an empty
+-- void. Emit a ghost marker instead, recording the owning floating pane's id so
+-- the ghost↔owner link can be rebuilt on restore.
+local function ghostNodeForSlot(slot)
+    if not slot or not Mux._ghostSlots then return nil end
+    for _, ghost in pairs(Mux._ghostSlots) do
+        if ghost.slot == slot then
+            return { type = "ghost", owner = ghost.pane and ghost.pane.id or nil }
+        end
+    end
+    return nil
+end
+
 local function serializeNode(obj)
     if not obj then return nil end
     if obj.slotA and obj.slotB then
@@ -222,8 +255,8 @@ local function serializeNode(obj)
             type      = "split",
             direction = obj.direction or "v",
             ratio     = obj.ratio     or 0.5,
-            a         = serializeNode(obj.childA),
-            b         = serializeNode(obj.childB),
+            a         = serializeNode(obj.childA) or ghostNodeForSlot(obj.slotA),
+            b         = serializeNode(obj.childB) or ghostNodeForSlot(obj.slotB),
         }
     end
     if obj.overlay then return nil end
@@ -577,14 +610,24 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             ratio     = node.ratio     or 0.5,
             parent    = parentContainer,
         })
-        if node.a then
-            local ca = buildNode(node.a, s.slotA, paneMap, paneSpace)
-            if ca then s:place(ca, "a") end
+        -- Restore one side: a ghost marker re-creates the placeholder (so the slot
+        -- isn't a void) and queues an owner re-link; anything else is a real child.
+        local function restoreSide(childNode, slot, side)
+            if not childNode then return end
+            if childNode.type == "ghost" then
+                local key = Mux._createGhostSlot(slot, s, side, paneSpace, nil)
+                if childNode.owner and key then
+                    Mux._pendingGhostLinks = Mux._pendingGhostLinks or {}
+                    Mux._pendingGhostLinks[#Mux._pendingGhostLinks + 1] =
+                        { key = key, ownerId = childNode.owner }
+                end
+            else
+                local c = buildNode(childNode, slot, paneMap, paneSpace)
+                if c then s:place(c, side) end
+            end
         end
-        if node.b then
-            local cb = buildNode(node.b, s.slotB, paneMap, paneSpace)
-            if cb then s:place(cb, "b") end
-        end
+        restoreSide(node.a, s.slotA, "a")
+        restoreSide(node.b, s.slotB, "b")
         return s
 
     else
