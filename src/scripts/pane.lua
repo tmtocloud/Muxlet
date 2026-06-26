@@ -87,6 +87,10 @@ function MuxPane:init(opts)
     self._slot     = nil   -- Geyser.Container (slot inside the split)
     self._split    = nil   -- MuxSplit instance
     self._slotSide = nil   -- "a" or "b"
+    -- When floating, the registry key of the ghost marking this pane's home tile.
+    -- Stable across ghost promotion, so it resolves to the live home even after a
+    -- sibling collapse moves the ghost. nil while embedded.
+    self._homeGhostKey = nil
 
     -- User callbacks
     self.onClose    = opts.onClose
@@ -619,8 +623,10 @@ function MuxPane:_buildTitlebar(theme)
             return
         end
 
-        -- Home slot first; then find the nearest ghost by screen distance.
-        local homeGhost = Mux._findGhostBySlot(self._slot)
+        -- Home tile first (resolved by stable key, so a promoted ghost still
+        -- matches); then fall back to the nearest ghost by screen distance.
+        local homeGhost = (self._homeGhostKey and Mux._ghostSlots[self._homeGhostKey])
+                          or Mux._findGhostBySlot(self._slot)
         local target    = homeGhost
 
         if not target then
@@ -1443,7 +1449,9 @@ function MuxPane:_detachToFloat()
         if self._slotSide == "a" then self._split.childA = nil
         else                          self._split.childB = nil
         end
-        Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace, self)
+        -- Record the home as the ghost's stable key (not the owner-back-reference
+        -- model). Survives promotion, so return resolves the live home tile.
+        self._homeGhostKey = Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace)
         -- Raise ALL floating panes so none are obscured by the new ghost.
         Mux.raiseFloatingPanes()
     end
@@ -1461,6 +1469,7 @@ function MuxPane:embed(slot)
         return
     end
     Mux._removeGhostSlotBySlot(target)
+    self._homeGhostKey = nil   -- embedded now; no home ghost outstanding
     -- Restore the split box so VBox/HBox layout and resize handle are visible again.
     if not slot and self._split then
         self._split.box:show()
@@ -1523,7 +1532,7 @@ function MuxPane:zoom()
         self.outer:changeContainer(Geyser)
         self.frame:setStyleSheet(self:_baseFrameCss())
         if self._split then
-            Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace, self)
+            Mux._createGhostSlot(self._slot, self._split, self._slotSide, self._paneSpace)
         end
         -- consoleBorders panes have a transparent frame; hiding the pane space
         -- prevents other panes from showing through while zoomed.
@@ -1710,16 +1719,19 @@ function MuxPane:close()
 
     if self.floating then
         -- Find and clean up the ghost this pane left behind, then collapse the
-        -- slot. Ghost lookup is by slot (not pane→ghost) so promotion scenarios
-        -- are handled transparently.
-        if self._slot then
-            local ghost, gKey = Mux._findGhostBySlot(self._slot)
-            if ghost then
-                local gSplit = ghost.split
-                local gSide  = ghost.side
-                Mux._removeGhostSlot(gKey)
-                if gSplit then gSplit:collapseSlot(gSide) end
-            end
+        -- slot. Resolve by the stable home key (survives promotion); fall back to
+        -- a slot lookup for safety.
+        local ghost, gKey
+        if self._homeGhostKey and Mux._ghostSlots[self._homeGhostKey] then
+            ghost, gKey = Mux._ghostSlots[self._homeGhostKey], self._homeGhostKey
+        elseif self._slot then
+            ghost, gKey = Mux._findGhostBySlot(self._slot)
+        end
+        if ghost then
+            local gSplit = ghost.split
+            local gSide  = ghost.side
+            Mux._removeGhostSlot(gKey)
+            if gSplit then gSplit:collapseSlot(gSide) end
         end
         self.outer:hide()
     else

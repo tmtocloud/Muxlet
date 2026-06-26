@@ -182,15 +182,16 @@ function Mux.applyWorkspace(name)
                     end
                 end
             end
-            -- Re-link each restored ghost to its now-built floating owner so the
-            -- floating pane knows its home slot (return-to-ghost / drop-on-ghost work)
-            -- and the ghost↔owner invariant holds, exactly as in a live float.
+            -- Re-link each restored ghost to its now-built floating owner. With
+            -- ownerless ghosts, this just means handing the floating pane the
+            -- ghost's stable key as its home; the pane resolves the live home tile
+            -- through it (return-to-ghost / drop-on-ghost work as in a live float).
             if Mux._pendingGhostLinks then
                 for _, link in ipairs(Mux._pendingGhostLinks) do
                     local ghost = Mux._ghostSlots and Mux._ghostSlots[link.key]
                     local owner = paneMap[link.ownerId]
                     if ghost and owner then
-                        ghost.pane      = owner
+                        owner._homeGhostKey = link.key
                         owner._slot     = ghost.slot
                         owner._split    = ghost.split
                         owner._slotSide = ghost.side
@@ -240,12 +241,20 @@ end
 -- the ghost↔owner link can be rebuilt on restore.
 local function ghostNodeForSlot(slot)
     if not slot or not Mux._ghostSlots then return nil end
-    for _, ghost in pairs(Mux._ghostSlots) do
-        if ghost.slot == slot then
-            return { type = "ghost", owner = ghost.pane and ghost.pane.id or nil }
+    local ghostKey
+    for key, ghost in pairs(Mux._ghostSlots) do
+        if ghost.slot == slot then ghostKey = key; break end
+    end
+    if not ghostKey then return nil end
+    -- Ghosts are ownerless; the home link lives on the floating pane. Find the
+    -- floating pane (if any) whose home is this ghost, so restore can re-link it.
+    local ownerId
+    if Mux._panes then
+        for _, p in pairs(Mux._panes) do
+            if p.floating and p._homeGhostKey == ghostKey then ownerId = p.id; break end
         end
     end
-    return nil
+    return { type = "ghost", owner = ownerId }
 end
 
 local function serializeNode(obj)

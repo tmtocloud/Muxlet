@@ -783,7 +783,7 @@ Mux._registerResizeHandler()
 -- across split retirement works without back-referencing the original pane.
 Mux._ghostSlots = Mux._ghostSlots or {}
 
-function Mux._createGhostSlot(slot, split, side, paneSpace, pane)
+function Mux._createGhostSlot(slot, split, side, paneSpace)
     local theme = Mux.activeTheme()
     local gid   = Mux._newInternalId()
 
@@ -872,12 +872,10 @@ function Mux._createGhostSlot(slot, split, side, paneSpace, pane)
         slot       = slot,
         split      = split,
         side       = side,
-        paneSpace    = paneSpace,
-        -- Owning floating pane (the one this ghost marks the home of). Stored so the
-        -- ghost↔home invariant can be maintained when the ghost is promoted/dissolved
-        -- during a collapse. Lookup is still primarily slot→ghost; this is an extra
-        -- maintained back-reference, never the primary key.
-        pane       = pane,
+        paneSpace  = paneSpace,
+        -- Ghosts are ownerless empty tiles. A floating pane that left this ghost
+        -- records the ghost's KEY (returned below) as its home; the ghost itself
+        -- holds no pane reference, so promotion/dissolve need no owner fixup.
     }
     Mux._ghostSlots[slotKey] = record
     Mux._log("ghost slot created: %s (split=%s side=%s)", slotKey, split and split.id or "?", side or "?")
@@ -910,39 +908,24 @@ function Mux._removeGhostSlotBySlot(slotContainer)
     end
 end
 
--- Find the ghost (if any) owned by a given floating pane. Used to enforce the
--- ghost↔home invariant without relying on a possibly-stale slot reference.
-function Mux._findGhostByPane(pane)
-    if not pane then return nil, nil end
-    for key, ghost in pairs(Mux._ghostSlots) do
-        if ghost.pane == pane then return ghost, key end
-    end
-    return nil, nil
-end
-
 -- Promote/move a ghost to a new home (slot/split/side), e.g. when an inner split
--- is retired and its lone ghost should rise to fill the parent slot. Crucially,
--- if the ghost's owning pane is still floating and still points at this ghost's
--- old home, its back-references are moved in lockstep so a later embed() targets
--- the live container rather than the retired one (which would lose the pane).
+-- is retired and its lone ghost should rise to fill the parent slot. The ghost's
+-- registry KEY is stable across this move, so a floating pane that recorded that
+-- key as its home (`_homeGhostKey`) automatically follows the promotion with no
+-- back-reference to maintain. Ghosts are ownerless empty tiles; nothing here
+-- reaches into a pane.
 function Mux._reassignGhost(ghost, newSlot, newSplit, newSide)
     if not ghost then return end
-    local owner = ghost.pane
-    if owner and owner.floating
-       and owner._slot == ghost.slot and owner._split == ghost.split then
-        owner._slot     = newSlot
-        owner._split    = newSplit
-        owner._slotSide = newSide
-    end
     ghost.slot  = newSlot
     ghost.split = newSplit
     ghost.side  = newSide
 end
 
--- Dissolve a ghost whose home slot no longer exists in the tree (its split was
--- retired with no promotion). The owning floating pane becomes "homeless": its
--- home refs are cleared so the next drop falls back to a paneSpace embed instead
--- of reparenting into a dead container (which would make the pane disappear).
+-- Dissolve a ghost whose home slot no longer exists (its split was retired with
+-- no promotion). The empty tile simply disappears; any floating pane that recorded
+-- this ghost's key as its home will, on its next return attempt, find the key
+-- resolves to nothing and fall back to a fresh paneSpace embed. No owner fixup is
+-- needed because the ghost owns no pane.
 function Mux._dissolveGhost(ghostOrKey)
     local key, ghost
     if type(ghostOrKey) == "table" then
@@ -952,12 +935,6 @@ function Mux._dissolveGhost(ghostOrKey)
         key, ghost = ghostOrKey, Mux._ghostSlots[ghostOrKey]
     end
     if not ghost then return end
-    local owner = ghost.pane
-    if owner and owner.floating and owner._slot == ghost.slot then
-        owner._slot     = nil
-        owner._split    = nil
-        owner._slotSide = nil
-    end
     if key then Mux._removeGhostSlot(key) end
 end
 
