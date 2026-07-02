@@ -41,6 +41,8 @@ if sub == "help" then
 
   <white>Themes<reset>
   mux theme [name]             — show or switch active theme
+  mux theme save <name>        — save the current look (theme + global tweaks)
+                                 as a named theme you can switch to or package
   mux themes                   — list all registered themes
 
   <white>Settings<reset>
@@ -70,7 +72,14 @@ if sub == "help" then
 
 -- ── mux theme ────────────────────────────────────────────────────────────────
 elseif sub == "theme" then
-    if not words[2] then
+    local action = words[2] and words[2]:lower() or nil
+    if action == "save" then
+        -- mux theme save <name> — bottle the current look as a named theme.
+        local name = words[3]
+        local ok, msg = Mux.saveThemeFromGlobals(name)
+        Mux._echo(string.format("\n%s[Muxlet]<reset> %s\n",
+            ok and "<cyan>" or "<red>", msg or ""))
+    elseif not words[2] then
         Mux._echo(string.format("\n<cyan>[Muxlet]<reset> Current theme: %s\n",
             Mux.currentTheme()))
     else

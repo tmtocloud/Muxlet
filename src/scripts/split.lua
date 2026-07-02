@@ -373,6 +373,10 @@ function MuxSplit:_setRatio(r)
         self:_notifyReposition()
     end
 
+    -- Floating dialogs (Settings/Properties) sit outside this subtree but their
+    -- content drifts out of frame on an embedded resize; cheaply re-assert them.
+    if Mux._reassertFloatingPanes then Mux._reassertFloatingPanes() end
+
     Mux._inResize = wasInResize
 end
 

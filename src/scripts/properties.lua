@@ -16,6 +16,58 @@ local _pendingActiveGroup = nil   -- group label to re-activate after a grouped 
 local _pendingPropsConfirm = nil  -- {message, onProceed} for the close-confirm dialog
 local _propsRebuildInProgress = false  -- true while refreshPaneProperties re-opens the dialog
 
+-- Signature of the subject state that affects which property rows show or lock.
+-- The live poll rebuilds the dialog whenever this changes (embed/float, zoom,
+-- content, tabs, ...), so Properties always reflects the current state.
+local function _propsStateSig(t)
+    if not t then return "" end
+    return table.concat({
+        tostring(t.floating), tostring(t._zoomed), tostring(t.minimized),
+        tostring(t._activeContent), tostring(t.bordered), tostring(t.titlebarVisible),
+        tostring(t._tabsEnabled), tostring(t.tabsLocked), tostring(t.renamable),
+        tostring(t.anchorable), tostring(t.showAnchorElement), tostring(t.movable),
+    }, "|")
+end
+
+-- Remember which group tab is open so a rebuild re-selects it instead of snapping
+-- back to the first tab. The dialog's active tab name is the group label.
+local function _captureActiveGroup(subject)
+    if not (subject and subject._propertiesDialogs) then return end
+    for _, dlg in pairs(subject._propertiesDialogs) do
+        if dlg._activeTabId and dlg._findTab then
+            local t = dlg:_findTab(dlg._activeTabId)
+            if t and t.name then subject._propsActiveGroup = t.name end
+        end
+        break
+    end
+end
+
+-- Maps a Permissions/Style row label to the pane property it edits, so the lock pass
+-- can find which rows are read-only without tagging each row by hand.
+local LABEL_TO_PROP = {
+    ["Closeable"]   = "closeable",   ["Convertible"]    = "convertible",
+    ["Resizable"]   = "resizable",   ["Movable"]        = "movable",
+    ["Swappable"]   = "swappable",   ["Minimizable"]    = "minimizable",
+    ["Zoomable"]    = "zoomable",    ["Splittable"]     = "splittable",
+    ["Anchorable"]  = "anchorable",  ["Contentable"]    = "contentable",
+    ["Add-Pane Button"] = "addable",
+}
+
+-- Recompute the subject's read-only locks, then mark any matching grouped rows
+-- locked (greyed + reason on hover, non-interactive) via buildForm's lock handling.
+local function _applyLockTags(groups, subject)
+    if not (subject and subject.paramReadonly) then return groups end
+    if subject._recomputeLocks then subject:_recomputeLocks() end
+    for _, grp in ipairs(groups) do
+        for _, r in ipairs(grp.rows or {}) do
+            local prop = r.prop or LABEL_TO_PROP[r.label]
+            local why  = prop and subject:paramReadonly(prop) or nil
+            if why then r.locked = true; r.lockedReason = why end
+        end
+    end
+    return groups
+end
+
 -- Centered Apply button for use in form rows (Rules tab).  Registered once so
 -- the form builder can dispatch to it by type name "mux_action_btn".
 if not Mux.ui._widgets["mux_action_btn"] then
@@ -37,6 +89,151 @@ end
 -- Forward declarations needed because paneRows/tabRows reference these before their definitions.
 local refreshPaneProperties
 local refreshTabProperties
+
+-- Rebuild whichever properties dialog a subject (pane or tab) owns. Tabs carry a
+-- .pane back-reference; panes don't.
+local function refreshSubjectProperties(subject)
+    if subject.pane then
+        if refreshTabProperties then refreshTabProperties(subject.pane, subject) end
+    else
+        if refreshPaneProperties then refreshPaneProperties(subject) end
+    end
+end
+
+-- Per-condition parameter rows for the rule editor. Edits write straight to
+-- rule.cond and reinstall the rule (so trigger-backed conditions re-arm).
+local function _condParamRows(subject, rule)
+    local rows = {}
+    local cond = rule.cond or {}
+    local t    = cond.type
+    local function reapply()
+        Mux._reapplyRule(subject, rule)     -- re-arm trigger + re-evaluate, in place
+    end
+    if t == "gmcp_exists" or t == "gmcp_equals" then
+        rows[#rows+1] = { label = "GMCP path", type = "text",
+            desc = "dotted path under gmcp, e.g. room.info.players (a leading 'gmcp.' is fine)",
+            readFn = function() return cond.path or "" end,
+            writeFn = function(v) cond.path = v; reapply() end }
+    end
+    if t == "gmcp_equals" then
+        rows[#rows+1] = { label = "Equals", type = "text", desc = "value to match (text)",
+            readFn = function() return cond.value or "" end,
+            writeFn = function(v) cond.value = v; reapply() end }
+    end
+    if t == "event_fired" then
+        rows[#rows+1] = { label = "Event", type = "text",
+            desc = "Mudlet event name, e.g. gmcp.char.vitals",
+            readFn = function() return cond.event or "" end,
+            writeFn = function(v) cond.event = v; reapply() end }
+        rows[#rows+1] = { label = "Seconds", type = "text",
+            desc = "stays true this long after the event fires",
+            readFn = function() return tostring(cond.seconds or 5) end,
+            writeFn = function(v) cond.seconds = tonumber(v) or 5; reapply() end }
+    end
+    if t == "line_match" then
+        rows[#rows+1] = { label = "Match mode", type = "array", display = "dropdown",
+            desc = "How to match each game line",
+            options = {
+                { value = "substring", label = "Contains text" },
+                { value = "exact",     label = "Whole line equals" },
+                { value = "regex",     label = "Regex (Perl)" },
+            },
+            readFn = function() return cond.mode or "substring" end,
+            writeFn = function(v) cond.mode = v; reapply() end }
+        rows[#rows+1] = { label = "Pattern", type = "text",
+            desc = "text/regex to look for in the game output",
+            readFn = function() return cond.pattern or "" end,
+            writeFn = function(v) cond.pattern = v; reapply() end }
+    end
+    return rows
+end
+
+-- The multi-rule editor: one section per user rule (condition + action + remove),
+-- plus an Add button. Preset rules (connection, capture) are managed by their own
+-- toggle/config and aren't listed here.
+local function _buildRuleEditorRows(subject)
+    local rows = {}
+    local actOpts = {}
+    for _, a in ipairs(Mux.listActions and Mux.listActions() or {}) do
+        if not a.hidden then actOpts[#actOpts+1] = { value = a.id, label = a.name or a.id } end
+    end
+    if #actOpts == 0 then actOpts[1] = { value = "mux.showSelf", label = "Show pane" } end
+    local elseOpts = { { value = "", label = "(nothing)" } }
+    for _, o in ipairs(actOpts) do elseOpts[#elseOpts+1] = o end
+
+    local editable = {}
+    for _, r in ipairs(subject.rules or {}) do
+        -- Capture rules are managed by the Capture content's own settings dialog.
+        local isCapture = type(r.id) == "string" and r.id:find("^mux:capture")
+        if not isCapture then editable[#editable+1] = r end
+    end
+
+    if #editable == 0 then
+        rows[#rows+1] = { type = "divider", label = "No rules" }
+    end
+    for ri, rule in ipairs(editable) do
+        rows[#rows+1] = { type = "divider", label = "Rule " .. ri }
+        rows[#rows+1] = { label = "Status", type = "choiceCycler",
+            desc = "Inactive rules don't run. New rules start inactive so you can set them up first.",
+            options = {
+                { value = false, label = "Inactive", style = "off" },
+                { value = true,  label = "Active",    style = "on"  },
+            },
+            readFn  = function() return rule.enabled ~= false end,
+            writeFn = function(v)
+                rule.enabled = v and true or false
+                Mux._reapplyRule(subject, rule)
+                -- Disabling a visibility rule shouldn't strand a hidden pane.
+                if not v and subject._conditionShow and subject._conditionHidden then
+                    subject:_conditionShow()
+                end
+            end }
+        local curRef = rule.cond and rule.cond.ref
+        local whenOpts = {}
+        for _, c in ipairs(Mux.listConditions and Mux.listConditions() or {}) do
+            whenOpts[#whenOpts+1] = { value = c.id, label = c.label }
+        end
+        -- Preserve a legacy/inline condition (no ref) as a read-only synthetic entry.
+        if rule.cond and not curRef and rule.cond.type then
+            table.insert(whenOpts, 1, { value = "__inline__", label = "(inline: " .. rule.cond.type .. ")" })
+        end
+        rows[#rows+1] = { label = "When", type = "array", display = "dropdown",
+            desc = "the condition this rule reacts to (define more in Settings → Conditions)",
+            options = whenOpts,
+            readFn  = function() return (rule.cond and rule.cond.ref) or "__inline__" end,
+            writeFn = function(v)
+                if v == "__inline__" then return end
+                rule.cond = { ref = v }
+                Mux._reapplyRule(subject, rule)
+                refreshSubjectProperties(subject)
+            end }
+        rows[#rows+1] = { label = "Do", type = "array", display = "dropdown",
+            desc = "action to run when the condition is met",
+            options = actOpts,
+            readFn  = function() return rule.act or "mux.showSelf" end,
+            writeFn = function(v) rule.act = v; if rule.enabled ~= false then Mux._evaluateRules(subject, true) end end }
+        rows[#rows+1] = { label = "Else", type = "array", display = "dropdown",
+            desc = "action when the condition stops being met (optional)",
+            options = elseOpts,
+            readFn  = function() return rule.actElse or "" end,
+            writeFn = function(v) rule.actElse = (v ~= "" and v or nil); if rule.enabled ~= false then Mux._evaluateRules(subject, true) end end }
+        rows[#rows+1] = { type = "button", label = "Remove rule", _noReset = true,
+            desc = "delete this rule",
+            onClick = function() Mux._removeRule(subject, rule.id); refreshSubjectProperties(subject) end }
+    end
+    rows[#rows+1] = { type = "button", label = "+ Add rule", _noReset = true,
+        desc = "add a new condition → action rule (starts inactive)",
+        onClick = function()
+            Mux._addRule(subject, { cond = { ref = "always" },
+                act = "mux.showSelf", actElse = "mux.hideSelf", enabled = false })
+            refreshSubjectProperties(subject)
+        end }
+    return rows
+end
+
+-- (Capture configuration moved into the content's own settings dialog, opened from
+-- the ⚙ gear on the capture console — see contentLibrary/capture.lua.)
+
 
 -- Live screen geometry of a pane, for the read-only Properties readout. Uses the
 -- actual rendered container when present (reflects drags/resizes), else the
@@ -136,6 +333,11 @@ local function paneRows(pane)
         label   = "Tabs",
         desc    = "Enabled: host multiple views in a tab bar; Locked: tab bar frozen, no add/close",
         type    = "choiceCycler",
+        -- Content that can't be containerized into a tab viewport (the Mudlet
+        -- console) locks this row read-only, with the reason on hover.
+        locked       = (Mux._surfaceForbidsTabs and Mux._surfaceForbidsTabs(pane)) or nil,
+        lockedReason = (Mux._surfaceForbidsTabs and Mux._surfaceForbidsTabs(pane))
+            and "Console content can't have tabs — remove the console content first." or nil,
         options = {
             { value = false,    label = "Disabled", style = "off"  },
             { value = true,     label = "Enabled",  style = "on"   },
@@ -270,12 +472,17 @@ local function paneRows(pane)
         end,
     }
     if pane.anchorable ~= false then
+        -- Anchoring is a floating-pane feature; while embedded the icon does nothing,
+        -- so the row is read-only with the reason on hover.
+        local embedded = not pane.floating
         rows[#rows+1] = {
             label      = "Anchor Icon",
             desc       = "Show the ⚓ anchor button and menu entry. Hiding it keeps any existing anchor relationship intact — the pane still snaps to its anchor; only the control is hidden.",
             type       = "toggle",
             trueLabel  = "Visible",
             falseLabel = "Hidden",
+            locked       = embedded or nil,
+            lockedReason = embedded and "Anchoring applies to floating panes — embed has no anchor." or nil,
             readFn     = function() return pane.showAnchorElement ~= false end,
             writeFn    = function(v)
                 pane.showAnchorElement = v
@@ -305,6 +512,18 @@ local function paneRows(pane)
         writeFn    = function(v)
             pane.contentable = v
             pane:_applyTitlebarVisibility()
+        end,
+    }
+    rows[#rows+1] = {
+        label      = "Add-Pane Button",
+        desc       = "Show the + button (and right-click menu entry) that opens a new floating pane.",
+        type       = "toggle",
+        trueLabel  = "Visible",
+        falseLabel = "Hidden",
+        readFn     = function() return pane.addable end,
+        writeFn    = function(v)
+            pane.addable = v
+            pane:_syncButtons(true)
         end,
     }
 
@@ -370,17 +589,6 @@ local function paneRows(pane)
         writeFn    = function(v) pane:setNameAlign(v) end,
     }
 
-    -- Connection Awareness
-    rows[#rows+1] = {
-        label      = "Connection Awareness",
-        desc       = "Cover this pane (including tab bar) with a disconnected/connecting screen. Suppresses per-tab awareness while active",
-        type       = "toggle",
-        trueLabel  = "On",
-        falseLabel = "Off",
-        readFn     = function() return pane._connectionAware or false end,
-        writeFn    = function(v) pane:setConnectionAware(v) end,
-    }
-
     -- Group 4: Size inputs. Width applies to floating panes or when some
     -- side-by-side split exists above the pane; height likewise for top/bottom.
     -- The displayed value is the pane's actual size as a percentage of the
@@ -422,93 +630,8 @@ local function paneRows(pane)
             end,
         }
     end
-    -- ── Rules (inline "show when" condition + reactive actions) ───────────────
-    -- Condition parameters are buffered in pane._pendingCondition until Apply is
-    -- clicked, so selecting a type or editing a field does not call setCondition
-    -- immediately. This prevents the content area from reacting mid-edit.
-    -- "Always" is the only type that auto-applies on selection (no parameters).
-    if not pane._pendingCondition then
-        pane._pendingCondition = {}
-        if pane.condition then
-            for k, v in pairs(pane.condition) do pane._pendingCondition[k] = v end
-        end
-    end
-    local cspec = pane._pendingCondition
-    local ctype = cspec.type or "always"
-
-    local function setType(t)
-        pane._propsActiveGroup = "General"
-        cspec.type = (t == "always") and nil or t
-        if not cspec.type then
-            pane:setCondition(nil)
-            pane._pendingCondition = {}
-        end
-        refreshPaneProperties(pane)
-    end
-    local function setField(k, v)
-        cspec[k] = v
-    end
-    local function doApply()
-        if not cspec.type or cspec.type == "always" then
-            pane:setCondition(nil)
-        else
-            pane:setCondition(cspec)
-        end
-        pane._pendingCondition = {}
-        if pane.condition then
-            for k, v in pairs(pane.condition) do pane._pendingCondition[k] = v end
-        end
-    end
-
-    local actOpts = {}
-    for _, a in ipairs(Mux.listActions and Mux.listActions() or {}) do
-        actOpts[#actOpts+1] = { value = a.id, label = a.name or a.id }
-    end
-
-    local rules = {}
-    rules[#rules+1] = {
-        label = "Show when", type = "array", display = "dropdown",
-        desc  = "When this pane is visible. Always = no condition.",
-        options = Mux.conditionTypes,
-        readFn  = function() return ctype end,
-        writeFn = setType,
-    }
-    if ctype == "gmcp_exists" or ctype == "gmcp_equals" then
-        rules[#rules+1] = { label = "GMCP path", type = "text",
-            desc = "dotted path under gmcp, e.g. room.info.players (a leading 'gmcp.' is fine)",
-            readFn = function() return cspec.path or "" end,
-            writeFn = function(v) setField("path", v) end }
-    end
-    if ctype == "gmcp_equals" then
-        rules[#rules+1] = { label = "Equals", type = "text", desc = "value to match (text)",
-            readFn = function() return cspec.value or "" end,
-            writeFn = function(v) setField("value", v) end }
-    end
-    if ctype == "event_fired" then
-        rules[#rules+1] = { label = "Event", type = "text",
-            desc = "Mudlet event name, e.g. gmcp.char.vitals",
-            readFn = function() return cspec.event or "" end,
-            writeFn = function(v) setField("event", v) end }
-        rules[#rules+1] = { label = "Seconds", type = "text",
-            desc = "stays true this long after the event fires",
-            readFn = function() return tostring(cspec.seconds or 5) end,
-            writeFn = function(v) setField("seconds", tonumber(v) or 5) end }
-    end
-    if ctype ~= "always" then
-        rules[#rules+1] = { label = "When true", type = "array", display = "dropdown",
-            desc = "action when the condition becomes true (default: show pane)",
-            options = actOpts, readFn = function() return pane.actionTrue or "mux.showSelf" end,
-            writeFn = function(v) pane:setReactiveActions(v, nil) end }
-        rules[#rules+1] = { label = "When false", type = "array", display = "dropdown",
-            desc = "action when the condition becomes false (default: hide pane)",
-            options = actOpts, readFn = function() return pane.actionFalse or "mux.hideSelf" end,
-            writeFn = function(v) pane:setReactiveActions(nil, v) end }
-        rules[#rules+1] = {
-            btnLabel = "Apply",
-            type     = "mux_action_btn",
-            writeFn  = function() doApply() end,
-        }
-    end
+    -- ── Rules (multiple condition → action pairings) ─────────────────────────
+    local rules = _buildRuleEditorRows(pane)
 
     -- Partition the flat rows above into General / Permissions / Style by label.
     -- Permissions holds the behavioural -ables (what a pane may DO). Purely
@@ -516,7 +639,7 @@ local function paneRows(pane)
     local GENERAL = {
         ["Position & Size"] = true, ["Tabs"] = true, ["Renamable"] = true,
         ["Name"] = true, ["Name Align"] = true, ["Width %"] = true,
-        ["Height %"] = true, ["Connection Awareness"] = true,
+        ["Height %"] = true,
     }
     local DISPLAY = { ["Titlebar"] = true, ["Properties Button"] = true, ["Anchor Icon"] = true }
     -- Permissions order roughly follows the titlebar left→right / menu top→bottom
@@ -524,7 +647,7 @@ local function paneRows(pane)
     -- (Movable, Convertible, Resizable) trail at the end.
     local PERM_ORDER = {
         ["Contentable"] = 1, ["Splittable"] = 2, ["Swappable"] = 3, ["Anchorable"] = 4,
-        ["Zoomable"] = 5, ["Minimizable"] = 6, ["Closeable"] = 7,
+        ["Zoomable"] = 5, ["Minimizable"] = 6, ["Closeable"] = 7, ["Add-Pane Button"] = 8,
         ["Movable"] = 20, ["Convertible"] = 21, ["Resizable"] = 22,
     }
     local general, behavior, displayRows = {}, {}, {}
@@ -547,12 +670,41 @@ local function paneRows(pane)
             return idx[a] < idx[b]
         end)
     end
-    -- "Show when" condition rows live at the bottom of General.
-    for _, r in ipairs(rules) do general[#general+1] = r end
+    -- Rules tab: the condition→action rule editor.
+    local rulesTab = {}
+    for _, r in ipairs(rules) do rulesTab[#rulesTab+1] = r end
 
     -- Style tab: display toggles first, then border appearance controls.
     local style = {}
     for _, r in ipairs(displayRows) do style[#style+1] = r end
+    -- Per-content-element visibility: any hideable titlebar element the active
+    -- content contributes gets its own Show/Hide toggle (e.g. the console's ⚙).
+    do
+        local cname = pane._activeContent
+        local cdef  = cname and Mux._content and Mux._content[cname]
+        if cdef and cdef.titlebarElements then
+            for _, spec in ipairs(cdef.titlebarElements) do
+                if spec.hideable and spec.id then
+                    local sid = spec.id
+                    style[#style+1] = {
+                        label      = spec.hideLabel or spec.tooltip or sid,
+                        desc       = "Show this control in the titlebar (and the right-click menu).",
+                        type       = "toggle",
+                        trueLabel  = "Visible",
+                        falseLabel = "Hidden",
+                        readFn     = function()
+                            return not (pane.hiddenTbElements and pane.hiddenTbElements[sid])
+                        end,
+                        writeFn    = function(v)
+                            pane.hiddenTbElements = pane.hiddenTbElements or {}
+                            pane.hiddenTbElements[sid] = (not v) or nil
+                            pane:_syncButtons(true)
+                        end,
+                    }
+                end
+            end
+        end
+    end
     style[#style+1] = {
         label      = "Bordered",
         desc       = "Draw the pane's frame border. When off, the border is hidden and content fills edge-to-edge.",
@@ -562,31 +714,58 @@ local function paneRows(pane)
         readFn     = function() return pane.bordered ~= false end,
         writeFn    = function(v) pane:setBordered(v) end,
     }
-    style[#style+1] = {
-        label   = "Border Color",
-        desc    = "Custom border color. Leave unset (use theme default) or pick a color below.",
-        type    = "color",
-        readFn  = function()
-            if pane.borderColor then return pane.borderColor end
-            local theme = Mux.activeTheme() or {}
-            if pane.overlay then return "#cda228" end
-            -- Extract a reasonable default from the theme's pane CSS if possible.
-            local css = theme.paneOuterCss or ""
-            local r, g, b = css:match("border:%s*%S+%s+%S+%s+rgb%((%d+),%s*(%d+),%s*(%d+)%)")
-            if r then
-                return string.format("#%02x%02x%02x", tonumber(r), tonumber(g), tonumber(b))
+    -- Per-pane colour overrides (local token layer) live in their own Colors tab
+    -- so the Style tab isn't a wall of colour pickers. Each reverts to the theme.
+    -- Border Color lives here too; the dialog-only "Border - Dialog" is omitted.
+    local colors = {}
+    if Mux.tokens and Mux.tokens.spec then
+        for _, s in ipairs(Mux.tokens.spec) do
+            if s.scope == "pane" and s.type == "color" and s.key ~= "floating.border.color" then
+                local key = s.key
+                colors[#colors+1] = {
+                    label   = (s.group ~= "Pane" and (s.group .. ": ") or "") .. s.label,
+                    type    = "color",
+                    _localKey = key,
+                    _localReset = function() Mux.clearLocalToken(pane, key) end,
+                    readFn  = function() return Mux.tok(key, pane) end,
+                    writeFn = function(v)
+                        if v == nil or v == "" then Mux.clearLocalToken(pane, key)
+                        else Mux.setLocalToken(pane, key, v) end
+                    end,
+                }
             end
-            return "#444455"
-        end,
-        writeFn = function(hex) pane:setBorderColor(hex) end,
-    }
+        end
+    end
 
-    return {
+    -- One "Theme" tab with Style and Colors separator sections (instead of two
+    -- tabs). Style rows aren't token-backed so they get no reset; colour rows
+    -- revert to the theme.
+    local themeRows = {}
+    -- Reset every local override on this pane back to the theme/global layer. The
+    -- per-row resets clear one override (to global); this clears them all (to theme).
+    local resetHolder = {}
+    themeRows[#themeRows+1] = {
+        type = "button", label = "Reset to theme", _noReset = true, _refreshHolder = resetHolder,
+        desc = "Clear all of this pane's color overrides and follow the theme.",
+        onClick = function()
+            Mux.resetLocalTokens(pane)
+            if resetHolder.refresh then resetHolder.refresh() end
+        end,
+    }
+    themeRows[#themeRows+1] = { type = "divider", label = "Style" }
+    for _, r in ipairs(style) do r._noReset = true; themeRows[#themeRows+1] = r end
+    if #colors > 0 then
+        themeRows[#themeRows+1] = { type = "divider", label = "Colors", _collapsed = true }
+        for _, r in ipairs(colors) do themeRows[#themeRows+1] = r end
+    end
+
+    return _applyLockTags({
         _grouped = true,
         { label = "General",     rows = general, _geomTab = true },
         { label = "Permissions", rows = behavior },
-        { label = "Style",       rows = style },
-    }
+        { label = "Rules",       rows = rulesTab },
+        { label = "Theme",       rows = themeRows, _localColors = true },
+    }, pane)
 end
 
 local function tabRows(host, tab)
@@ -714,18 +893,77 @@ local function tabRows(host, tab)
         writeFn    = function(v) host:setTabNameAlign(tab.id, v) end,
     }
 
-    -- Connection Awareness
-    rows[#rows+1] = {
-        label      = "Connection Awareness",
-        desc       = "Cover this tab's content with a disconnected/connecting screen. Has no effect if the parent pane has Connection Awareness enabled",
-        type       = "toggle",
-        trueLabel  = "On",
-        falseLabel = "Off",
-        readFn     = function() return tab._connectionAware or false end,
-        writeFn    = function(v) host:setTabConnectionAware(tab.id, v) end,
+    -- Group: General (incl. Renamable above Name, like panes), Permissions, Theme.
+    -- Theme is the same per-scope token editor panes use, but tabs also expose their
+    -- size tokens (Style) so a tab's shape/font/etc. can be set locally.
+    local GENERAL = {
+        ["Tabs"] = true, ["Renamable"] = true, ["Name"] = true,
+        ["Name Align"] = true,
     }
+    local general, permissions = {}, {}
+    for _, r in ipairs(rows) do
+        if GENERAL[r.label] then general[#general+1] = r else permissions[#permissions+1] = r end
+    end
 
-    return rows
+    -- Per-tab local overrides: Style (size tokens, rendered as steppers via the
+    -- "number" type) and Colors. Both write the tab's local token layer and revert
+    -- to the theme. These travel with the tab when it moves between bars.
+    local style, colors = {}, {}
+    if Mux.tokens and Mux.tokens.spec then
+        for _, s in ipairs(Mux.tokens.spec) do
+            if s.scope == "tab" then
+                local key = s.key
+                local row = {
+                    label   = s.label,
+                    _localKey = key,
+                    _localReset = function() Mux.clearLocalToken(tab, key) end,
+                    readFn  = function() return Mux.tok(key, tab) end,
+                    writeFn = function(v)
+                        if v == nil or v == "" then Mux.clearLocalToken(tab, key)
+                        else Mux.setLocalToken(tab, key, v) end
+                    end,
+                }
+                if s.type == "color" then
+                    row.type = "color"
+                    colors[#colors+1] = row
+                else
+                    row.type, row.min, row.max = "number", s.min, s.max
+                    style[#style+1] = row
+                end
+            end
+        end
+    end
+
+    local themeRows = {}
+    local resetHolder = {}
+    themeRows[#themeRows+1] = {
+        type = "button", label = "Reset to theme", _noReset = true, _refreshHolder = resetHolder,
+        desc = "Clear all of this tab's style/colour overrides and follow the theme.",
+        onClick = function()
+            Mux.resetLocalTokens(tab)
+            if resetHolder.refresh then resetHolder.refresh() end
+        end,
+    }
+    if #style > 0 then
+        themeRows[#themeRows+1] = { type = "divider", label = "Style" }
+        for _, r in ipairs(style) do themeRows[#themeRows+1] = r end
+    end
+    if #colors > 0 then
+        themeRows[#themeRows+1] = { type = "divider", label = "Colors", _collapsed = true }
+        for _, r in ipairs(colors) do themeRows[#themeRows+1] = r end
+    end
+
+    -- Rules tab: the condition→action rule editor.
+    local rulesTab = {}
+    for _, r in ipairs(_buildRuleEditorRows(tab)) do rulesTab[#rulesTab+1] = r end
+
+    return {
+        _grouped = true,
+        { label = "General",     rows = general },
+        { label = "Permissions", rows = permissions },
+        { label = "Rules",       rows = rulesTab },
+        { label = "Theme",       rows = themeRows, _localColors = true },
+    }
 end
 
 -- ── Content type registration ─────────────────────────────────────────────────
@@ -755,6 +993,7 @@ Mux.registerContent("mux_properties", {
             -- Tabbed properties (e.g. panes: General | Behavior | Rules). Build the
             -- dialog's own tab bar (regular pane styling) and a form per group.
             if not target._tabsEnabled then
+                target.receivable = false  -- workspace tabs can't be dropped into the dialog
                 target.tabsLocked = true   -- NoAdd: no "+" on the properties tab bar
                 target:enableTabs({ noDefaultTab = true })
             end
@@ -768,16 +1007,43 @@ Mux.registerContent("mux_properties", {
                 -- would otherwise show through behind the form).
                 if tab.contentBg then tab.contentBg:echo(""); tab.contentBg:hide() end
                 local tcw = tab.content:get_width(); if tcw < 50 then tcw = cw end
-                local lbl = Geyser.Label:new({
-                    name = prefix .. "_g" .. gi, x = 0, y = 0, width = tcw, height = Mux.ui.formHeight(grp.rows),
+                -- Scroll the group's form when it's taller than the (capped) tab body.
+                local sb = Geyser.ScrollBox:new({
+                    name = prefix .. "_sb" .. gi, x = 0, y = 0, width = "100%", height = "100%",
                 }, tab.content)
+                local fh2 = Mux.ui.formHeight(grp.rows)
+                local lbl = Geyser.Label:new({
+                    name = prefix .. "_g" .. gi, x = 0, y = 0, width = tcw - 8, height = math.max(fh2, 10),
+                }, sb)
                 lbl:setStyleSheet("background:" .. bg .. "; border:none;")
-                local fh = Mux.ui.buildForm(lbl, grp.rows, {
-                    width = tcw, prefix = prefix .. "_g" .. gi,
+                local formHandle
+                formHandle = Mux.ui.buildForm(lbl, grp.rows, {
+                    width = tcw - 8, prefix = prefix .. "_g" .. gi,
+                    showReset    = grp._localColors or nil,
+                    resetTooltip = grp._localColors and "Revert to theme" or nil,
+                    onReset = grp._localColors and function(i, spec)
+                        if spec._localReset then spec._localReset() end
+                        if formHandle then formHandle.refresh(i) end
+                    end or nil,
+                    onLayoutChange = function(h)
+                        tab._muxContentH = h
+                        Mux._scheduleFit(Mux._ownerDialog(tab))
+                    end,
                     getContentScreenPos = function() return tab.content:get_x(), tab.content:get_y() end,
                 })
+                local fh = formHandle
+                -- Wire any "Reset to theme" button in this group to refresh the whole
+                -- group form after it clears the pane's local overrides.
+                for _, r in ipairs(grp.rows) do
+                    if r._refreshHolder then
+                        r._refreshHolder.refresh = function()
+                            if formHandle and formHandle.refreshAll then formHandle.refreshAll() end
+                        end
+                    end
+                end
                 -- The geom readout lives on the General tab; expose its handle for the live poll.
                 if grp._geomTab then target._propsFormHandle = fh end
+                tab._muxRelayout = fh and fh.relayout
             end
             -- Restore the previously-active tab (a rebuild from, e.g., changing the
             -- Rules "Show when" type would otherwise snap back to the first tab).
@@ -796,7 +1062,10 @@ Mux.registerContent("mux_properties", {
                     if t.contentBg then t.contentBg:hide() end   -- after show: keep placeholder hidden
                 end
             end
-            tempTimer(0, function() if target.outer then target.outer:reposition() end end)
+            tempTimer(0, function()
+                if target.outer then target.outer:reposition() end
+                Mux._scheduleFit(Mux._ownerDialog(target))
+            end)
             return
         end
 
@@ -807,7 +1076,9 @@ Mux.registerContent("mux_properties", {
         }, target.content)
         contentLbl:setStyleSheet("background:" .. bg .. "; border:none;")
 
-        target._propsFormHandle = Mux.ui.buildForm(contentLbl, rows, { width = cw, prefix = prefix })
+        local fh = Mux.ui.buildForm(contentLbl, rows, { width = cw, prefix = prefix })
+        target._propsFormHandle = fh
+        target._muxRelayout     = fh and fh.relayout
         -- Force geometry pass so content paints immediately instead of on first drag.
         tempTimer(0, function()
             if target.outer then target.outer:reposition() end
@@ -852,6 +1123,13 @@ local function openPropsDialog(title, rows, targetPane, posX, posY)
     -- chrome: titlebar (22) + outer border top+bottom (4)
     local dialogH = contentH + 26
 
+    -- Never exceed 70% of the screen; the per-group ScrollBoxes scroll the overflow.
+    local _, screenH = getMainWindowSize()
+    if screenH and screenH > 0 then
+        local capH = math.floor(screenH * 0.70)
+        if dialogH > capH then dialogH = capH end
+    end
+
     -- posX/posY are set only when reopening at a remembered position (a row
     -- toggle that rebuilds the dialog). On a fresh open they are nil, so
     -- createDialog centers and cascades off any dialogs already on screen.
@@ -868,8 +1146,12 @@ local function openPropsDialog(title, rows, targetPane, posX, posY)
         targetPane._propertiesDialogs[d.id] = d
     end
 
+    Mux._fitDialog = d   -- auto-fit height to the active tab as the user navigates
+    d._isDialogRoot = true   -- per-dialog auto-fit resolves to this surface
+
     d.onClose = function()
         d._geomPollActive = false
+        if Mux._fitDialog == d then Mux._fitDialog = nil end
         if targetPane and targetPane._propertiesDialogs then
             targetPane._propertiesDialogs[d.id] = nil
         end
@@ -914,15 +1196,30 @@ local function openPropsDialog(title, rows, targetPane, posX, posY)
     Mux._applyContent(d, "mux_properties")
     pendingRows = nil
 
-    -- Live geometry: re-read the readout (row 1) every 0.5s while open. The
-    -- geomSection's refresh only repaints when the value changes, so an idle
-    -- selection in the readout is never wiped. Panes only (tabs have no geometry).
-    if targetPane and targetPane.titlebarVisible ~= nil then
+    -- Live properties: poll the subject every 0.5s. When state that changes which
+    -- rows show or lock changes (embed/float, zoom, content, tabs, ...), rebuild the
+    -- dialog so it stays accurate. Panes additionally re-read the geometry readout
+    -- (row 1); its refresh only repaints on change, so an idle selection isn't wiped.
+    if targetPane then
+        local isPane = (targetPane.titlebarVisible ~= nil)
         d._geomPollActive = true
+        local lastSig = _propsStateSig(targetPane)
         local function poll()
             if not d._geomPollActive then return end
-            local h = d._propsFormHandle
-            if h and h.refresh then pcall(h.refresh, 1) end
+            local sig = _propsStateSig(targetPane)
+            if sig ~= lastSig then
+                d._geomPollActive = false
+                if isPane then
+                    if refreshPaneProperties then refreshPaneProperties(targetPane) end
+                elseif targetPane.pane and refreshTabProperties then
+                    refreshTabProperties(targetPane.pane, targetPane)
+                end
+                return
+            end
+            if isPane then
+                local h = d._propsFormHandle
+                if h and h.refresh then pcall(h.refresh, 1) end
+            end
             tempTimer(0.5, poll)
         end
         tempTimer(0.5, poll)
@@ -965,6 +1262,7 @@ end
 
 refreshPaneProperties = function(pane)
     local px, py = _captureDialogPos(pane)
+    _captureActiveGroup(pane)
     _propsRebuildInProgress = true
     closeExistingPropsDialogs(pane)
     _propsRebuildInProgress = false
@@ -973,6 +1271,7 @@ end
 
 refreshTabProperties = function(host, tab)
     local px, py = _captureDialogPos(tab)
+    _captureActiveGroup(tab)
     closeExistingPropsDialogs(tab)
     openPropsDialog(string.format("Tab: %s", tab.name), tabRows(host, tab), tab, px, py)
 end

@@ -99,7 +99,6 @@ function MuxPane:init(opts)
     self.onEmbed    = opts.onEmbed
 
     local tbH    = theme.titlebarHeight
-    local rvH    = theme.revealStripHeight
     local parent = opts.parent or Geyser
 
     self.outer = Geyser.Container:new({
@@ -131,14 +130,31 @@ function MuxPane:init(opts)
     -- edge-to-edge (the inset that normally reveals the 2px border collapses to 0).
     self.bordered     = opts.bordered ~= false
     self.borderColor  = opts.borderColor or nil
-    -- Reactive condition (see conditional.lua): an inline spec table, or nil =
-    -- always visible. type "always" (or no type) is normalised to nil.
+    -- Local style-token overrides (per-pane). Seeded from a restored workspace via
+    -- opts.tokens; the legacy borderColor opt maps onto the pane.border.color token.
+    self._tokens = {}
+    if opts.tokens then
+        for k, v in pairs(opts.tokens) do self._tokens[k] = v end
+    end
+    if opts.borderColor then self._tokens["pane.border.color"] = opts.borderColor end
+    -- Reactive rules (see conditional.lua): a list of {cond, act, actElse}. Legacy
+    -- single-condition fields and connectionAware are migrated into the list. The
+    -- `condition`/`actionTrue`/`actionFalse` fields are kept as a synced view of the
+    -- "primary" rule so the existing single-rule UI keeps working.
     self.condition   = opts.condition
     if self.condition and (not self.condition.type or self.condition.type == "always") then
         self.condition = nil
     end
     self.actionTrue  = opts.actionTrue  or "mux.showSelf"
     self.actionFalse = opts.actionFalse or "mux.hideSelf"
+    self.rules = {}
+    if Mux._migrateLegacyRules then
+        Mux._migrateLegacyRules(self, {
+            rules = opts.rules, condition = self.condition,
+            actionTrue = opts.actionTrue, actionFalse = opts.actionFalse,
+            connectionAware = opts.connectionAware,
+        })
+    end
     local inset   = self.bordered and borderInset or 0
     self.header = Geyser.Container:new({
         name   = self._gid .. "_header",
@@ -206,36 +222,41 @@ function MuxPane:init(opts)
     -- to an external event (split rebalance, window resize, workspace restore, zoom).
     self.onReposition     = opts.onReposition
 
-    -- mainConsoleHost: convenience bundle for the pane that hosts the Mudlet native
-    -- console. Setting it true auto-applies all the composable flags above, so existing
-    -- workspace JSON and call sites need no changes. The field is kept as metadata for
-    -- workspace serialisation and focus-fallback identification.
+    -- mainConsoleHost: marks the pre-configured, locked pane that hosts the Mudlet
+    -- native console. It only locks the native pane settings (the "special pane"
+    -- pattern — pre-configured + locked, like a dialog). The console DISPLAY (border
+    -- driving) and the ⚙ Settings gear are supplied by the registered `mux_console`
+    -- content applied to this pane, not by the flag.
     self.mainConsoleHost = opts.mainConsoleHost or false
-    -- addable: shows the + / Add Floating Pane button. Auto-set for the main console
-    -- host pane; no other pane type sets this. Toggled by the Muxlet/Main setting.
+    -- addable: shows the + / Add Floating Pane button. Auto-set for the console host.
     self.addable = false
     if self.mainConsoleHost then
         self.closeable        = false
         self.convertible      = false
-        self.consoleBorders   = true
-        self.showSettingsInMenu = true
-        self.contentable      = false
+        self.contentable      = true    -- a normal content host: console is content, swappable/testable
         self.addable          = true
     end
 
     if self.consoleBorders then
-        -- Native console is only visible where the Geyser overlay has no paint.
-        -- The frame must be transparent so the console shows through the content area.
-        self.frame:setStyleSheet([[
-            background-color: transparent;
-            border: 2px solid rgba(255, 255, 255, 0.38);
-            border-radius: 3px;
-        ]])
-        enableClickthrough(self.frame.name)
-        self.contentBg:hide()
-        if not self.onReposition then
-            self.onReposition = function(p) p:updateConsoleBorders() end
-        end
+        self:_enableConsoleBorders()
+    end
+
+    -- Per-element titlebar visibility. A set of element ids (builtin or content)
+    -- the user has explicitly hidden via Properties; the placement engine skips
+    -- them entirely (icon AND menu). Persisted in the workspace.
+    self.hiddenTbElements = {}
+    if opts.hiddenTbElements then
+        for _, id in ipairs(opts.hiddenTbElements) do self.hiddenTbElements[id] = true end
+    end
+
+    -- Read-only parameter locks. _paramLocks[prop] = reason string means the property
+    -- is read-only (shown greyed in Properties with the reason on hover). Derived only —
+    -- rebuilt by _recomputeLocks() from the active content's paramLocks and the
+    -- last-embedded-pane rule. Never hand-set elsewhere.
+    self._paramLocks    = {}
+    self._lockSnapshot  = {}   -- pre-apply values for content-locked params, for revert
+    if opts.lockSnapshot then
+        for prop, val in pairs(opts.lockSnapshot) do self._lockSnapshot[prop] = val end
     end
 
     if self.transparentFrame then
@@ -263,12 +284,13 @@ function MuxPane:init(opts)
 
     Mux._panes[self.id] = self
     Mux._log("MuxPane created: %s", self.id)
-    -- Reactive condition: register as a user of its condition and evaluate once
-    -- (deferred a tick so the pane is fully built and any embedding has happened).
-    if self.condition then
-        if Mux._registerConditionUser then Mux._registerConditionUser(self) end
+    -- Reactive rules: register + evaluate once (deferred a tick so the pane is fully
+    -- built and any embedding has happened). Migration already registered the subject;
+    -- this just forces the initial evaluation against current signals.
+    if self.rules and #self.rules > 0 then
+        if Mux._registerRuleSubject then Mux._registerRuleSubject(self) end
         tempTimer(0, function()
-            if Mux._evaluatePaneCondition then Mux._evaluatePaneCondition(self) end
+            if Mux._evaluateRules then Mux._evaluateRules(self, true) end
         end)
     end
     if _t0 then
@@ -279,22 +301,18 @@ end
 
 -- ── Reactive condition (see conditional.lua) ──────────────────────────────────
 
--- Set (or clear, with nil) the pane's inline condition spec, re-wiring it as a
--- condition user and evaluating immediately. A spec with type "always" (or no
--- type) clears the condition (always visible).
+-- Set (or clear, with nil) the pane's "primary" rule condition. A spec with type
+-- "always" (or no type) clears it (always visible). Other rules (e.g. connection)
+-- are unaffected. `condition` mirrors the primary rule for the single-rule UI.
 function MuxPane:setCondition(spec)
     if type(spec) == "table" and (not spec.type or spec.type == "always") then spec = nil end
-    if self.condition and Mux._deregisterConditionUser then
-        Mux._deregisterConditionUser(self, self.condition)
-    end
-    self.condition     = spec
-    self._conditionMet = nil   -- force the next evaluation to act
+    self.condition = spec
     if spec then
-        if Mux._registerConditionUser then Mux._registerConditionUser(self) end
-        if Mux._evaluatePaneCondition then Mux._evaluatePaneCondition(self) end
+        Mux._addRule(self, { id = "primary", cond = spec,
+            act = self.actionTrue or "mux.showSelf", actElse = self.actionFalse or "mux.hideSelf" })
     else
-        -- No condition → ensure the pane is visible again.
-        if self._conditionHidden then self:_conditionShow() end
+        Mux._removeRule(self, "primary")
+        if self._conditionHidden then self:_conditionShow() end   -- no condition → visible
     end
     Mux._scheduleAutoSave()
 end
@@ -302,6 +320,11 @@ end
 function MuxPane:setReactiveActions(trueId, falseId)
     self.actionTrue  = trueId  or self.actionTrue  or "mux.showSelf"
     self.actionFalse = falseId or self.actionFalse or "mux.hideSelf"
+    local r = Mux._findRule(self, "primary")
+    if r then
+        r.act, r.actElse = self.actionTrue, self.actionFalse
+        Mux._evaluateRules(self, true)
+    end
     Mux._scheduleAutoSave()
 end
 
@@ -685,23 +708,32 @@ function MuxPane:_buildTitlebar(theme)
             fillBg = 1,
         }, self.header)
         btn:setStyleSheet(theme.btnCss or "")
-        local hoverKey = spec.hoverCss or "minHoverCss"
+        -- Only close/min carry a dedicated hover sheet (red / gold). Generic buttons
+        -- keep btnCss so its own QLabel::hover (btn.hover.bg) drives the hover colour
+        -- instead of being forced to the minimise button's gold.
+        local hoverKey = spec.hoverCss
         local function echo(hovered)
-            local tc   = hovered and "white" or (Mux.activeTheme().btnTextColor or "#aaaabb")
+            -- Scope-aware glyph colour: a per-pane Button Icon override (local token)
+            -- now wins over the global default, and updates on every applyTheme.
+            local tc   = hovered and "white" or (Mux.tok("btn.text.glyphColor", self) or "#aaaabb")
             local icon = (type(spec.icon) == "function") and spec.icon() or spec.icon
             btn:echo(string.format("<center><font color='%s'>%s</font></center>", tc, icon))
         end
         echo(false)
         if spec.tooltip then btn:setToolTip(spec.tooltip) end
         btn:setOnEnter(function()
-            btn:setStyleSheet(Mux.activeTheme()[hoverKey] or Mux.activeTheme().btnCss)
+            if hoverKey then btn:setStyleSheet(Mux.activeTheme()[hoverKey] or Mux.activeTheme().btnCss) end
             echo(true)
         end)
         btn:setOnLeave(function()
-            btn:setStyleSheet(Mux.activeTheme().btnCss or "")
+            if hoverKey then btn:setStyleSheet(Mux.activeTheme().btnCss or "") end
             echo(false)
         end)
         if spec.onClick then btn:setClickCallback(spec.onClick) end
+        -- Track every titlebar button so applyTheme can restyle + re-echo them all
+        -- uniformly (otherwise some icons only refresh on hover).
+        self._btnEchos = self._btnEchos or {}
+        self._btnEchos[#self._btnEchos + 1] = { btn = btn, echo = echo, hoverKey = hoverKey }
         return btn, echo
     end
 
@@ -858,22 +890,22 @@ function MuxPane:_buildTitlebar(theme)
             end
         end,
     })
-    -- ⚓ renders as a wide color-emoji that HTML <center> doesn't visually center
-    -- the way the monochrome glyphs are; force the QLabel itself to center its
-    -- content via qproperty-alignment in every style state.
-    local alignRule = " QLabel{ qproperty-alignment:'AlignCenter'; }"
+    -- ⚓ renders as a wide colour-emoji; btnCss already forces AlignCenter, so keep
+    -- the box model identical between states — change only the border COLOUR for the
+    -- armed/anchored cue. Swapping width (1px↔2px) shifted the glyph off-centre.
+    local alignRule  = " QLabel{ qproperty-alignment:'AlignCenter'; }"
+    local activeRule = " QLabel{ border-color:#ffffff; qproperty-alignment:'AlignCenter'; }"
     self._refreshAnchorBtn = function()
         if not self.anchorBtn then return end
         local active = self._anchorArming or (self.anchor ~= nil)
-        self.anchorBtn:setStyleSheet(active
-            and "background: rgba(70,130,225,0.85); border-radius: 3px; qproperty-alignment:'AlignCenter';"
-            or  ((Mux.activeTheme().btnCss or "") .. alignRule))
+        self.anchorBtn:setStyleSheet((Mux.activeTheme().btnCss or "") .. (active and activeRule or alignRule))
     end
     self.anchorBtn:setOnEnter(function()
+        local hoverCss = Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss or ""
         if self._anchorArming or self.anchor then
-            self.anchorBtn:setStyleSheet("background: rgba(90,150,235,0.95); border-radius: 3px; qproperty-alignment:'AlignCenter';")
+            self.anchorBtn:setStyleSheet(hoverCss .. activeRule)
         else
-            self.anchorBtn:setStyleSheet((Mux.activeTheme().minHoverCss or Mux.activeTheme().btnCss or "") .. alignRule)
+            self.anchorBtn:setStyleSheet(hoverCss .. alignRule)
         end
         if self._anchorBtnEcho then self._anchorBtnEcho(true) end
     end)
@@ -977,14 +1009,14 @@ end
 --   danger     bool                               (destructive styling)
 --   menuOrder  sequence within the menu; menuGroup keys separator insertion
 --   iconable   default true; false = menu-only, always in the menu, forces it
-local TB_GROUP_RANK = { window = 1, tiling = 2, info = 1, content = 2 }  -- right: lower = nearer edge
+local TB_GROUP_RANK = { window = 1, tiling = 2, info = 1, content = 2, console = 3 }  -- right: lower = nearer edge
 
 -- Builtin pane elements. Each definition is the single source of truth for both
 -- the titlebar icon and the matching menu row.
 local BUILTIN_TB = {
     -- right · window cluster
     { id="close",  side="right", group="window", order=1, priority=100,
-      get=function(p) return p.closeBtn end,    visible=function(c) return c.pane.closeable end,
+      get=function(p) return p.closeBtn end,    visible=function(c) return c.pane.closeable and not Mux._isLastEmbeddedPane(c.pane) end,
       menuText="✕  Close Pane", danger=true, menuGroup="window", menuOrder=10,
       run=function(c) c.pane:_confirmClose() end },
     { id="add",    side="right", group="window", order=1, priority=100,
@@ -1043,12 +1075,26 @@ for _, s in ipairs(BUILTIN_TB) do BUILTIN_TB_IDS[s.id] = true end
 
 -- The state snapshot passed to every visible()/onClick(). Reads, never mutates.
 function MuxPane:_elementCtx()
+    -- Content may live directly on the pane, or on the active (leaf) tab when the
+    -- pane is tabbed. Resolve to whichever is showing so its titlebarElements
+    -- (settings icons + menu rows) publish to this titlebar / right-click menu.
+    local contentId, activeTab = self._activeContent, nil
+    if not contentId and self._activeTabId and self._findTab then
+        local t = self:_findTab(self._activeTabId)
+        while t and t._tabs and #t._tabs > 0 and t._activeTabId and t._findTab do
+            local sub = t:_findTab(t._activeTabId)
+            if not sub then break end
+            t = sub
+        end
+        if t then activeTab = t; contentId = t._activeContent end
+    end
     return {
         pane        = self,
-        isTab       = false,
+        tab         = activeTab,
+        isTab       = activeTab ~= nil,
         isFloating  = self.floating and true or false,
         isEmbedded  = (self._split ~= nil and not self.floating) and true or false,
-        content     = self._activeContent and Mux._content and Mux._content[self._activeContent] or nil,
+        content     = contentId and Mux._content and Mux._content[contentId] or nil,
     }
 end
 
@@ -1082,11 +1128,13 @@ end
 -- the content Labels only when the active content changes (not per frame). Content
 -- ids that collide with a builtin are ignored — content cannot override builtins.
 function MuxPane:_syncContentTbButtons()
-    if self._contentTbSig == self._activeContent then return end
-    self._contentTbSig = self._activeContent
+    local ctx    = self:_elementCtx()
+    local def    = ctx.content
+    local sig    = self._activeContent or (ctx.tab and ctx.tab._activeContent) or "none"
+    if self._contentTbSig == sig then return end
+    self._contentTbSig = sig
     self._contentTbBtns = self._contentTbBtns or {}
 
-    local def   = self._activeContent and Mux._content and Mux._content[self._activeContent] or nil
     local specs = (def and def.titlebarElements) or {}
     local want  = {}
     for _, s in ipairs(specs) do
@@ -1116,8 +1164,13 @@ function MuxPane:_collectTbElements(ctx)
     local left, right, all = {}, {}, {}
     local function consider(spec, label)
         if not label then return end
-        local ok, vis = pcall(spec.visible, ctx)
-        if not ok or not vis then return end
+        if self.hiddenTbElements and self.hiddenTbElements[spec.id] then return end
+        local vis = true
+        if type(spec.visible) == "function" then
+            local ok, v = pcall(spec.visible, ctx)
+            vis = ok and v
+        end
+        if not vis then return end
         local entry = { spec = spec, label = label }
         all[#all + 1] = entry
         if spec.side == "left" then left[#left + 1] = entry else right[#right + 1] = entry end
@@ -1222,12 +1275,13 @@ function MuxPane:_syncButtons(force)
     local ctx          = self:_elementCtx()
     local left, right, all = self:_collectTbElements(ctx)   -- visible iconable; no Geyser calls
 
-    -- Menu-only content elements (iconable=false) live only in the menu and force
-    -- it to exist (so the ⋯ handle appears) even if nothing folds.
+    -- Any content element with a menu row forces the ⋯ menu to exist and be
+    -- reachable by right-click — even when its icon is visible in the bar — so
+    -- content settings are always available from the right-click menu.
     local hasMenuExtra = false
     if ctx.content and ctx.content.titlebarElements then
         for _, s in ipairs(ctx.content.titlebarElements) do
-            if s.iconable == false and not BUILTIN_TB_IDS[s.id] then
+            if s.menuText and not BUILTIN_TB_IDS[s.id] then
                 local ok, vis = pcall(s.visible or function() return true end, ctx)
                 if ok and vis then hasMenuExtra = true; break end
             end
@@ -1579,6 +1633,12 @@ end
 function MuxPane:_detachToFloat()
     if self.floating then return end
     if not self.convertible and not self.overlay then return end
+    -- Void guard: floating the only embedded pane would empty the panespace. Overlays
+    -- (dialogs) are exempt — they are created to float and never hold the layout.
+    if not self.overlay and Mux._isLastEmbeddedPane(self) then
+        Mux._log("MuxPane: refusing to float last embedded pane %s", self.id)
+        return
+    end
     -- If minimized-in-split, restore before floating so sibling ratio isn't stuck.
     if self.minimized and self._split and self._savedMinimizeRatio then
         self._split:_setRatio(self._savedMinimizeRatio)
@@ -1638,6 +1698,7 @@ function MuxPane:_detachToFloat()
     end
     if self.onFloat then self.onFloat(self) end
     if not self.overlay then Mux._scheduleAutoSave() end
+    if Mux._recomputeAllLocks then Mux._recomputeAllLocks() end
     Mux._log("MuxPane floated: %s (%.0f,%.0f %.0fx%.0f)",
         self.id, self.floatX, self.floatY, self.floatW, self.floatH)
 end
@@ -1682,6 +1743,7 @@ function MuxPane:embed(slot)
     if self.onEmbed then self.onEmbed(self) end
     if self._split then self._split:_updateHandleResizability() end
     Mux._scheduleAutoSave()
+    if Mux._recomputeAllLocks then Mux._recomputeAllLocks() end
     Mux._log("MuxPane embedded: %s", self.id)
     Mux.raiseFloatingPanes()
 end
@@ -1782,6 +1844,49 @@ function MuxPane:lower()
     if self.outer and self.outer.lowerAll then self.outer:lowerAll() end
 end
 
+-- Turn this pane into the console host: transparent click-through frame so the
+-- native console shows through the content area, contentBg hidden, and reposition
+-- wired to track the borders. Idempotent. Called by the mux_console content's apply
+-- (or directly when a pane is constructed with consoleBorders=true).
+function MuxPane:_enableConsoleBorders()
+    self.consoleBorders = true
+    if self.frame then
+        self.frame:setStyleSheet([[
+            background-color: transparent;
+            border: 2px solid rgba(255, 255, 255, 0.38);
+            border-radius: 3px;
+        ]])
+        if enableClickthrough then enableClickthrough(self.frame.name) end
+    end
+    if self.contentBg then self.contentBg:hide() end
+    -- Chain updateConsoleBorders into the reposition chain (every pane already has
+    -- an onReposition by construction — line ~253 — so a bare "if not onReposition"
+    -- would never wire this, which is why swaps/moves stopped retracking the console
+    -- once it became content-driven). The _consoleReposChained guard keeps repeated
+    -- applies from stacking the call; updateConsoleBorders self-guards on
+    -- self.consoleBorders, so it's inert after the console is released.
+    if not self._consoleReposChained then
+        self._consoleReposChained = true
+        local prev = self.onReposition
+        self.onReposition = function(p)
+            if prev then prev(p) end
+            p:updateConsoleBorders()
+        end
+    end
+end
+
+-- Release the console host: restore the normal frame and contentBg, and hand the
+-- native console back to full-window (borders 0). Called by mux_console's remove.
+function MuxPane:_disableConsoleBorders()
+    self.consoleBorders = false
+    if self.frame and self._baseFrameCss then
+        self.frame:setStyleSheet(self:_baseFrameCss())
+    end
+    if disableClickthrough and self.frame then pcall(disableClickthrough, self.frame.name) end
+    if self.contentBg then pcall(function() self.contentBg:show() end) end
+    if setBorderSizes then setBorderSizes(0, 0, 0, 0) end
+end
+
 -- Recalculates setBorderSizes so the Mudlet native console tracks the content area.
 -- Called automatically via onReposition for consoleBorders panes.
 function MuxPane:updateConsoleBorders()
@@ -1802,6 +1907,77 @@ function MuxPane:updateConsoleBorders()
     Mux._log("updateConsoleBorders: t=%d r=%d b=%d l=%d", top, right, bottom, left)
 end
 
+-- The capabilities the last remaining embedded pane must surrender so the workspace
+-- can never be emptied. Order matches the Permissions tab reading order.
+-- When a pane is the only embedded one, several capabilities can't apply. The
+-- reasons differ per property — only closeable is really about an empty workspace;
+-- the rest are about there being nothing else to act against.
+local LAST_PANE_LOCKED = {
+    closeable    = "This is the only pane — a workspace can't be empty.",
+    convertible  = "Can't float the only pane — the tiled area would be left empty.",
+    minimizable  = "Can't minimize the only pane — it would leave empty space with nothing else to show.",
+    resizable    = "Nothing to resize against — this is the only pane.",
+    movable      = "Nowhere to move it — this is the only pane.",
+    swappable    = "Nothing to swap with — this is the only pane.",
+}
+
+-- Number of embedded (non-floating) panes currently alive. A floating pane doesn't
+-- fill the panespace, so emptiness is measured by embedded count.
+function Mux._countEmbeddedPanes()
+    local n = 0
+    for _, p in pairs(Mux._panes) do
+        if not p.floating then n = n + 1 end
+    end
+    return n
+end
+
+-- True when closing/floating `pane` would leave the panespace with no embedded pane.
+function Mux._isLastEmbeddedPane(pane)
+    return pane and not pane.floating and Mux._countEmbeddedPanes() <= 1
+end
+
+-- Rebuild this pane's read-only locks from its two sources: the active content's
+-- declared paramLocks, and the last-embedded-pane rule. Content reasons win when a
+-- property is locked by both. Drives the Properties read-only display; the actual
+-- void-prevention is enforced by hard guards in close()/_detachToFloat().
+function MuxPane:_recomputeLocks()
+    local locks = {}
+    local def = self._activeContent and Mux._content and Mux._content[self._activeContent]
+    if def and def.paramLocks then
+        for prop, spec in pairs(def.paramLocks) do
+            locks[prop] = (type(spec) == "table" and spec.why) or "Set by the active content."
+        end
+    end
+    if Mux._isLastEmbeddedPane(self) then
+        for prop, reason in pairs(LAST_PANE_LOCKED) do
+            if not locks[prop] then locks[prop] = reason end
+        end
+    end
+    -- State-based locks: some capabilities only apply in one embedding mode. These
+    -- DON'T change the stored value — they just show it read-only when inapplicable,
+    -- so the setting is visible but can't be toggled where it has no effect.
+    if self.floating then
+        if not locks.splittable then locks.splittable = "Only applies to embedded panes." end
+        if not locks.swappable  then locks.swappable  = "Only applies to embedded panes." end
+    else
+        if not locks.anchorable then locks.anchorable = "Only applies to floating panes." end
+    end
+    self._paramLocks = locks
+end
+
+-- Reason string if `prop` is read-only for this pane, else nil.
+function MuxPane:paramReadonly(prop)
+    return self._paramLocks and self._paramLocks[prop] or nil
+end
+
+-- Recompute locks for every pane. Called after any change to embedded-pane count
+-- (create/close/float/embed) since the last-pane status of the survivor can flip.
+function Mux._recomputeAllLocks()
+    for _, p in pairs(Mux._panes) do
+        if p._recomputeLocks then p:_recomputeLocks() end
+    end
+end
+
 function MuxPane:show()
     self.outer:show()
 end
@@ -1816,6 +1992,7 @@ end
 -- so minBtn only shows when floating or in a vertical (top/bottom) split.
 function MuxPane:_minBtnVisible()
     if not self.minimizable then return false end
+    if self._zoomed then return false end   -- a zoomed pane can't also be minimized
     if self.floating or self.overlay then return true end
     return self._split ~= nil and self._split.direction == "v"
 end
@@ -1831,6 +2008,7 @@ end
 
 function MuxPane:_confirmClose()
     if not self.closeable then return end
+    if Mux._isLastEmbeddedPane(self) then return end  -- never close the only pane
     if self.overlay then self:close(); return end  -- dialogs: no confirm needed
     local doConfirm = Mux.settings.get("mux", "confirmPaneClose")
     if doConfirm == nil then doConfirm = true end
@@ -1862,6 +2040,12 @@ end
 
 function MuxPane:close()
     local _t0 = Mux.debug and os.clock() or nil
+    -- Void guard, under all circumstances: refuse to close the only embedded pane.
+    -- (Teardown/uninstall doesn't route through close(), so this only blocks the user.)
+    if Mux._isLastEmbeddedPane(self) then
+        Mux._log("MuxPane: refusing to close last embedded pane %s", self.id)
+        return
+    end
     if self._propertiesDialogs then
         for _, dlg in pairs(self._propertiesDialogs) do
             pcall(function() dlg:close() end)
@@ -1911,9 +2095,7 @@ function MuxPane:close()
     end
 
     if Mux._dropAnchorsReferencing then Mux._dropAnchorsReferencing(self.id) end
-    if self.condition and Mux._deregisterConditionUser then
-        Mux._deregisterConditionUser(self, self.condition)
-    end
+    if Mux._deregisterRuleSubject then Mux._deregisterRuleSubject(self) end
     Mux._panes[self.id] = nil
     if self._gid then Mux._tabHosts[self._gid] = nil end
     if self._singletonKey and Mux._singletonDialogs then
@@ -1921,6 +2103,7 @@ function MuxPane:close()
     end
     Mux._freeId(self.id)
     Mux._scheduleAutoSave()
+    if Mux._recomputeAllLocks then Mux._recomputeAllLocks() end
     Mux._log("MuxPane closed: %s", self.id)
     if _t0 then
         Mux._echo(string.format("\n<grey>[mux perf] pane destroy %s = %.1fms<reset>\n",
@@ -1930,47 +2113,28 @@ end
 
 function MuxPane:applyTheme()
     local theme = Mux.activeTheme()
+    local btnCss = Mux.css("btn", self)
     if self.frame then self.frame:setStyleSheet(self:_baseFrameCss()) end
-    if self.contentBg  then self.contentBg:setStyleSheet(theme.contentCss or "")       end
+    if self.contentBg  then self.contentBg:setStyleSheet(Mux.css("content", self))       end
     if self.titlebar   then
-        self.titlebar:setStyleSheet(theme.titlebarCss or "")
-        local tbc = theme.titlebarTextColor or theme.btnTextColor or "#aaaabb"
+        self.titlebar:setStyleSheet(Mux.css("titlebar", self))
+        local tbc = Mux.tok("titlebar.text.color", self) or Mux.tok("btn.text.glyphColor", self) or "#aaaabb"
         self.titlebar:echo(string.format("<span style='color:%s;'>&nbsp;&nbsp;%s</span>", tbc, self.name))
         self:_updateInfoBtnPos()
     end
-    if self.infoBtn then
-        self.infoBtn:setStyleSheet(theme.btnCss or "")
-        if self._infoBtnEcho then self._infoBtnEcho(false) end
+    -- Restyle + re-echo every titlebar button uniformly. Previously a hand-written
+    -- list missed buttons (e.g. add-pane), so some icons only refreshed on hover.
+    for _, e in ipairs(self._btnEchos or {}) do
+        if e.btn then
+            e.btn:setStyleSheet(btnCss)
+            if e.echo then e.echo(false) end
+        end
     end
-    if self.closeBtn   then
-        self.closeBtn:setStyleSheet(theme.btnCss or "")
-        if self._closeBtnEcho then self._closeBtnEcho(false) end
-    end
-    if self.minBtn     then
-        self.minBtn:setStyleSheet(theme.btnCss or "")
-        if self._minBtnEcho then self._minBtnEcho(false) end
-    end
-    if self.zoomBtn    then
-        self.zoomBtn:setStyleSheet(theme.btnCss or "")
-    end
-    if self.swapBtn then
-        self.swapBtn:setStyleSheet(theme.btnCss or "")
-        if self._swapBtnEcho then self._swapBtnEcho(false) end
-    end
-    if self.splitHBtn then
-        self.splitHBtn:setStyleSheet(theme.btnCss or "")
-        if self._splitHBtnEcho then self._splitHBtnEcho(false) end
-    end
-    if self.splitVBtn then
-        self.splitVBtn:setStyleSheet(theme.btnCss or "")
-        if self._splitVBtnEcho then self._splitVBtnEcho(false) end
-    end
-    if self.contentBtn then
-        self.contentBtn:setStyleSheet(theme.btnCss or "")
-        if self._contentBtnEcho then self._contentBtnEcho(false) end
-    end
+    if self.zoomBtn then self.zoomBtn:setStyleSheet(btnCss) end
+    -- Anchor button layers active/align rules on top of btnCss.
+    if self._refreshAnchorBtn then self._refreshAnchorBtn() end
     if self._cornerHandles then
-        local css = theme.cornerHandleCss or ""
+        local css = Mux.css("cornerHandle", self)
         for _, lbl in ipairs(self._cornerHandles) do lbl:setStyleSheet(css) end
     end
     if self._applyTabTheme then self:_applyTabTheme() end
@@ -2176,7 +2340,9 @@ function MuxPane:setBordered(on)
 end
 
 function MuxPane:setBorderColor(hex)
-    self.borderColor = (hex and hex ~= "") and hex or nil
+    local v = (hex and hex ~= "") and hex or nil
+    self.borderColor = v   -- legacy mirror
+    Mux.setLocalToken(self, "pane.border.color", v)   -- re-renders the frame
     if self.frame then self.frame:setStyleSheet(self:_baseFrameCss()) end
     Mux._scheduleAutoSave()
 end
@@ -2186,22 +2352,11 @@ function MuxPane:_baseFrameCss()
         return "background-color: transparent; border: none;"
     end
     if self.transparentFrame or self.consoleBorders then
-        return [[
-            background-color: transparent;
-            border: 2px solid rgba(255, 255, 255, 0.38);
-            border-radius: 3px;
-        ]]
+        return string.format("background-color: transparent; border: %spx solid %s; border-radius: %spx;",
+            Mux.tok("pane.border.width", self), Mux.tok("pane.border.color", self), Mux.tok("pane.border.radius", self))
     end
-    local theme = Mux.activeTheme()
-    local base
-    if self.overlay then
-        base = (theme.paneOuterCss or "") .. "\n" .. (theme.floatingExtraCss or "")
-    else
-        base = (theme.paneOuterCss or "")
-    end
-    if self.borderColor then
-        return base .. string.format("\nborder: 2px solid %s;", self.borderColor)
-    end
+    local base = Mux.css("paneOuter", self)
+    if self.overlay then base = base .. "\n" .. Mux.css("floatingExtra", self) end
     return base
 end
 
@@ -2241,6 +2396,72 @@ Mux.registerContent("mux_pane_close_confirm", {
         target._autoFitHeight = 98
     end,
     remove = function(_) end,
+})
+
+-- The Mudlet main console as registered content. Applied to the (pre-configured,
+-- locked) console host pane: apply drives the native console borders and supplies
+-- the ⚙ Settings gear as a titlebar element; remove releases the console. Singleton
+-- (only one console host). Appears in the Content Library.
+Mux.registerContent("mux_console", {
+    name        = "Main Console",
+    description = "Hosts the Mudlet main console. Embedded only — one per layout.",
+    singleton   = true,
+    -- The native main console is cropped to this pane via setBorderSizes; it isn't a
+    -- Geyser widget that can live inside a tab viewport, so it would paint through any
+    -- tab background. Tabs are therefore disallowed on the console's pane.
+    noTabs      = true,
+    -- The console can't be closed, floated, or moved: it's the native main console
+    -- pinned to this pane via setBorderSizes. These set the values AND mark them
+    -- read-only in Properties (with the reason on hover); reverted when removed.
+    paramLocks = {
+        closeable   = { value = false, why = "The Mudlet console can't be closed — remove the console content first." },
+        convertible = { value = false, why = "The Mudlet console can't be floated; it must stay embedded." },
+        movable     = { value = false, why = "The Mudlet console is embedded and can't be moved." },
+    },
+    -- Can't be applied to a floating pane (the native console can't float), nor to
+    -- a tab (a tab is a sub-surface with a .pane back-reference; the console is
+    -- cropped to a pane's content region via border sizes and can't live in a tab
+    -- viewport — see noTabs).
+    canApply = function(target)
+        if target.pane then
+            return false, "The console must be embedded directly in a pane, not a tab."
+        end
+        if target.floating then
+            return false, "The console must be embedded — it can't go in a floating pane."
+        end
+        return true
+    end,
+    titlebarElements = {
+        {
+            id="console.settings", side="left", group="console", order=0, priority=110,
+            icon="⚙", tooltip="Settings",
+            visible=function(_)
+                return not (Mux.settings and Mux.settings.get("mux", "showConsoleGear") == false)
+            end,
+            onClick=function(_, event)
+                if not event or event.button == "LeftButton" then Mux.settings.toggle() end
+            end,
+            menuText="⚙  Settings", menuGroup="info", menuOrder=95,
+            run=function(_) Mux.settings.toggle() end,
+        },
+    },
+    apply = function(target)
+        -- The content slot covers the content area; keep it transparent and
+        -- click-through so the native console shows through and receives input.
+        if target._contentSlot then
+            pcall(function() target._contentSlot:setStyleSheet("background: transparent; border: none;") end)
+            if enableClickthrough then pcall(enableClickthrough, target._contentSlot.name) end
+        end
+        if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
+        if target._enableConsoleBorders then target:_enableConsoleBorders() end
+        if target.updateConsoleBorders then target:updateConsoleBorders() end
+    end,
+    remove = function(target)
+        if target._disableConsoleBorders then target:_disableConsoleBorders() end
+    end,
+    resize = function(target)
+        if target.updateConsoleBorders then target:updateConsoleBorders() end
+    end,
 })
 
 Mux._log("mux_pane loaded")

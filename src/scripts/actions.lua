@@ -59,7 +59,8 @@ end
 function Mux.listActions()
     local out = {}
     for id, def in pairs(Mux.actions) do
-        out[#out + 1] = { id = id, name = def.name, group = def.group, icon = def.icon, desc = def.desc }
+        out[#out + 1] = { id = id, name = def.name, group = def.group, icon = def.icon,
+                          desc = def.desc, hidden = def.hidden }
     end
     table.sort(out, function(a, b)
         if a.group == b.group then return a.name:lower() < b.name:lower() end

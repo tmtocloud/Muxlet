@@ -1,4 +1,5 @@
 [
   {"name": "gmcp"},
-  {"name": "buttons"}
+  {"name": "buttons"},
+  {"name": "capture"}
 ]

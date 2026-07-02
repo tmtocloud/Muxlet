@@ -3,6 +3,8 @@
 -- Auto-reload: muddlet --profile <name> writes a stamp file to the profile
 -- directory after running muddler. A recursive 30-second timer watches for
 -- stamp changes and performs uninstallPackage + installPackage for a clean reload.
+-- When --fresh is passed to muddlet it also writes a fresh flag file; the
+-- watcher detects it and reloads with fresh=true instead of false.
 --
 -- Manual reload:
 --   mux reload        — upgrade path (preserves settings)
@@ -46,13 +48,23 @@ local function muxDevmodeCheck()
         return
     end
 
-    -- Stamp changed: a new build was deployed; reload.
+    -- Stamp changed: a new build was deployed; check for the fresh flag.
     -- Update stamp before reload so the newly loaded package sees the same stamp
     -- on its first check and skips its own spurious-reload guard correctly.
     Mux._devLastStamp = stamp
-    Mux._echo("\n<yellow>[Muxlet]<reset> New local build detected — reloading...\n")
-    local pkgPath = getMudletHomeDir() .. "/Muxlet.mpackage"
-    muxDevmodeDoReload(pkgPath)
+    local freshPath = getMudletHomeDir() .. "/Muxlet-fresh.stamp"
+    local freshFile = io.open(freshPath, "r")
+
+    if freshFile then
+        freshFile:close()
+        os.remove(freshPath)
+        Mux._echo("\n<yellow>[Muxlet]<reset> New local build detected (fresh) — reloading...\n")
+        Mux.devmodeReload(true)
+    else
+        Mux._echo("\n<yellow>[Muxlet]<reset> New local build detected — reloading...\n")
+        local pkgPath = getMudletHomeDir() .. "/Muxlet.mpackage"
+        muxDevmodeDoReload(pkgPath)
+    end
     -- No reschedule: the freshly installed package starts its own timer on load.
 end
 

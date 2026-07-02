@@ -379,11 +379,17 @@ function Mux._clearWorkspace()
     for _, pane in pairs(Mux._panes) do
         if pane.floating and pane.outer then pane.outer:hide() end
     end
+    -- Tear down every reactive subject's rules first (kills any managed triggers,
+    -- e.g. capture line triggers) so they don't leak across a workspace wipe. The
+    -- engine registry holds both panes and tabs.
+    if Mux._deregisterRuleSubject and Mux._ruleSubjects then
+        for _, subj in pairs(Mux._ruleSubjects) do pcall(Mux._deregisterRuleSubject, subj) end
+    end
     -- Preserve the settings UI pane across registry wipes.
     Mux._panes    = {}
     Mux._splits   = {}
     Mux._paneSpaces = {}
-    Mux._connAware = {}
+    Mux._ruleSubjects = {}
     if Mux._settings_ui then Mux._settings_ui.window = savedSet end
     -- Panes are gone; release singleton locks so the next workspace can apply the
     -- same content without hitting the "already open" block.
@@ -440,7 +446,7 @@ function Mux.fullStart()
 
     Mux._registerResizeHandler()
 
-    local savedTheme = Mux.settings.get("mux", "theme")
+    local savedTheme = Mux.settings.get("muxtheme", "active") or Mux.settings.get("mux", "theme")
     if savedTheme and savedTheme ~= "" and Mux.applyTheme then
         Mux.applyTheme(savedTheme)
     end

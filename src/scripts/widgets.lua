@@ -118,6 +118,7 @@ local function deriveCss(uiTheme)
             "QLabel{background:%s;color:%s;font-size:10px;font-weight:bold;border-radius:3px;border:1px solid %s;}",
             hiIconHvBg, hiIconFg, hiIconBd),
         widgetFg    = widgetFg,
+        descText    = descText,
         widgetBtn   = string.format(
             "QLabel{background:%s;color:%s;font-size:10px;border:1px solid %s;border-radius:3px;}"
             .. "QLabel::hover{background:%s;}",
@@ -136,6 +137,16 @@ local function deriveCss(uiTheme)
             "QLabel{background-color:%s;border:1px solid %s;border-radius:3px;color:%s;font-size:9px;"
             .. "font-weight:bold;}QLabel::hover{background-color:%s;border-color:rgba(120,180,255,200);color:%s;}",
             widgetBg, widgetBd, widgetFg, widgetHv, widgetFg),
+        -- Apply button state styles: "done" = current text is applied — greyed out so
+        -- it clearly reads as inactive/nothing-to-apply; "active" = text edited but not
+        -- yet applied (accented, actionable).
+        applyBtnDone = string.format(
+            "QLabel{background-color:rgba(46,48,58,0.55);border:1px solid rgba(90,94,112,0.35);"
+            .. "border-radius:3px;color:%s;font-size:9px;font-weight:bold;}", descText),
+        applyBtnActive = string.format(
+            "QLabel{background-color:%s;border:1px solid rgba(120,180,255,0.85);border-radius:3px;"
+            .. "color:#cfe0ff;font-size:9px;font-weight:bold;}"
+            .. "QLabel::hover{background-color:%s;color:#ffffff;}", widgetHv, widgetHv),
         dropdownBtn = string.format(
             "QLabel{background:%s;color:%s;border:1px solid %s;border-radius:4px;}"
             .. "QLabel::hover{background:%s;border:1px solid rgba(120,160,255,0.6);}",
@@ -156,6 +167,15 @@ local function deriveCss(uiTheme)
         dividerRow   = "background:transparent;border:none;",
         dividerLabel = string.format("background:transparent;color:%s;font-size:10px;font-weight:bold;letter-spacing:1px;", descText),
         dividerLine  = string.format("background:%s;border:none;", divider),
+        -- Icon cascade default button style (square glyph button, brightens on hover).
+        iconBtn      = string.format(
+            "QLabel{background:%s;color:%s;border:1px solid %s;border-radius:4px;"
+            .. "qproperty-alignment:AlignCenter;font-size:13px;}"
+            .. "QLabel::hover{background:%s;color:#ffffff;border:1px solid rgba(120,160,255,0.6);}",
+            widgetBg, widgetFg, widgetBd, widgetHv),
+        iconBtnActive = string.format(
+            "QLabel{background:%s;color:#ffffff;border:1px solid rgba(120,160,255,0.7);border-radius:4px;"
+            .. "qproperty-alignment:AlignCenter;font-size:13px;}", widgetHv),
     }
 end
 
@@ -177,7 +197,7 @@ function Mux.ui.specHeight(spec, opts)
     if spec.type == "divider" then return opts.dividerHeight or 24 end
     local cw = Mux.ui._widgets[spec.type]
     if cw then return cw.rowHeight or opts.rowHeight or 42 end
-    if spec.type == "color" then return opts.colorRowHeight or 92 end
+    if spec.type == "color" then return opts.colorRowHeight or 64 end
     if isWideSpec(spec) then
         return opts.textRowHeight or 64
     end
@@ -222,13 +242,54 @@ local function hsvToHex(h, s, v)
         math.floor((b + m) * 255 + 0.5))
 end
 
--- "#rrggbb" → HSV (h 0–360, s/v 0–1). Pairs with hsvToHex for the brightness strip.
-local function hexToHsv(hex)
-    hex = tostring(hex or ""):gsub("#", "")
-    if #hex < 6 then return 0, 0, 0 end
-    local r = (tonumber(hex:sub(1, 2), 16) or 0) / 255
-    local g = (tonumber(hex:sub(3, 4), 16) or 0) / 255
-    local b = (tonumber(hex:sub(5, 6), 16) or 0) / 255
+-- ── Colour parsing / formatting (format-agnostic, alpha-aware) ───────────────
+-- Accept hex (#rgb / #rrggbb / #rrggbbaa), rgb()/rgba() (alpha as 0–1 or 0–255),
+-- and a few names; emit hex when fully opaque, rgba(...) (alpha 0–1) otherwise.
+-- Exposed publicly as the canonical converters used across the UI.
+local COLOR_NAMES = {
+    white = {255,255,255,1}, black = {0,0,0,1},
+    transparent = {0,0,0,0}, none = {0,0,0,0},
+}
+function Mux.ui.parseColor(str)
+    str = tostring(str or ""):gsub("%s+", ""):lower()
+    local nm = COLOR_NAMES[str]
+    if nm then return nm[1], nm[2], nm[3], nm[4] end
+    local hx = str:match("^#(%x+)$")
+    if hx then
+        if #hx == 3 then
+            local r,g,b = tonumber(hx:sub(1,1),16), tonumber(hx:sub(2,2),16), tonumber(hx:sub(3,3),16)
+            return r*17, g*17, b*17, 1
+        elseif #hx == 6 then
+            return tonumber(hx:sub(1,2),16), tonumber(hx:sub(3,4),16), tonumber(hx:sub(5,6),16), 1
+        elseif #hx == 8 then
+            return tonumber(hx:sub(1,2),16), tonumber(hx:sub(3,4),16), tonumber(hx:sub(5,6),16),
+                   (tonumber(hx:sub(7,8),16) or 255) / 255
+        end
+    end
+    local r,g,b,a = str:match("^rgba?%((%d+),(%d+),(%d+),([%d%.]+)%)$")
+    if r then
+        local av = tonumber(a) or 1
+        -- 0–1 float if it has a decimal point or is <= 1; otherwise a 0–255 integer.
+        if not (a:find("%.") or av <= 1) then av = av / 255 end
+        return tonumber(r), tonumber(g), tonumber(b), av
+    end
+    r,g,b = str:match("^rgb%((%d+),(%d+),(%d+)%)$")
+    if r then return tonumber(r), tonumber(g), tonumber(b), 1 end
+    return 0, 0, 0, 1
+end
+
+function Mux.ui.formatColor(r, g, b, a)
+    local function clamp(v) v = math.floor((v or 0) + 0.5); return v < 0 and 0 or (v > 255 and 255 or v) end
+    r, g, b = clamp(r), clamp(g), clamp(b)
+    a = a or 1; if a < 0 then a = 0 elseif a > 1 then a = 1 end
+    if a >= 0.999 then return string.format("#%02x%02x%02x", r, g, b) end
+    local as = string.format("%.3f", a):gsub("0+$", ""):gsub("%.$", "")
+    return string.format("rgba(%d,%d,%d,%s)", r, g, b, as)
+end
+
+-- r,g,b (0–255) → HSV (h 0–360, s/v 0–1). Pairs with hsvToHex for the hue/brightness UI.
+local function rgbToHsv(r, g, b)
+    r, g, b = r / 255, g / 255, b / 255
     local mx, mn = math.max(r, g, b), math.min(r, g, b)
     local d = mx - mn
     local h = 0
@@ -262,15 +323,13 @@ function Mux.ui.colorField(parent, opts)
     opts = opts or {}
     local value    = opts.value or "#000000"
     local onChange = opts.onChange or function() end
+    local r, g, b, a = Mux.ui.parseColor(value)
     local x, y     = opts.x or 0, opts.y or 0
     local width    = opts.width or 240
     local prefix   = opts.prefix or ("muxcf_" .. tostring(math.random(1, 1000000000)))
     local getScreenPos = opts.getScreenPos
     local INPUTH   = 26
-    local STRIP_N  = 14
-    local STRIP_H  = 18
-    local STRIP_GAP = 6
-    local height   = INPUTH + STRIP_GAP + STRIP_H
+    local height   = INPUTH    -- inline = swatch + hex; the full picker lives in a popup
 
     local cont = Geyser.Label:new({ name = prefix.."_c", x = x, y = y, width = width, height = height }, parent)
     cont:setStyleSheet("background:transparent;border:none;")
@@ -285,63 +344,28 @@ function Mux.ui.colorField(parent, opts)
         width = math.max(40, width - INPUTH - 6), height = INPUTH }, cont)
     input:setStyleSheet("background:rgba(0,0,0,0.35);color:#dde;border:1px solid rgba(255,255,255,0.15);border-radius:3px;")
 
-    -- Brightness strip cells (dark → light). Levels span HSV value 0.15 .. 1.0.
-    local cells  = {}
-    local stripY = INPUTH + STRIP_GAP
-    local cellW  = math.max(6, math.floor((width - (STRIP_N - 1) * 2) / STRIP_N))
-    local function levelV(k) return 0.15 + (k / (STRIP_N - 1)) * 0.85 end
-
-    local function refreshStrip()
-        local h, s, v = hexToHsv(value)
-        local closest, cd = 1, math.huge
-        for k = 0, STRIP_N - 1 do
-            local diff = math.abs(levelV(k) - v)
-            if diff < cd then cd = diff; closest = k + 1 end
-        end
-        for k = 0, STRIP_N - 1 do
-            local cell = cells[k + 1]
-            if cell then
-                local sel = (k + 1) == closest
-                cell:setStyleSheet(string.format(
-                    "background:%s;border:1px solid %s;border-radius:2px;",
-                    hsvToHex(h, s, levelV(k)),
-                    sel and "rgba(255,255,255,0.9)" or "rgba(0,0,0,0.3)"))
-            end
-        end
+    -- Repaint from current r,g,b,a. render() never fires onChange; emit() does.
+    local refreshPopup   -- set while the popup is open, nil otherwise
+    local function render(skipInput)
+        value = Mux.ui.formatColor(r, g, b, a)
+        setPreview(value)
+        if not skipInput then input:print(value) end
+        if refreshPopup then refreshPopup() end
     end
-
-    local function apply(hex, fromInput)
-        if not hex or hex == "" then return end
-        value = hex
-        setPreview(hex)
-        if not fromInput then input:print(hex) end
-        refreshStrip()
-        onChange(hex)
-    end
-
-    for k = 0, STRIP_N - 1 do
-        local cell = Geyser.Label:new({ name = prefix.."_b"..k,
-            x = k * (cellW + 2), y = stripY, width = cellW, height = STRIP_H }, cont)
-        cell:setToolTip("Brightness")
-        local kk = k
-        cell:setClickCallback(function()
-            local h, s = hexToHsv(value)
-            apply(hsvToHex(h, s, levelV(kk)), false)
-        end)
-        cells[k + 1] = cell
+    local function emit(fromInput)
+        render(fromInput)
+        onChange(value)
     end
 
     setPreview(value)
     input:print(value)
-    input:setAction(function() apply(input:getText(), true) end)
-    refreshStrip()
+    input:setAction(function() r, g, b, a = Mux.ui.parseColor(input:getText()); emit(true) end)
 
-    -- ── Hue/saturation wheel popup (click the swatch to open) ────────────────
-    -- Discrete colour cells (hue around, saturation by ring, value = 1) plus
-    -- greyscale and dark-shade strips. Each cell is an exact colour the user
-    -- clicks directly, so there's no in-label coordinate mapping to get wrong.
-    -- The brightness strip below then fine-tunes the chosen colour's value.
-    local POPW = 200
+    -- ── Picker popup (click the swatch) ─────────────────────────────────────────
+    -- Hue/saturation cells pick a colour; a Brightness ramp tunes value and an
+    -- Opacity ramp tunes alpha. Picks update in place and the popup stays open so
+    -- value/opacity can be adjusted, then it closes via the ✕ or the backdrop.
+    local POPW = 210
     local wheelCells, wheelPanel, wheelScrim = {}, nil, nil
 
     local function closeWheel()
@@ -350,78 +374,117 @@ function Mux.ui.colorField(parent, opts)
         if wheelPanel then if wheelPanel.delete then wheelPanel:delete() else wheelPanel:hide() end end
         if wheelScrim then if wheelScrim.delete then wheelScrim:delete() else wheelScrim:hide() end end
         wheelCells, wheelPanel, wheelScrim = {}, nil, nil
+        refreshPopup = nil
         if Mux.ui._closeActiveWheel == closeWheel then Mux.ui._closeActiveWheel = nil end
     end
 
-    local function addCell(px, py, sz, hex)
-        local cellLbl = Geyser.Label:new({ name = prefix .. "_wc" .. (#wheelCells + 1),
-            x = math.floor(px), y = math.floor(py), width = math.floor(sz), height = math.floor(sz) }, wheelPanel)
-        cellLbl:setStyleSheet(string.format(
-            "background:%s;border:1px solid rgba(0,0,0,0.35);border-radius:2px;", hex))
-        cellLbl:setToolTip(hex)
-        cellLbl:show(); cellLbl:raise()
-        local captured = hex
-        cellLbl:setClickCallback(function() apply(captured, false); closeWheel() end)
-        wheelCells[#wheelCells + 1] = cellLbl
+    local function newCell(px, py, w2, h2, name)
+        local c = Geyser.Label:new({ name = prefix..name,
+            x = math.floor(px), y = math.floor(py), width = math.floor(w2), height = math.floor(h2) }, wheelPanel)
+        c:show(); c:raise()
+        wheelCells[#wheelCells + 1] = c
+        return c
     end
 
     local function openWheel()
         if Mux.ui._closeActiveWheel then Mux.ui._closeActiveWheel() end   -- only one open anywhere
         local host = getScreenPos and Geyser or parent
-
         wheelScrim = Geyser.Label:new({ name = prefix .. "_wscrim", x = 0, y = 0, width = "100%", height = "100%" }, host)
         wheelScrim:setStyleSheet("background:rgba(0,0,0,0.01);border:none;")
         wheelScrim:show(); wheelScrim:raise()
         wheelScrim:setClickCallback(closeWheel)
 
         local px, py
-        if getScreenPos then
-            local ox, oy = getScreenPos()
-            px, py = ox + x, oy + y + INPUTH + 4
-        else
-            px, py = x, y + INPUTH + 4
-        end
-        local POPH = 220
+        if getScreenPos then local ox, oy = getScreenPos(); px, py = ox + x, oy + y + INPUTH + 4
+        else px, py = x, y + INPUTH + 4 end
+        local POPH = 286
         wheelPanel = Geyser.Label:new({ name = prefix .. "_wheel",
             x = math.floor(px), y = math.floor(py), width = POPW, height = POPH }, host)
         wheelPanel:setStyleSheet("background:rgba(20,21,30,0.98);border:1px solid rgba(255,255,255,0.18);border-radius:6px;")
         wheelPanel:show(); wheelPanel:raise()
 
-        local xb = Geyser.Label:new({ name = prefix .. "_wx", x = POPW - 20, y = 4, width = 16, height = 16 }, wheelPanel)
+        local xb = newCell(POPW - 20, 4, 16, 16, "_wx")
         xb:setStyleSheet("background:transparent;color:rgba(210,210,225,0.85);qproperty-alignment:AlignCenter;font-size:12px;")
         xb:echo("<center>✕</center>")
-        xb:show(); xb:raise()
         xb:setClickCallback(closeWheel)
-        wheelCells[#wheelCells + 1] = xb
 
-        local cx, cy, cell = 100, 96, 14
-        addCell(cx - cell / 2, cy - cell / 2, cell, "#ffffff")
-        local rings = { { r = 20, s = 0.30 }, { r = 38, s = 0.55 }, { r = 56, s = 0.78 }, { r = 74, s = 1.0 } }
+        local function pickHsCell(cpx, cpy, sz, hex)
+            local c = newCell(cpx, cpy, sz, sz, "_wc"..(#wheelCells+1))
+            c:setStyleSheet(string.format("background:%s;border:1px solid rgba(0,0,0,0.35);border-radius:2px;", hex))
+            c:setToolTip(hex)
+            local cap = hex
+            c:setClickCallback(function() r, g, b = Mux.ui.parseColor(cap); emit(false) end)
+        end
+
+        local cx, cy, cell = 100, 92, 14
+        pickHsCell(cx - cell/2, cy - cell/2, cell, "#ffffff")
+        local rings = { {r=20,s=0.30}, {r=38,s=0.55}, {r=56,s=0.78}, {r=74,s=1.0} }
         for _, ring in ipairs(rings) do
-            local sectors = math.max(6, math.floor(2 * math.pi * ring.r / (cell + 2)))
-            for j = 0, sectors - 1 do
-                local ang = (j / sectors) * 2 * math.pi
-                addCell(cx + ring.r * math.cos(ang) - cell / 2,
-                        cy + ring.r * math.sin(ang) - cell / 2,
-                        cell, hsvToHex((j / sectors) * 360, ring.s, 1))
+            local sectors = math.max(6, math.floor(2*math.pi*ring.r/(cell+2)))
+            for j = 0, sectors-1 do
+                local ang = (j/sectors)*2*math.pi
+                pickHsCell(cx+ring.r*math.cos(ang)-cell/2, cy+ring.r*math.sin(ang)-cell/2, cell,
+                           hsvToHex((j/sectors)*360, ring.s, 1))
             end
         end
 
-        local gsteps, gw = 10, math.floor((POPW - 20) / 10)
-        for k = 0, gsteps - 1 do
-            local g = math.floor(k / (gsteps - 1) * 255 + 0.5)
-            addCell(10 + k * gw, 180, gw - 2, string.format("#%02x%02x%02x", g, g, g))
+        local STRIP_N = 14
+        local sw = math.floor((POPW - 20) / STRIP_N)
+        local vCells, aCells = {}, {}
+        local function levelV(k) return 0.12 + (k/(STRIP_N-1))*0.88 end
+        local function levelA(k) return k/(STRIP_N-1) end
+
+        local vlabel = newCell(10, 178, 90, 12, "_vlab")
+        vlabel:setStyleSheet("background:transparent;color:rgba(170,175,195,0.8);font-size:9px;")
+        vlabel:echo("Brightness")
+        for k = 0, STRIP_N-1 do
+            local c = newCell(10 + k*sw, 192, sw-2, 16, "_v"..k)
+            c:setToolTip("Brightness")
+            local kk = k
+            c:setClickCallback(function()
+                local h, s = rgbToHsv(r, g, b)
+                r, g, b = Mux.ui.parseColor(hsvToHex(h, s, levelV(kk))); emit(false)
+            end)
+            vCells[k+1] = c
         end
 
-        local dh, dw = 12, math.floor((POPW - 20) / 12)
-        for k = 0, dh - 1 do
-            addCell(10 + k * dw, 198, dw - 2, hsvToHex(k * (360 / dh), 0.85, 0.5))
+        local alabel = newCell(10, 214, 90, 12, "_alab")
+        alabel:setStyleSheet("background:transparent;color:rgba(170,175,195,0.8);font-size:9px;")
+        alabel:echo("Opacity")
+        for k = 0, STRIP_N-1 do
+            local c = newCell(10 + k*sw, 228, sw-2, 16, "_a"..k)
+            c:setToolTip("Opacity")
+            local kk = k
+            c:setClickCallback(function() a = levelA(kk); emit(false) end)
+            aCells[k+1] = c
         end
 
+        local pv = newCell(10, 252, 24, 24, "_wpv")
+        local hx = newCell(40, 256, POPW-50, 16, "_whex")
+        hx:setStyleSheet("background:transparent;color:rgba(210,210,225,0.85);font-size:11px;")
+
+        refreshPopup = function()
+            local h, s = rgbToHsv(r, g, b)
+            local v = math.max(r, g, b)/255
+            local cv, cvd = 1, math.huge
+            for k = 0, STRIP_N-1 do local d=math.abs(levelV(k)-v); if d<cvd then cvd=d; cv=k+1 end end
+            for k = 0, STRIP_N-1 do local cc=vCells[k+1]; if cc then
+                cc:setStyleSheet(string.format("background:%s;border:1px solid %s;border-radius:2px;",
+                    hsvToHex(h, s, levelV(k)), (k+1)==cv and "rgba(255,255,255,0.9)" or "rgba(0,0,0,0.3)")) end end
+            local ca, cad = 1, math.huge
+            for k = 0, STRIP_N-1 do local d=math.abs(levelA(k)-a); if d<cad then cad=d; ca=k+1 end end
+            for k = 0, STRIP_N-1 do local cc=aCells[k+1]; if cc then
+                cc:setStyleSheet(string.format("background:rgba(%d,%d,%d,%.3f);border:1px solid %s;border-radius:2px;",
+                    r, g, b, levelA(k), (k+1)==ca and "rgba(255,255,255,0.9)" or "rgba(255,255,255,0.18)")) end end
+            pv:setStyleSheet(string.format("background:%s;border:1px solid rgba(255,255,255,0.25);border-radius:3px;",
+                Mux.ui.formatColor(r,g,b,a)))
+            hx:echo(Mux.ui.formatColor(r,g,b,a))
+        end
+        refreshPopup()
         Mux.ui._closeActiveWheel = closeWheel
     end
 
-    preview:setToolTip("Click to open the colour wheel")
+    preview:setToolTip("Click to open the colour picker")
     preview:setClickCallback(function()
         if wheelPanel then closeWheel() else openWheel() end
     end)
@@ -430,9 +493,10 @@ function Mux.ui.colorField(parent, opts)
         container = cont,
         height    = height,
         read      = function() return value end,
-        set       = function(hex) apply(hex, false) end,
-        commit    = function() apply(input:getText(), true) end,
-        refresh   = function() input:print(value); setPreview(value); refreshStrip() end,
+        set       = function(str) r, g, b, a = Mux.ui.parseColor(str); emit(false) end,
+        setSilent = function(str) r, g, b, a = Mux.ui.parseColor(str); render(false) end,
+        commit    = function() r, g, b, a = Mux.ui.parseColor(input:getText()); emit(true) end,
+        refresh   = function() render(false) end,
     }
 end
 
@@ -488,7 +552,8 @@ end
 -- ── Colour field (block) — delegates to the standalone Mux.ui.colorField ──────
 local function w_color(row, c)
     local spec, css, uid = c.spec, c.css, c.uid
-    local availW = c.formW - c.padL - c.padR
+    local rsv = c.showReset and (c.resetW + c.resetGap) or 0
+    local availW = c.formW - c.padL - c.padR - rsv
     local nl = Geyser.Label:new({name=uid.."_n", x=c.padL, y=6, width=availW, height=14}, row)
     nl:setStyleSheet(css.rowLabel)
     nl:rawEcho(spec.label)
@@ -509,10 +574,55 @@ local function w_color(row, c)
             return fx, fy + c.yPos     -- form-content origin + this row's offset = row top-left
         end,
     })
-    return { commit = cf.commit, refresh = cf.refresh }
+    if c.showReset and not c.spec._noReset then
+        local ri = Geyser.Label:new({name=uid.."_rst", x=c.resetX, y=6, width=c.resetW, height=18}, row)
+        ri:setStyleSheet(css.resetIcon)
+        ri:echo("<center><span style='color:rgba(140,145,165,0.55);font-size:11px;'>↺</span></center>")
+        if spec.desc then ri:setToolTip(c.resetTooltip or "Reset") end
+        ri:setClickCallback(function() c.closeDropdown(); c.onReset(c.i, spec) end)
+    end
+    return { commit = cf.commit, refresh = function()
+        cf.setSilent(tostring(spec.readFn() or "#000000"))
+    end }
 end
 
 -- ── Wide text row (block) — full-width input, label above ─────────────────────
+
+-- Wire an Apply button so it visually reflects whether the box text is in effect:
+-- greyed ("done") when the current text equals the applied value, accented
+-- ("active") when it's been edited but not yet applied. Geyser command lines expose
+-- no text-changed event, so a light self-terminating poll keeps the state in sync;
+-- it stops as soon as the widget is gone (any call on a dead widget errors). Returns
+-- a repaint fn to call right after an explicit commit for an instant update.
+local function wireApplyState(input, aBtn, getApplied, css)
+    if not aBtn then return function() end end
+    local activeCss = css.applyBtnActive or css.applyBtn
+    local doneCss   = css.applyBtnDone   or css.applyBtn
+    local brightCol = css.widgetFg or "#dfe6ff"
+    local mutedCol  = css.descText or "rgba(120,130,170,0.85)"
+    local function paint()
+        local ok, cur = pcall(function() return input:getText() end)
+        if not ok then return false end                     -- widget gone → stop
+        local applied = tostring(getApplied() or "")
+        local dirty   = (tostring(cur or "") ~= applied)
+        local ok2 = pcall(function()
+            aBtn:setStyleSheet(dirty and activeCss or doneCss)
+            -- Re-echo the label too: the inline colour overrides the stylesheet, so the
+            -- text itself must dim when applied for the button to read as inactive.
+            aBtn:echo(string.format(
+                "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
+                dirty and brightCol or mutedCol))
+        end)
+        return ok2
+    end
+    paint()
+    if tempTimer then
+        local function loop() if paint() then tempTimer(0.3, loop) end end
+        tempTimer(0.3, loop)
+    end
+    return paint
+end
+
 local function w_wideText(row, c)
     local spec, css, uid = c.spec, c.css, c.uid
     local availW    = c.formW - c.padL - c.padR - c.resetW - c.resetGap
@@ -533,31 +643,35 @@ local function w_wideText(row, c)
     input:setStyleSheet(css.textInput)
     input:print(tostring(spec.readFn() or ""))
 
+    local applyPaint = function() end
     local function commit()
-        local text = input:getText()
-        if not text or text == "" then return end
+        local text = input:getText() or ""
+        -- Normally an empty box is ignored (avoids wiping a value by accident); fields
+        -- that opt in with spec.allowEmpty can be cleared by blanking + Enter.
+        if text == "" and not spec.allowEmpty then return end
         spec.writeFn(text)
         input:print(tostring(spec.readFn() or ""))
+        applyPaint()                                  -- now applied → grey out
     end
     input:setAction(commit)
 
     if not hideApply then
         local aBtn = Geyser.Label:new({name=uid.."_a", x=c.padL+inputW+c.inputGap, y=36, width=c.applyW, height=c.height}, row)
-        aBtn:setStyleSheet(css.applyBtn)
         aBtn:echo(string.format(
             "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
             css.widgetFg))
         aBtn:setClickCallback(commit)
+        applyPaint = wireApplyState(input, aBtn, function() return spec.readFn() end, css)
     end
 
-    if c.showReset then
+    if c.showReset and not c.spec._noReset then
         local ri = Geyser.Label:new({name=uid.."_rst", x=c.resetX, y=6, width=c.resetW, height=c.height}, row)
         ri:setStyleSheet(css.resetIcon)
         ri:echo("<center><span style='color:rgba(140,145,165,0.55);font-size:11px;'>↺</span></center>")
         ri:setClickCallback(function() c.closeDropdown(); c.onReset(c.i, spec) end)
     end
 
-    return { commit = commit, refresh = function() input:print(tostring(spec.readFn() or "")) end }
+    return { commit = commit, refresh = function() input:print(tostring(spec.readFn() or "")); applyPaint() end }
 end
 
 -- ── Read-only row (block) — label left, value right ───────────────────────────
@@ -790,21 +904,23 @@ local function w_text(row, c)
     input:print(tostring(spec.readFn() or ""))
 
     local aBtn = Geyser.Label:new({name=uid.."_a", x=c.x+inW+c.inputGap, y=c.y, width=c.applyW, height=c.height}, row)
-    aBtn:setStyleSheet(css.applyBtn)
     aBtn:echo(string.format(
         "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
         css.widgetFg))
 
+    local applyPaint = function() end
     local function commit()
         c.closeDropdown()
-        local text = input:getText()
-        if not text or text == "" then return end
+        local text = input:getText() or ""
+        if text == "" and not spec.allowEmpty then return end
         spec.writeFn(text)
         input:print(tostring(spec.readFn() or ""))
+        applyPaint()                                  -- now applied → grey out
     end
     input:setAction(commit)
     aBtn:setClickCallback(commit)
-    return { commit = commit, refresh = function() input:print(tostring(spec.readFn() or "")) end }
+    applyPaint = wireApplyState(input, aBtn, function() return spec.readFn() end, css)
+    return { commit = commit, refresh = function() input:print(tostring(spec.readFn() or "")); applyPaint() end }
 end
 
 -- ── Segmented control (inline) — N connected buttons, one highlighted ─────────
@@ -876,6 +992,25 @@ local function w_segmented(row, c)
     return { refresh = refresh }
 end
 
+-- ── Action button (block) — a full-width clickable button that fires onClick ──
+local function w_button(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local h = 24
+    local btn = Geyser.Label:new({
+        name = uid.."_btn", x = c.padL, y = math.floor((c.rowH - h)/2),
+        width = c.formW - c.padL - c.padR, height = h,
+    }, row)
+    btn:setStyleSheet(css.actionBtn or
+        "QLabel{background:rgba(120,160,255,0.14);color:#cfe0ff;border:1px solid rgba(120,160,255,0.40);"
+        .. "border-radius:4px;qproperty-alignment:'AlignCenter';font-size:11px;}"
+        .. "QLabel::hover{background:rgba(120,160,255,0.24);}")
+    btn:echo("<center>" .. (spec.label or "Button") .. "</center>")
+    btn:setCursor("PointingHand")
+    if spec.desc then btn:setToolTip(spec.desc) end
+    btn:setClickCallback(function() c.closeDropdown(); if spec.onClick then spec.onClick() end end)
+    return {}
+end
+
 -- Built-in render-key registry.  buildForm resolves each row to one of these (or
 -- to a custom Mux.ui._widgets type).  Authors may override an entry to restyle a
 -- control globally; `layout` is "inline" unless stated.
@@ -883,6 +1018,7 @@ Mux.ui._builtins = {
     color     = { build = w_color,     layout = "block" },
     wideText  = { build = w_wideText,  layout = "block" },
     readOnly  = { build = w_readOnly,  layout = "block" },
+    button    = { build = w_button,    layout = "block" },
     checkbox  = { build = w_checkbox },
     cycler    = { build = w_cycler },
     dropdown  = { build = w_dropdown },
@@ -905,7 +1041,7 @@ function Mux.ui.buildForm(parent, specs, opts)
     local prefix   = opts.prefix       or "muxui"
     local rowH     = opts.rowHeight    or 42
     local textH    = opts.textRowHeight or 64
-    local colorH   = opts.colorRowHeight or 92
+    local colorH   = opts.colorRowHeight or 64
     local widgetH  = opts.widgetHeight or 24
     local padL     = opts.padLeft      or 10
     local padR     = opts.padRight     or 6
@@ -918,10 +1054,26 @@ function Mux.ui.buildForm(parent, specs, opts)
     local resetGap  = showReset and 8  or 0
     local resetX    = formW - resetW - padR
 
+    -- Absolute screen position of the form's content area. Callers may override, but
+    -- the default reads the parent's own geometry (Geyser get_x/get_y are absolute
+    -- within the main window), so dropdown/colour popups position themselves with no
+    -- per-caller code. This is what makes those popups work in any dialog.
+    local getContentScreenPos = opts.getContentScreenPos or function()
+        local ok, x = pcall(function() return parent.get_x and parent:get_x() or 0 end)
+        local oky, y = pcall(function() return parent.get_y and parent:get_y() or 0 end)
+        return (ok and x) or 0, (oky and y) or 0
+    end
+
     local activeDropdown = nil
     local refreshFns     = {}
     local commitFns      = {}
     local yPos           = 0
+
+    -- Collapsible sections: each divider opens a section; the rows that follow
+    -- (until the next divider) belong to it and hide/show when it's toggled.
+    local secLayout, sections, curSec = {}, {}, nil
+    local relayout
+    local formTotalHeight = 0
 
     local function closeDropdown()
         if activeDropdown then
@@ -952,10 +1104,11 @@ function Mux.ui.buildForm(parent, specs, opts)
 
     -- Shared chrome for inline rows: reset-to-default icon on the right.
     local function renderInlineReset(row, uid, spec, i, wy)
-        if not showReset then return end
+        if not showReset or spec._noReset then return end
         local ri = Geyser.Label:new({name=uid.."_rst", x=resetX, y=wy, width=resetW, height=widgetH}, row)
         ri:setStyleSheet(css.resetIcon)
         ri:echo("<center><span style='color:rgba(140,145,165,0.55);font-size:11px;'>↺</span></center>")
+        if opts.resetTooltip then ri:setToolTip(opts.resetTooltip) end
         ri:setClickCallback(function() closeDropdown(); opts.onReset(i, spec) end)
     end
 
@@ -976,14 +1129,24 @@ function Mux.ui.buildForm(parent, specs, opts)
                 name=uid.."_row", x=0, y=yPos, width=formW, height=divH,
             }, parent)
             divRow:setStyleSheet(css.dividerRow)
+            local secIdx = #sections + 1
+            sections[secIdx] = { collapsed = spec._collapsed == true }
+            curSec = secIdx
+            local arrow
             if spec.label and spec.label ~= "" then
-                local textW = math.min(math.max(60, #spec.label * 8 + 8), formW - padL - padR - 20)
+                arrow = Geyser.Label:new({
+                    name=uid.."_ar", x=padL, y=math.floor((divH-14)/2), width=12, height=14,
+                }, divRow)
+                arrow:setStyleSheet("background:transparent;border:none;color:rgba(170,175,195,0.8);font-size:10px;")
+                arrow:echo(sections[secIdx].collapsed and "▸" or "▾")
+                local lblX  = padL + 14
+                local textW = math.min(math.max(60, #spec.label * 8 + 8), formW - lblX - padR - 20)
                 local nl = Geyser.Label:new({
-                    name=uid.."_n", x=padL, y=math.floor((divH-14)/2), width=textW, height=14,
+                    name=uid.."_n", x=lblX, y=math.floor((divH-14)/2), width=textW, height=14,
                 }, divRow)
                 nl:setStyleSheet(css.dividerLabel)
                 nl:rawEcho(spec.label)
-                local lineX = padL + textW + 6
+                local lineX = lblX + textW + 6
                 local lw    = formW - lineX - padR
                 if lw > 4 then
                     local line = Geyser.Label:new({
@@ -991,12 +1154,23 @@ function Mux.ui.buildForm(parent, specs, opts)
                     }, divRow)
                     line:setStyleSheet(css.dividerLine)
                 end
+                local function toggle()
+                    local sec = sections[secIdx]
+                    sec.collapsed = not sec.collapsed
+                    arrow:echo(sec.collapsed and "▸" or "▾")
+                    closeDropdown()
+                    if relayout then relayout() end
+                end
+                divRow:setClickCallback(toggle)
+                nl:setClickCallback(toggle)
+                arrow:setClickCallback(toggle)
             else
                 local line = Geyser.Label:new({
                     name=uid.."_l", x=padL, y=math.floor(divH/2), width=formW-padL-padR, height=1,
                 }, divRow)
                 line:setStyleSheet(css.dividerLine)
             end
+            secLayout[#secLayout+1] = { kind="divider", obj=divRow, h=divH, secIdx=secIdx }
             yPos = yPos + divH
         else
         -- ── Resolve type aliases ──────────────────────────────────────────────
@@ -1016,6 +1190,7 @@ function Mux.ui.buildForm(parent, specs, opts)
             if     specType == "bool"   then specDisplay = "checkbox"
             elseif specType == "array"  then specDisplay = "cycler"
             elseif specType == "number" then specDisplay = "stepper"
+            elseif specType == "button" then specDisplay = "button"
             else                             specDisplay = "text"
             end
         end
@@ -1034,6 +1209,7 @@ function Mux.ui.buildForm(parent, specs, opts)
             name=uid.."_row", x=0, y=yPos, width=formW, height=thisH,
         }, parent)
         row:setStyleSheet(i % 2 == 1 and css.odd or css.even)
+        secLayout[#secLayout+1] = { kind="row", obj=row, h=thisH, secIdx=curSec }
 
         local wy        = math.floor((thisH - widgetH) / 2)
         local thisNameW = thisWidgetX - padL - 24
@@ -1054,7 +1230,7 @@ function Mux.ui.buildForm(parent, specs, opts)
             -- widget rectangle (inline) / row reference points (block)
             x = thisWidgetX, y = wy, width = thisWidgetW, height = widgetH, wy = wy,
             -- full-row geometry for block builders
-            formW = formW, padL = padL, padR = padR, rowH = rowH,
+            formW = formW, padL = padL, padR = padR, rowH = rowH, thisH = thisH,
             resetX = resetX, resetW = resetW, resetGap = resetGap,
             applyW = applyW, inputGap = inputGap, stepBtnW = stepBtnW,
             hasDesc = hasDesc, hideApply = opts.hideApply, thisNameW = thisNameW,
@@ -1064,10 +1240,11 @@ function Mux.ui.buildForm(parent, specs, opts)
             onChange = spec.writeFn or function() end,
             -- helpers
             closeDropdown = closeDropdown,
-            getScreenPos = opts.getContentScreenPos,
+            getScreenPos = getContentScreenPos,
             getActive = function() return activeDropdown end,
             setActive = function(o) activeDropdown = o end,
             onReset = opts.onReset, showReset = showReset,
+            resetTooltip = opts.resetTooltip,
         }
 
         if layout == "block" then
@@ -1078,15 +1255,203 @@ function Mux.ui.buildForm(parent, specs, opts)
             renderInlineReset(row, uid, spec, i, wy)
         end
 
+        -- Read-only lock: the widget still shows its state, but a dim scrim on top
+        -- greys it, swallows clicks, and carries the reason on hover. The QToolTip
+        -- rule is required — without it the tooltip inherits the scrim's dark
+        -- background with no text colour and renders black-on-black.
+        if spec.locked then
+            local lk = Geyser.Label:new({
+                name=uid.."_lk", x=0, y=0, width="100%", height="100%", fillBg=1,
+            }, row)
+            lk:setStyleSheet([[
+                QLabel { background-color: rgba(16,17,24,0.55); border: none; }
+                QToolTip {
+                    background-color: #1d2030; color: #e8ebf5;
+                    border: 1px solid rgba(255,255,255,0.18);
+                    padding: 5px 8px; border-radius: 4px;
+                }
+            ]])
+            if spec.lockedReason and spec.lockedReason ~= "" then lk:setToolTip(spec.lockedReason, 6) end
+            lk:setClickCallback(function() end)  -- swallow clicks so the widget under it can't toggle
+        end
+
         yPos = yPos + thisH
         end  -- divider else
     end
 
+    -- Reposition every divider/row for the current collapsed state, hiding rows in
+    -- collapsed sections and resizing the content host so the scrollbox + dialog fit.
+    relayout = function()
+        local y = 0
+        for _, e in ipairs(secLayout) do
+            if e.kind == "divider" then
+                e.obj:move(0, y); e.obj:show(); y = y + e.h
+            else
+                local sec = e.secIdx and sections[e.secIdx]
+                if sec and sec.collapsed then
+                    e.obj:hide()
+                else
+                    e.obj:move(0, y); e.obj:show(); y = y + e.h
+                end
+            end
+        end
+        formTotalHeight = y
+        local pw = (parent.get_width and parent:get_width()) or formW
+        if pw < 50 then pw = formW end
+        -- Keep the (dark) content label at least as tall as the viewport so the
+        -- ScrollBox's white Qt background never shows below short/collapsed content.
+        local minH = opts.minParentHeight
+        if type(minH) == "function" then minH = minH() end
+        minH = tonumber(minH) or 0
+        if parent.resize then parent:resize(pw, math.max(y, minH, 1)) end
+        if opts.onLayoutChange then opts.onLayoutChange(y) end
+    end
+    relayout()
+
     return {
-        totalHeight   = yPos,
+        totalHeight   = formTotalHeight,
         closeDropdown = closeDropdown,
+        relayout      = relayout,
         refresh       = function(idx) if refreshFns[idx] then refreshFns[idx]() end end,
         refreshAll    = function() for _, fn in pairs(refreshFns) do fn() end end,
         commitAll     = function() for _, fn in pairs(commitFns) do fn() end end,
     }
+end
+-- ── Multiline code/text editor (block) ────────────────────────────────────────
+-- A tall CommandLine for entering longer text or Lua. Registered as the "code"
+-- row type; set spec.rowHeight to grow it. Enter commits (Mudlet command lines
+-- submit on Enter); pasting preserves newlines. Used by the Action editor's Lua step.
+Mux.ui.registerWidget("code", function(row, c)
+    local spec, css, uid = c.spec, c.css, c.uid
+    local availW = c.formW - c.padL - c.padR
+    local topH   = c.hasDesc and 34 or 20
+
+    local nl = Geyser.Label:new({ name = uid.."_n", x = c.padL, y = 4, width = availW, height = 14 }, row)
+    nl:setStyleSheet(css.rowLabel); nl:rawEcho(spec.label or "")
+    if c.hasDesc then
+        local dl = Geyser.Label:new({ name = uid.."_d", x = c.padL, y = 18, width = availW, height = 13 }, row)
+        dl:setStyleSheet(css.rowDesc); dl:rawEcho(spec.desc or "")
+    end
+
+    local inH = math.max(40, (c.thisH or 150) - topH - 8)
+    local input = Geyser.CommandLine:new({ name = uid.."_i", x = c.padL, y = topH, width = availW, height = inH }, row)
+    input:setStyleSheet(css.textInput)
+    input:print(tostring((spec.readFn and spec.readFn()) or ""))
+
+    local function commit()
+        local text = input:getText() or ""
+        spec.writeFn(text)
+    end
+    input:setAction(commit)
+    return { commit = commit, refresh = function() input:print(tostring((spec.readFn and spec.readFn()) or "")) end }
+end, { rowHeight = 150, layout = "block" })
+
+-- ── Icon cascade (standalone reusable component) ──────────────────────────────
+-- A strip of small square icon buttons emanating from an origin in one of four
+-- directions. Themed through theme.ui like the form widgets (css key "iconBtn"),
+-- with per-cascade or per-item style overrides so it can be dressed to match
+-- titlebar icons or anything else. Not a form row — place it anywhere (on content,
+-- off an edge, inside a dialog).
+--
+--   local cas = Mux.ui.iconCascade(parent, {
+--       x = 4, y = 4, direction = "down", size = 22, gap = 4,
+--       items = {
+--           { id="edit", icon="⚙", tooltip="Edit", onClick=function(item,event) ... end },
+--           { id="add",  icon="＋", tooltip="Add",  onClick=function() ... end },
+--       },
+--   })
+--   cas:show(); cas:hide(); cas:toggle()
+--   cas:setItems({...}); cas:setDirection("left"); cas:setOrigin(x,y); cas:destroy()
+--
+-- opts: x,y origin px (first icon, default 0,0) · direction up|down|left|right
+-- (default down) · size icon px (22) · gap px (4) · items {id?,icon,tooltip?,
+-- onClick?,css?} · css override for all icons · name base Geyser name · visible ·
+-- scrim (bool) draw a full-window click-catcher behind the icons that dismisses on
+-- outside-click · dismissOnClick (bool) hide after an item is chosen · onDismiss fn.
+local _cascadeSeq = 0
+function Mux.ui.iconCascade(parent, opts)
+    opts = opts or {}
+    _cascadeSeq = _cascadeSeq + 1
+    local base   = opts.name or ("mux_cascade_" .. _cascadeSeq)
+    local theme  = Mux.activeTheme and Mux.activeTheme() or {}
+    local css    = deriveCss(theme.ui or theme.settingsUi)
+    local defCss = opts.css or css.iconBtn
+
+    local S = {
+        x = opts.x or 0, y = opts.y or 0,
+        direction = opts.direction or "down",
+        size = opts.size or 22, gap = opts.gap or 4,
+        items = opts.items or {},
+        visible = (opts.visible ~= false),
+        scrim = opts.scrim and true or false,
+        dismissOnClick = opts.dismissOnClick and true or false,
+        onDismiss = opts.onDismiss,
+        _labels = {}, _scrim = nil, _gen = 0,
+    }
+
+    local handle = {}
+
+    local function clear()
+        for _, lbl in ipairs(S._labels) do pcall(function() lbl:hide() end) end
+        S._labels = {}
+        if S._scrim then pcall(function() S._scrim:hide() end) end
+    end
+
+    local function place(i)
+        local step = S.size + S.gap
+        local d, ox, oy = S.direction, S.x, S.y
+        if d == "up"    then return ox, oy - (i - 1) * step end
+        if d == "left"  then return ox - (i - 1) * step, oy end
+        if d == "right" then return ox + (i - 1) * step, oy end
+        return ox, oy + (i - 1) * step                        -- down (default)
+    end
+
+    local function build()
+        clear()
+        S._gen = S._gen + 1
+        if not S.visible then return end
+        -- Optional full-window scrim behind the icons: catches outside clicks and
+        -- dismisses. Attached to top-level Geyser so it covers everything.
+        if S.scrim and getMainWindowSize then
+            local sw, sh = getMainWindowSize()
+            S._scrim = S._scrim or Geyser.Label:new(
+                { name = base .. "_scrim", x = 0, y = 0, width = sw, height = sh, fillBg = 1 }, Geyser)
+            pcall(function() resizeWindow(S._scrim.name, sw, sh) end)
+            S._scrim:setStyleSheet("background-color: rgba(0,0,0,0); border: none;")
+            S._scrim:setClickCallback(function() handle:hide(); if S.onDismiss then S.onDismiss() end end)
+            S._scrim:show(); if S._scrim.raiseAll then S._scrim:raiseAll() end
+        end
+        for i, item in ipairs(S.items) do
+            local ix, iy = place(i)
+            local lbl = Geyser.Label:new({
+                name = base .. "_" .. S._gen .. "_" .. tostring(item.id or i),
+                x = ix, y = iy, width = S.size, height = S.size,
+            }, parent)
+            lbl:setStyleSheet(item.css or defCss)
+            lbl:echo("<center>" .. tostring(item.icon or "") .. "</center>")
+            if item.tooltip then pcall(function() lbl:setToolTip(item.tooltip, 6) end) end
+            pcall(function() lbl:setCursor("PointingHand") end)
+            local captured = item
+            lbl:setClickCallback(function(event)
+                if event and event.button and event.button ~= "LeftButton" then return end
+                if S.dismissOnClick then handle:hide() end
+                if captured.onClick then captured.onClick(captured, event) end
+                if captured.fn then captured.fn() end   -- legacy item shape
+            end)
+            lbl:show(); if lbl.raiseAll then lbl:raiseAll() else lbl:raise() end
+            S._labels[#S._labels + 1] = lbl
+        end
+    end
+    build()
+
+    function handle:show()      if not S.visible then S.visible = true; build() end end
+    function handle:hide()      if S.visible then S.visible = false; clear() end end
+    function handle:toggle()    if S.visible then handle:hide() else handle:show() end end
+    function handle:isVisible() return S.visible end
+    function handle:setItems(items)   S.items = items or {}; build() end
+    function handle:setDirection(dir) S.direction = dir or "down"; build() end
+    function handle:setOrigin(x, y)   S.x, S.y = x or S.x, y or S.y; build() end
+    function handle:raise()     for _, l in ipairs(S._labels) do pcall(function() (l.raiseAll or l.raise)(l) end) end end
+    function handle:destroy()   clear() end
+    return handle
 end

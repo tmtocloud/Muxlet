@@ -47,8 +47,29 @@ function MuxTab:init(opts)
     self.renamable   = true
     self.closeable   = true
     self.movable     = true
+    -- receivable: may this surface (as a tab-bar host) accept tabs dragged from
+    -- other bars? Default yes; Settings/Properties dialog bars set it false. A tab
+    -- that hosts sub-tabs inherits its host's refusal so nested dialog bars are
+    -- also off-limits as drop destinations.
+    if opts.host and opts.host.receivable == false then self.receivable = false end
     self.contentable = true
     self.nameAlign   = "center"
+    -- A tab is a token scope, same as a pane: local overrides cascade
+    -- fallback < theme < global < local. Seeded from a restored workspace.
+    self._tokens     = {}
+    if opts.tokens then
+        for k, v in pairs(opts.tokens) do self._tokens[k] = v end
+    end
+    -- A tab is also a reactive subject (see conditional.lua): it can carry rules,
+    -- including the connection-awareness preset. Migrate legacy/new fields.
+    self.rules = {}
+    if Mux._migrateLegacyRules then
+        Mux._migrateLegacyRules(self, {
+            rules = opts.rules, condition = opts.condition,
+            actionTrue = opts.actionTrue, actionFalse = opts.actionFalse,
+            connectionAware = opts.connectionAware,
+        })
+    end
     -- As a host, this flag gates whether right-click context menus appear on the
     -- tabs it contains (the same gate MuxPane:init sets). Without it, right-clicking
     -- a sub-tab does nothing, since the sub-tab's host is a MuxTab, not a pane.
@@ -77,18 +98,18 @@ function MuxTab:init(opts)
         -- (Pill/Circle) clip cleanly instead of showing a square fill underneath.
         x = "0%", y = "0%", width = "50%", height = "100%", fillBg = 0,
     }, host._tabBarBox)
-    label:setStyleSheet(theme.tabInactiveCss or "")
-    host:_echoTabLabel(label, self.name, false, false, theme)
+    label:setStyleSheet(Mux.css("tabInactive", self) or "")
+    host:_echoTabLabel(label, self.name, false, false, theme, self.nameAlign, false, self)
     -- Re-echo with the hover text colour on enter/leave (Qt won't recolour rich
     -- text via ::hover). Reads live state so it tracks active + theme changes.
     local tabObj = self
     label:setOnEnter(function()
         local th = Mux.activeTheme()
-        host:_echoTabLabel(label, tabObj.name, host._activeTabId == tabObj.id, false, th, tabObj.nameAlign, true)
+        host:_echoTabLabel(label, tabObj.name, host._activeTabId == tabObj.id, false, th, tabObj.nameAlign, true, tabObj)
     end)
     label:setOnLeave(function()
         local th = Mux.activeTheme()
-        host:_echoTabLabel(label, tabObj.name, host._activeTabId == tabObj.id, false, th, tabObj.nameAlign, false)
+        host:_echoTabLabel(label, tabObj.name, host._activeTabId == tabObj.id, false, th, tabObj.nameAlign, false, tabObj)
     end)
     self.label     = label
     self.content   = content
@@ -96,15 +117,18 @@ function MuxTab:init(opts)
 end
 
 -- nameAlign is an optional 6th arg ("left", "center", "right"); defaults to "center".
-function MuxSurface:_echoTabLabel(label, name, isActive, isChosen, theme, nameAlign, hovered)
-    local fs = theme.tabFontSize or 11
+function MuxSurface:_echoTabLabel(label, name, isActive, isChosen, theme, nameAlign, hovered, scope)
+    -- When a tab scope is passed, text/size resolve through the token cascade so a
+    -- tab's local overrides show; otherwise fall back to the global theme scalars.
+    local function R(key, fb) if scope then return Mux.tok(key, scope) end return fb end
+    local fs = R("tab.fontSize", theme.tabFontSize or 11)
     -- Text colour is set inline: Qt's QLabel::hover{color} doesn't recolour rich
     -- text, so hover is handled by re-echoing with the hover colour (see addTab).
     local tc
-    if     isChosen then tc = theme.tabMovingTextColor   or "#ffaaaa"
-    elseif hovered  then tc = theme.tabHoverTextColor     or "#ffffff"
-    elseif isActive then tc = theme.tabActiveTextColor    or "#ffffff"
-    else                 tc = theme.tabInactiveTextColor  or "#ffffff"
+    if     isChosen then tc = R("tab.moving.text.color",   theme.tabMovingTextColor   or "#ffaaaa")
+    elseif hovered  then tc = R("tab.hover.text.color",    theme.tabHoverTextColor     or "#ffffff")
+    elseif isActive then tc = R("tab.active.text.color",   theme.tabActiveTextColor    or "#ffffff")
+    else                 tc = R("tab.inactive.text.color", theme.tabInactiveTextColor  or "#ffffff")
     end
     local spanFmt = "<span style='color:" .. tc .. ";font-size:" .. tostring(fs) .. "px;font-weight:bold;'>%s</span>"
     local span    = string.format(spanFmt, name)
@@ -116,6 +140,51 @@ function MuxSurface:_echoTabLabel(label, name, isActive, isChosen, theme, nameAl
     else
         label:echo(string.format("<center>%s</center>", span))
     end
+end
+
+-- Restyle one host's tab bar + every tab label from the token cascade. Shared by
+-- MuxPane and MuxTab (both are MuxSurfaces) so there is ONE styling path: the same
+-- Mux.css(...) element templates panes use, resolved per-tab so a tab's local
+-- overrides show. Replaces the old settings-driven _applyTabStyle.
+function MuxSurface:_restyleTabBar()
+    if not self._tabsEnabled then return end
+    local theme = Mux.activeTheme() or {}
+    local h     = tonumber(Mux.tok("tabBar.height")) or 30
+    if self._tabBar then
+        self._tabBar:resize(nil, Mux._toPx(h)); self._tabBar:reposition()
+        self._tabBar:setStyleSheet(Mux.css("tabBar", self) or "")
+    end
+    if self._tabViewport then
+        self._tabViewport:move(nil, Mux._toPx(h)); self._tabViewport:reposition()
+    end
+    for _, tab in ipairs(self._tabs or {}) do
+        if tab.label then
+            local isActive = (self._activeTabId == tab.id)
+            tab.label:setStyleSheet(Mux.css(isActive and "tabActive" or "tabInactive", tab))
+            self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, tab.nameAlign, false, tab)
+        end
+    end
+    if self._tabBarBox then self._tabBarBox:organize() end
+    if self.content then Mux._relayoutContent(self) end
+end
+
+-- Restyle every live tab host. Called from refreshStyling() after a theme switch
+-- or global token edit (analogous to the all-panes applyTheme pass).
+function Mux._restyleAllTabs()
+    for _, host in pairs(Mux._tabHosts or {}) do
+        if host._tabsEnabled then pcall(function() host:_restyleTabBar() end) end
+    end
+end
+
+-- A tab is a scope, so refreshStyling(tab) — fired by a per-tab local token edit
+-- in Properties — restyles just that tab's label via the same element templates.
+function MuxTab:applyTheme()
+    local host = self.pane
+    if not (host and self.label) then return end
+    local theme    = Mux.activeTheme() or {}
+    local isActive = (host._activeTabId == self.id)
+    self.label:setStyleSheet(Mux.css(isActive and "tabActive" or "tabInactive", self))
+    host:_echoTabLabel(self.label, self.name, isActive, false, theme, self.nameAlign, false, self)
 end
 
 function MuxPane._echoTabPlaceholder(contentBg, tabName, paneId, tabId)
@@ -201,7 +270,7 @@ function MuxSurface:_clearDragSpace()
     for _, tab in ipairs(self._tabs or {}) do
         if tab.label then
             local isActive = (self._activeTabId == tab.id)
-            self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, tab.nameAlign)
+            self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, tab.nameAlign, false, tab)
         end
     end
 end
@@ -498,8 +567,21 @@ local function buildTabInfrastructure(host)
     getOrCreateOverlay(host)
 end
 
+-- True when the surface hosts content whose def forbids tabs (e.g. the console).
+function Mux._surfaceForbidsTabs(surface)
+    local c   = surface and surface._activeContent
+    local def = c and Mux._content and Mux._content[c]
+    return def ~= nil and def.noTabs == true
+end
+
 function MuxSurface:enableTabs(opts)
     opts = opts or {}
+    -- Some content (the Mudlet console) can't be containerized into a tab viewport;
+    -- its def sets noTabs. Refuse to enable tabs on a surface hosting such content.
+    if Mux._surfaceForbidsTabs and Mux._surfaceForbidsTabs(self) then
+        Mux._log("enableTabs refused: active content forbids tabs")
+        return
+    end
     -- Tab objects (sub-tab hosts) have a .pane back-reference; panes do not.
     -- Sub-tab hosts use a different code path for infrastructure setup.
     local isSubTabHost = (self.pane ~= nil)
@@ -607,35 +689,13 @@ function MuxSurface:removeTab(tabId)
     self:_relayoutTabLabels()
     if not (self._activeTabId == tabId) then tab.content:hide() end
     if tab._connScreen then tab._connScreen:hide() end
-    if tab._connectionAware then
-        local key = "tab_" .. self.id .. "_" .. tab.id
-        Mux._connAware[key] = nil
-    end
+    -- Tear down the tab's reactive rules (drops it from the engine and kills any
+    -- managed triggers, e.g. a capture rule's line trigger).
+    if Mux._deregisterRuleSubject then Mux._deregisterRuleSubject(tab) end
     if tab._activeContent and Mux._content then
         local def = Mux._content[tab._activeContent]
-        if def then
-            if def.singleton and def._activeTargetRef == tab then
-                def._activeTargetRef = nil
-            end
-            if type(def.remove) == "function" then pcall(def.remove, tab) end
-        end
-        if Mux._destroyContentWidgets then Mux._destroyContentWidgets(tab) end
-        tab._activeContent = nil
-    end
-    -- Clean up content on any sub-tabs this tab hosted.
-    if tab._tabs then
-        for _, subTab in ipairs(tab._tabs) do
-            if subTab._activeContent and Mux._content then
-                local subDef = Mux._content[subTab._activeContent]
-                if subDef then
-                    if subDef.singleton and subDef._activeTargetRef == subTab then
-                        subDef._activeTargetRef = nil
-                    end
-                    if type(subDef.remove) == "function" then pcall(subDef.remove, subTab) end
-                end
-                if Mux._destroyContentWidgets then Mux._destroyContentWidgets(subTab) end
-                subTab._activeContent = nil
-            end
+        if def and def.singleton and def._activeTargetRef == tab then
+            def._activeTargetRef = nil
         end
     end
     if tab._tabsEnabled and tab._gid then
@@ -686,30 +746,52 @@ function MuxSurface:activateTab(tabId)
     if tab then self:_activateTabObj(tab) end
 end
 
+-- Per-tab label stylesheet from the token cascade, honoring active/parent state so
+-- a tab's local overrides survive activate/deactivate (not just the bulk restyle).
+function MuxSurface:_tabCssFor(tab, isActive)
+    local el
+    if isActive then
+        el = (tab._isSubTabHost or tab._tabsEnabled) and "tabActiveParent" or "tabActive"
+    else
+        el = "tabInactive"
+    end
+    return Mux.css(el, tab) or ""
+end
+
 function MuxSurface:_activateTabObj(tab)
     local theme = Mux.activeTheme()
     if self._activeTabId and self._activeTabId ~= tab.id then
         local cur = self:_findTab(self._activeTabId)
         if cur then
-            cur.label:setStyleSheet(theme.tabInactiveCss or "")
-            self:_echoTabLabel(cur.label, cur.name, false, false, theme, cur.nameAlign)
+            cur.label:setStyleSheet(self:_tabCssFor(cur, false))
+            self:_echoTabLabel(cur.label, cur.name, false, false, theme, cur.nameAlign, false, cur)
             cur.content:hide()
         end
     end
     self._activeTabId = tab.id
     -- When the activated tab itself hosts sub-tabs, use a borderless-bottom style so
     -- the tab visually merges with the child tab bar below it (visual continuity).
-    if tab._isSubTabHost or tab._tabsEnabled then
-        tab.label:setStyleSheet(theme.tabActiveParentCss or theme.tabActiveCss or "")
-        if tab._tabBar then
-            tab._tabBar:setStyleSheet(theme.subTabBarCss or theme.tabBarCss or "")
-        end
-    else
-        tab.label:setStyleSheet(theme.tabActiveCss or "")
+    tab.label:setStyleSheet(self:_tabCssFor(tab, true))
+    if (tab._isSubTabHost or tab._tabsEnabled) and tab._tabBar then
+        tab._tabBar:setStyleSheet(Mux.css("subTabBar", tab) or theme.subTabBarCss or theme.tabBarCss or "")
     end
-    self:_echoTabLabel(tab.label, tab.name, true, false, theme, tab.nameAlign)
+    self:_echoTabLabel(tab.label, tab.name, true, false, theme, tab.nameAlign, false, tab)
     tab.content:show()
     if Mux._relayoutContent then Mux._relayoutContent(tab) end
+    -- Auto-fit an open tabbed dialog (Settings / Properties) to the now-active
+    -- leaf. No-op when this surface isn't part of that dialog or height is unchanged.
+    if Mux._fitDialog and Mux._fitDialog.outer and Mux._fitDialogToActiveTab then
+        pcall(Mux._fitDialogToActiveTab, Mux._fitDialog)
+    end
+    -- The active tab's content contributes to the owning pane's titlebar (settings
+    -- icons + right-click menu). Re-sync that titlebar so switching tabs shows or
+    -- hides the right content controls.
+    local root = self
+    while root and root.pane do root = root.pane end
+    if root and root._layoutTitlebarButtons then
+        root._contentTbSig = nil
+        pcall(function() root:_layoutTitlebarButtons() end)
+    end
     Mux._scheduleAutoSave()
 end
 
@@ -720,8 +802,8 @@ function MuxSurface:renameTab(tabId, newName)
     tab.name = newName
     local theme    = Mux.activeTheme()
     local isActive = (self._activeTabId == tabId)
-    tab.label:setStyleSheet(isActive and (theme.tabActiveCss or "") or (theme.tabInactiveCss or ""))
-    self:_echoTabLabel(tab.label, newName, isActive, false, theme, tab.nameAlign)
+    tab.label:setStyleSheet(self:_tabCssFor(tab, isActive))
+    self:_echoTabLabel(tab.label, newName, isActive, false, theme, tab.nameAlign, false, tab)
     if tab.contentBg and not tab._activeContent then
         MuxPane._echoTabPlaceholder(tab.contentBg, newName, self.id, tabId)
         tab.contentBg:show()
@@ -736,7 +818,7 @@ function MuxSurface:setTabNameAlign(tabId, align)
     tab.nameAlign = align
     local theme    = Mux.activeTheme()
     local isActive = (self._activeTabId == tabId)
-    self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, align)
+    self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, align, false, tab)
     Mux._scheduleAutoSave()
 end
 
@@ -789,7 +871,7 @@ function MuxSurface:_wireTabLabel(tab)
             local dropCss = Mux.activeTheme().tabDropTargetBarCss
                          or Mux.activeTheme().tabBarCss or ""
             for _, p in pairs(Mux._tabHosts) do
-                if p ~= pane and p._tabsEnabled and p._tabBar then
+                if p ~= pane and p._tabsEnabled and p._tabBar and p.receivable ~= false then
                     p._tabBar:setStyleSheet(dropCss)
                 end
             end
@@ -801,6 +883,7 @@ function MuxSurface:_wireTabLabel(tab)
         Mux._showTabDragGhost(tab.name, cursorConsX, cursorConsY)
 
         local targetPane = tabBarAtCursor(cursorConsX, cursorConsY)
+        if targetPane and targetPane.receivable == false then targetPane = nil end
         if targetPane then
             local excludeId = (targetPane == pane) and tab.id or nil
             local idx = targetPane:_calcInsertIdx(cursorConsX, excludeId)
@@ -920,10 +1003,8 @@ function Mux._resetOverlay()
 
     if mt and mt.tab and mt.fromPane then
         local isActive = (mt.fromPane._activeTabId == mt.tab.id)
-        mt.tab.label:setStyleSheet(isActive
-            and (theme.tabActiveCss or "")
-            or  (theme.tabInactiveCss or ""))
-        mt.fromPane:_echoTabLabel(mt.tab.label, mt.tab.name, isActive, false, theme, mt.tab.nameAlign)
+        mt.tab.label:setStyleSheet(mt.fromPane:_tabCssFor(mt.tab, isActive))
+        mt.fromPane:_echoTabLabel(mt.tab.label, mt.tab.name, isActive, false, theme, mt.tab.nameAlign, false, mt.tab)
     end
 end
 
@@ -946,6 +1027,9 @@ end
 
 function MuxSurface:_receiveTab(tab, fromPane, insertPos)
     if not tab.movable then return end
+    -- A bar can refuse to be a drop destination (e.g. Settings/Properties dialog
+    -- bars). movable governs leaving a bar; receivable governs accepting into one.
+    if self.receivable == false then return end
     if not self._tabsEnabled then self:enableTabs({ noDefaultTab = true }) end
 
     -- A tab's properties dialog binds to its host at open time; moving the tab to a
@@ -993,10 +1077,14 @@ function MuxSurface:_receiveTab(tab, fromPane, insertPos)
     local newLabel = Geyser.Label:new({
         name = self._gid .. "_tl_" .. tab.id,
         sizePolicy = "Dynamic",
-        x = "0%", y = "0%", width = "50%", height = "100%", fillBg = 1,
+        -- fillBg = 0 so the rounded tab CSS is the sole painter (matches MuxTab:init);
+        -- fillBg = 1 here would paint a square palette fill under large radii.
+        x = "0%", y = "0%", width = "50%", height = "100%", fillBg = 0,
     }, self._tabBarBox)
-    newLabel:setStyleSheet(theme.tabInactiveCss or "")
-    self:_echoTabLabel(newLabel, tab.name, false, false, theme, tab.nameAlign)
+    -- Resolve from the moved tab's own scope so its local overrides (shape, font,
+    -- colours) carry across the move instead of reverting to the global look.
+    newLabel:setStyleSheet(Mux.css("tabInactive", tab) or "")
+    self:_echoTabLabel(newLabel, tab.name, false, false, theme, tab.nameAlign, false, tab)
     self._tabBarBox:organize()
     tab.label = newLabel
 
@@ -1007,6 +1095,9 @@ function MuxSurface:_receiveTab(tab, fromPane, insertPos)
 
     self:_wireTabLabel(tab)
     self:_activateTabObj(tab)
+    -- Restyle the whole destination bar from the cascade so the moved tab and its
+    -- neighbours show the correct active/inactive look with per-tab overrides.
+    self:_restyleTabBar()
 
     -- Re-apply active content after the cross-pane move. Geyser's auto_hidden
     -- flags on child widgets can survive the changeContainer/show cycle in an
@@ -1043,6 +1134,29 @@ function MuxSurface:_showTabContextMenu(tab, gx, gy)
         items[#items+1] = { text = "⚙  Properties", fn = function()
             Mux.showTabProperties(self, tab)
         end }
+    end
+
+    -- Settings published by the tab's active content (capture, buttons, …). These
+    -- mirror the content's titlebar icons so they're reachable from the tab menu too.
+    local cdef = tab._activeContent and Mux._content and Mux._content[tab._activeContent]
+    if cdef and cdef.titlebarElements then
+        local ctx   = { pane = tab.pane or self, tab = tab, isTab = true, content = cdef }
+        local extra = {}
+        for _, s in ipairs(cdef.titlebarElements) do
+            if s.menuText then
+                local ok, vis = pcall(s.visible or function() return true end, ctx)
+                if ok and vis then extra[#extra+1] = s end
+            end
+        end
+        table.sort(extra, function(a, b) return (a.menuOrder or 500) < (b.menuOrder or 500) end)
+        if #extra > 0 then
+            if #items > 0 then items[#items+1] = { sep = true } end
+            for _, s in ipairs(extra) do
+                local txt = (type(s.menuText) == "function") and s.menuText(ctx) or s.menuText
+                local run = s.run
+                items[#items+1] = { text = txt, fn = run and function() run(ctx) end or nil }
+            end
+        end
     end
 
     local contentNames = Mux._listContent and Mux._listContent() or {}
@@ -1082,6 +1196,23 @@ function MuxSurface:_serializeTabs()
         if tab._connectionAware          then tabEntry.connectionAware  = true  end
         if tab.tabsLocked                then tabEntry.tabsLocked       = true  end
         if tab.propertiesButton == false then tabEntry.propertiesButton = false end
+        -- Persist any non-preset rules (the connection preset round-trips via the
+        -- connectionAware flag above, so exclude it to avoid a duplicate on load).
+        if Mux._serializeRules then
+            local rs = Mux._serializeRules(tab)
+            if rs then
+                local keep = {}
+                for _, r in ipairs(rs) do
+                    local skip = type(r.id) == "string" and r.id:find("^mux:capture")
+                    if not skip then keep[#keep+1] = r end
+                end
+                if #keep > 0 then tabEntry.rules = keep end
+            end
+        end
+        if tab._tokens and next(tab._tokens) then
+            local tk = {}; for k, v in pairs(tab._tokens) do tk[k] = v end
+            tabEntry.tokens = tk
+        end
         if tab._tabsEnabled then
             local subTabs, subActiveName = tab:_serializeTabs()
             if subTabs then
@@ -1131,8 +1262,8 @@ function MuxSurface:_applyTabTheme()
     end
     for _, tab in ipairs(self._tabs) do
         local isActive = (self._activeTabId == tab.id)
-        tab.label:setStyleSheet(isActive and (theme.tabActiveCss or "") or (theme.tabInactiveCss or ""))
-        self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, tab.nameAlign)
+        tab.label:setStyleSheet(self:_tabCssFor(tab, isActive))
+        self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, tab.nameAlign, false, tab)
         if tab.contentBg then tab.contentBg:setStyleSheet(theme.contentCss or "") end
         if self._refreshTabConnScreen then self:_refreshTabConnScreen(tab) end
     end

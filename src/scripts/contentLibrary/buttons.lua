@@ -187,51 +187,20 @@ render = function(target)
         st.widgets[#st.widgets + 1] = lbl
     end
 
-    -- Edit affordances live in the top-right corner as small overlay icons. They
-    -- don't reserve layout space, so the grid shown while editing is exactly the
-    -- locked-in result. The resting gear is faint and brightens on hover.
-    -- Edit affordances live in the top-right corner as small overlay icons. They
-    -- don't reserve layout space, so the grid shown while editing is exactly the
-    -- locked-in result. The resting gear is faint and brightens on hover. When the
-    -- grid is locked, none of this renders — the content looks final.
-    if not cfg.locked then
-        local gear = Geyser.Label:new({ name = g .. "_bgear_" .. gen, x = "-26", y = 2, width = 22, height = 22 }, C)
-        gear:setStyleSheet(editing
-            and [[QLabel{background:rgba(255,210,90,0.92);color:#222;border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}]]
-            or  [[QLabel{background:rgba(40,44,60,0.30);color:rgba(200,205,225,0.45);border-radius:4px;qproperty-alignment:AlignCenter;font-size:13px;}QLabel::hover{background:rgba(60,66,88,0.92);color:rgba(225,230,250,0.95);}]])
-        gear:echo("<center>⚙</center>")
-        gear:setToolTip(editing and "Exit edit mode" or "Edit buttons")
-        gear:setClickCallback(function() st.editing = not st.editing; render(target) end)
-        st.widgets[#st.widgets + 1] = gear
-
-        if editing then
-            local addI = Geyser.Label:new({ name = g .. "_badd_" .. gen, x = "-52", y = 2, width = 22, height = 22 }, C)
-            addI:setStyleSheet([[QLabel{background:rgba(40,90,50,0.92);color:#cfe;border-radius:4px;qproperty-alignment:AlignCenter;font-size:15px;font-weight:bold;}QLabel::hover{background:rgba(55,115,65,0.96);}]])
-            addI:echo("<center>＋</center>")
-            addI:setToolTip("Add button")
-            addI:setClickCallback(function()
-                cfg.buttons[#cfg.buttons + 1] = { label = "Button", width = 1, bg = "#1c2a4e", fg = "#96c8ff",
-                    fontSize = 12, shape = "rounded", action = { type = "command", text = "" } }
-                -- Just add it; the user clicks the new button (in edit mode) to
-                -- customise it.  Auto-opening the editor here was intrusive.
-                scheduleSave(); render(target)
-            end)
-            st.widgets[#st.widgets + 1] = addI
-
-            local setI = Geyser.Label:new({ name = g .. "_bgset_" .. gen, x = "-78", y = 2, width = 22, height = 22 }, C)
-            setI:setStyleSheet([[QLabel{background:rgba(40,50,80,0.92);color:#cde;border-radius:4px;qproperty-alignment:AlignCenter;font-size:17px;font-weight:bold;}QLabel::hover{background:rgba(55,68,110,0.96);}]])
-            setI:echo("<center>⊞</center>")
-            setI:setToolTip("Grid settings")
-            setI:setClickCallback(function() openGridSettings(target) end)
-            st.widgets[#st.widgets + 1] = setI
-        end
-    end
+    -- Edit affordances are no longer drawn on the content. Edit mode is toggled from
+    -- the titlebar wrench, which fans out Add + Grid-Settings as a titlebar cascade
+    -- (see the content's titlebarElements). Grid buttons themselves become editable
+    -- while st.editing is on.
 
     -- Re-creating the button labels above puts them at the top of the local
     -- stacking order, which would cover an open editor / grid-settings dialog
     -- (those re-render on every live-preview keystroke).  Re-assert dialog z-order
     -- so dialogs always draw above the grid they are editing.
     if Mux.raiseFloatingPanes then Mux.raiseFloatingPanes() end
+    -- raiseFloatingPanes lifts pane frames back above the titlebar edit cascade;
+    -- re-raise it so titlebar-spawned content stays above pane/tab content.
+    local st2 = STATE_BY_TARGET[target.id]
+    if st2 and st2.editCascade then st2.editCascade:raise() end
 end
 
 -- ── Button editor (dialog) ────────────────────────────────────────────────────────
@@ -395,22 +364,31 @@ openGridSettings = function(target)
         { label = "Row Height (px, when Fixed)", type = "number", min = 20, max = 120, step = 2,
           readFn = function() return cfg.rowH end, writeFn = function(v) cfg.rowH = v; preview() end },
         { label = "Lock (hide editor)", type = "toggle",
-          desc = "Hide the gear and edit controls so the grid looks final. Bring them back with:  mux reveal <pane id>",
+          desc = "Hide the edit wrench so the grid looks final. Bring it back with:  mux reveal <pane id>",
           readFn = function() return cfg.locked or false end,
-          writeFn = function(v) cfg.locked = v; scheduleSave(); preview() end },
+          writeFn = function(v)
+              cfg.locked = v; scheduleSave()
+              if v then
+                  local st = STATE_BY_TARGET[target.id]
+                  if st then
+                      st.editing = false
+                      if st.editCascade then st.editCascade:destroy(); st.editCascade = nil end
+                  end
+              end
+              preview()
+              local p = target.pane or target      -- refresh the owning pane's titlebar
+              if p._layoutTitlebarButtons then p:_layoutTitlebarButtons() end
+          end },
     }
-    local cw = d.content:get_width(); if cw < 50 then cw = 356 end
-    local form = Geyser.Label:new({ name = d._gid .. "_gs_form", x = 0, y = 0, width = cw, height = Mux.ui.formHeight(rows) }, d.content)
-    form:setStyleSheet("background:rgba(18,18,26,1);border:none;")
-    Mux.ui.buildForm(form, rows, { width = cw, prefix = d._gid .. "_gs", hideApply = true })
+    d:mountForm(rows, { prefix = d._gid .. "_gs", hideApply = true })
     d.onClose = function() scheduleSave() end
-    -- Locking hides the edit gear, so warn before closing — mirrors the pane confirm
-    -- for a hidden titlebar/Properties, pointing at `mux reveal` as the way back.
+    -- Locking hides the edit wrench, so warn before closing — pointing at
+    -- `mux reveal` as the way back.
     if d.closeBtn then
         d.closeBtn:setClickCallback(function(event)
             if event.button ~= "LeftButton" then return end
             if cfg.locked then
-                local msg = "This grid is <b>locked</b> — the edit gear is now hidden.<br/>"
+                local msg = "This grid is <b>locked</b> — the edit wrench is now hidden.<br/>"
                          .. "To bring the editor back, run: "
                          .. "<tt style='color:#8ab4ff;'>mux reveal " .. (target.id or "&lt;id&gt;") .. "</tt>"
                 Mux._showPropsCloseConfirm(msg, function() d:close() end)
@@ -423,10 +401,84 @@ end
 
 -- ── Content registration ──────────────────────────────────────────────────────────
 
+-- ── Edit mode driven from the titlebar wrench ─────────────────────────────────
+-- The wrench toggles edit mode. Entering edit mode fans out a titlebar cascade
+-- (Add button, Grid settings) anchored under the wrench; leaving edit mode
+-- collapses it. Nothing is drawn on the content itself.
+local function buttonsHost(ctx) return ctx.tab or ctx.pane end
+
+local function showEditCascade(ctx, host, st)
+    local theme  = Mux.activeTheme() or {}
+    local btnCss = theme.btnCss or "background-color: rgba(40,46,72,240); border: 1px solid rgba(100,160,255,0.35); border-radius: 3px;"
+    local txt    = theme.btnTextColor or "#cfe"
+    local size   = theme.btnSize or 22
+    -- Anchor under the pane's wrench label if we can find it; else a sane fallback.
+    local wl = ctx.pane and ctx.pane._contentTbBtns and ctx.pane._contentTbBtns["buttons.settings"]
+    local label = wl and wl.label
+    local sx, sy = 40, 40
+    if label and label.get_x then
+        sx = label:get_x()
+        sy = label:get_y() + (label:get_height() or size)
+    end
+    if st.editCascade then st.editCascade:destroy() end
+    st.editCascade = Mux.ui.iconCascade(Geyser, {
+        name = "mux_btnedit_" .. tostring(host.id),
+        x = math.floor(sx), y = math.floor(sy), direction = "down", size = size, gap = 4,
+        items = {
+            { id = "add", css = btnCss, tooltip = "Add button",
+              icon = string.format("<font color='%s'>＋</font>", txt),
+              onClick = function()
+                  local cfg = configFor(host.id)
+                  cfg.buttons[#cfg.buttons + 1] = { label = "Button", width = 1, bg = "#1c2a4e",
+                      fg = "#96c8ff", fontSize = 12, shape = "rounded", action = { type = "command", text = "" } }
+                  scheduleSave(); render(host)
+              end },
+            { id = "grid", css = btnCss, tooltip = "Grid settings",
+              icon = string.format("<font color='%s'>⊞</font>", txt),
+              onClick = function() openGridSettings(host) end },
+        },
+    })
+end
+
+local function toggleButtonsEdit(ctx)
+    local host = buttonsHost(ctx)
+    local st   = STATE_BY_TARGET[host.id]; if not st then return end
+    st.editing = not st.editing
+    if not st.editing and st.editCascade then
+        st.editCascade:destroy(); st.editCascade = nil
+    end
+    render(host)                     -- redraw grid (edit visuals) + raise panes first
+    if st.editing then
+        showEditCascade(ctx, host, st)   -- then fan the cascade out on top
+    end
+end
+
 Mux.registerContent("mux_buttons", {
     name        = "Button Grid",
     description = "A configurable grid of buttons bound to commands or registered actions",
     singleton   = false,
+
+    -- The wrench toggles edit mode; entering fans out Add + Grid-Settings as a
+    -- titlebar cascade, leaving collapses it. A wrench (not the gear) marks
+    -- per-content settings apart from the main Muxlet gear.
+    titlebarElements = {
+        {
+            id = "buttons.settings", side = "left", group = "content", order = 0, priority = 105,
+            icon = "🔧", tooltip = "Edit buttons",
+            visible = function(ctx)
+                local host = ctx and (ctx.tab or ctx.pane)
+                if not host then return true end
+                local cfg = configFor(host.id)
+                return not (cfg and cfg.locked)     -- Lock hides the wrench; `mux reveal` restores it
+            end,
+            onClick = function(ctx, event)
+                if not event or event.button == "LeftButton" then toggleButtonsEdit(ctx) end
+            end,
+            menuText = "🔧  Edit buttons", menuGroup = "info", menuOrder = 95,
+            run = function(ctx) toggleButtonsEdit(ctx) end,
+        },
+    },
+
     apply = function(target)
         if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
         local st = STATE_BY_TARGET[target.id] or { editing = false, widgets = {}, gen = 0 }
@@ -444,7 +496,10 @@ Mux.registerContent("mux_buttons", {
             if dlg then dlg.onClose = nil; if dlg.close then dlg:close() end end
         end
         local st = STATE_BY_TARGET[target.id]
-        if st then clearWidgets(st) end
+        if st then
+            if st.editCascade then st.editCascade:destroy(); st.editCascade = nil end
+            clearWidgets(st)
+        end
         STATE_BY_TARGET[target.id] = nil
         CONFIG[target.id] = nil       -- a manual remove resets config; restore re-seeds it on load
     end,
@@ -460,12 +515,14 @@ Mux.registerContent("mux_buttons", {
             render(target)
         end
     end,
-    onReveal = function(target)       -- `mux reveal <id>` clears the lock so the gear returns
+    onReveal = function(target)       -- `mux reveal <id>` clears the lock so the wrench returns
         local cfg = configFor(target.id)
         if cfg.locked then
             cfg.locked = false
             scheduleSave()
             render(target)
+            local p = target.pane or target
+            if p._layoutTitlebarButtons then p:_layoutTitlebarButtons() end
         end
     end,
 })

@@ -226,7 +226,7 @@ function Mux.applyWorkspace(name)
         if sw and sw.window and sw.visible then sw.window:raise() end
         Mux.raiseFloatingPanes()
         if Mux._resolveSavedAnchors then Mux._resolveSavedAnchors() end
-        if Mux._applyTabStyle then Mux._applyTabStyle() end
+        if Mux._restyleAllTabs then Mux._restyleAllTabs() end
         Mux._scheduleAutoSave()
     end)
 
@@ -269,10 +269,6 @@ local function serializeNode(obj)
         }
     end
     if obj.overlay then return nil end
-    -- Conditional/reactive panes are owned by the blueprint engine (conditional.lua),
-    -- which recreates them on demand from their condition. Don't persist them as
-    -- regular workspace panes or they'd be duplicated on the next load.
-    if obj._blueprintId then return nil end
 
     local node = {
         type            = "pane",
@@ -298,14 +294,43 @@ local function serializeNode(obj)
     if not obj.insertable        then node.insertable         = false end
     if not obj.bordered          then node.bordered           = false end
     if obj.borderColor           then node.borderColor        = obj.borderColor end
+    -- Per-pane local style-token overrides (pane.border.color etc.).
+    if obj._tokens then
+        local tk, any = {}, false
+        for k, v in pairs(obj._tokens) do tk[k] = v; any = true end
+        if any then node.tokens = tk end
+    end
     if obj.showSettingsInMenu    then node.showSettingsInMenu = true  end
     if obj.mainConsoleHost and not obj.addable then node.addable = false end
     if obj.nameAlign and obj.nameAlign ~= "left" then node.nameAlign = obj.nameAlign end
     if obj._connectionAware then node.connectionAware  = true end
-    if obj.condition then node.condition = obj.condition end
-    if obj.actionTrue  and obj.actionTrue  ~= "mux.showSelf" then node.actionTrue  = obj.actionTrue  end
-    if obj.actionFalse and obj.actionFalse ~= "mux.hideSelf" then node.actionFalse = obj.actionFalse end
+    -- Persist non-preset rules; the connection preset round-trips via the flag above.
+    if Mux._serializeRules then
+        local rs = Mux._serializeRules(obj)
+        if rs then
+            local keep = {}
+            for _, r in ipairs(rs) do
+                -- Capture rules are rebuilt from the content's own config on restore.
+                local skip = type(r.id) == "string" and r.id:find("^mux:capture")
+                if not skip then keep[#keep + 1] = r end
+            end
+            if #keep > 0 then node.rules = keep end
+        end
+    end
     if obj._activeContent   then node.activeContent   = obj._activeContent end
+    -- Persist pre-lock natural values for any content-locked params, so removing the
+    -- content later reverts to the true original rather than the forced value (which
+    -- would otherwise be the only thing serialized).
+    if obj._lockSnapshot then
+        local snap, any = {}, false
+        for prop, val in pairs(obj._lockSnapshot) do snap[prop] = val; any = true end
+        if any then node.lockSnapshot = snap end
+    end
+    if obj.hiddenTbElements then
+        local hidden = {}
+        for id, on in pairs(obj.hiddenTbElements) do if on then hidden[#hidden+1] = id end end
+        if #hidden > 0 then table.sort(hidden); node.hiddenTbElements = hidden end
+    end
     local cstate = Mux._serializeContent and Mux._serializeContent(obj)
     if cstate then node.contentState = cstate end
     if obj.floating then
@@ -522,6 +547,11 @@ local function restoreTabsOnPane(p, node)
                 if tabDef.tabsLocked                then tab.tabsLocked       = true  end
                 if tabDef.propertiesButton == false then tab.propertiesButton = false end
                 if tabDef.nameAlign                 then tab.nameAlign        = tabDef.nameAlign end
+                if tabDef.tokens then
+                    tab._tokens = {}
+                    for k, v in pairs(tabDef.tokens) do tab._tokens[k] = v end
+                    if tab.applyTheme then pcall(function() tab:applyTheme() end) end
+                end
                 local savedContent = tabDef.activeContent or tabDef._activeContent
                 if savedContent and Mux._content and Mux._content[savedContent] then
                     if Mux._applyContent then
@@ -529,8 +559,10 @@ local function restoreTabsOnPane(p, node)
                         if Mux._restoreContent then Mux._restoreContent(tab, tabDef.contentState) end
                     end
                 end
-                if tabDef.connectionAware and p.setTabConnectionAware then
-                    p:setTabConnectionAware(tab.id, true)
+                -- Restore persisted (non-preset) rules; migrate legacy connection
+                -- awareness into the overlay-rule pair.
+                if (tabDef.rules or tabDef.connectionAware) and Mux._migrateLegacyRules then
+                    Mux._migrateLegacyRules(tab, { rules = tabDef.rules, connectionAware = tabDef.connectionAware })
                 end
                 if tabDef.tabs and #tabDef.tabs > 0 then
                     restoreTabsOnPane(tab, tabDef)
@@ -576,9 +608,12 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             insertable       = node.insertable ~= false,
             bordered         = node.bordered ~= false,
             borderColor      = node.borderColor,
+            tokens           = node.tokens,
             anchorable       = node.anchorable ~= false,
             showAnchorElement = node.showAnchorElement ~= false,
             showSettingsInMenu = node.showSettingsInMenu or false,
+            hiddenTbElements = node.hiddenTbElements,
+            lockSnapshot     = node.lockSnapshot,
             nameAlign        = node.nameAlign or "left",
             floatX           = node.floatX or 100,
             floatY           = node.floatY or 100,
@@ -589,6 +624,8 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             condition        = node.condition,
             actionTrue       = node.actionTrue  or "mux.showSelf",
             actionFalse      = node.actionFalse or "mux.hideSelf",
+            rules            = node.rules,
+            connectionAware  = node.connectionAware,
         })
         p._paneSpace = paneSpace
         if node.addable == false then p.addable = false end
@@ -596,10 +633,6 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
         if node.anchor then
             p._pendingAnchor   = node.anchor
             p._pendingAtAnchor = node.atAnchor
-        end
-
-        if node.connectionAware and p.setConnectionAware then
-            p:setConnectionAware(true)
         end
 
         -- Queue content application; resolved in applyWorkspace's deferred timer
@@ -656,8 +689,9 @@ Mux.registerWorkspace("default", {
         root = {
             type            = "pane",
             id              = "output",
-            name            = "Main",
+            name            = "Mudlet",
             mainConsoleHost = true,
+            activeContent   = "mux_console",
         },
     },
 })

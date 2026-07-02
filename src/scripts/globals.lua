@@ -24,6 +24,21 @@ panes = setmetatable({}, {
     end,
 })
 
+-- Re-assert floating panes' positions and relayout their content. Floating dialogs
+-- (Settings/Properties) sit outside the split tree, so an embedded resize can leave
+-- their content drifted out of the frame until the dialog is moved. Cheap (only
+-- floating panes), so the localized ratio-drag path can call it without a full
+-- all-pane reposition.
+function Mux._reassertFloatingPanes()
+    for _, p in pairs(Mux._panes) do
+        if p.floating and p.outer then
+            if p.floatX and p.floatY and p.outer.move then p.outer:move(p.floatX, p.floatY) end
+            if p.outer.reposition then p.outer:reposition() end
+            if Mux._relayoutContent then Mux._relayoutContent(p) end
+        end
+    end
+end
+
 -- Fires onReposition for every live pane. Used after structural or global
 -- geometry changes (window resize, workspace restore, embed/remove/split/swap)
 -- where panes across the whole workspace may have moved. For a localized ratio
@@ -32,6 +47,14 @@ panes = setmetatable({}, {
 function Mux._notifyAllReposition()
     for _, p in pairs(Mux._panes) do
         if p.onReposition then p.onReposition(p) end
+        -- Floating dialogs/panes don't sit in the split tree, so a structural change
+        -- below them can leave their content's geometry stale (it visibly drifts out
+        -- of the frame until the dialog is moved). Re-assert the float position and
+        -- reposition the container — the same fix a manual move performs.
+        if p.floating and p.outer then
+            if p.floatX and p.floatY and p.outer.move then p.outer:move(p.floatX, p.floatY) end
+            if p.outer.reposition then p.outer:reposition() end
+        end
         if Mux._relayoutContent then Mux._relayoutContent(p) end
     end
     if Mux._reanchorAll then Mux._reanchorAll() end
@@ -538,11 +561,15 @@ function Mux._showContextMenu(pane, globalX, globalY)
     -- 1) Folded icon-elements (builtins + content), already ordered for the menu.
     for _, spec in ipairs(pane._foldedElements or {}) do addSpec(spec) end
 
-    -- 2) Menu-only content elements (iconable=false): always present, after a sep.
+    -- 2) Content elements that carry a menu row: always present (deduped against any
+    -- already folded in above), so content settings are reachable here even when
+    -- their icon is showing in the bar.
     if ctx.content and ctx.content.titlebarElements then
+        local foldedSet = {}
+        for _, s in ipairs(pane._foldedElements or {}) do foldedSet[s.id] = true end
         local extra = {}
         for _, s in ipairs(ctx.content.titlebarElements) do
-            if s.iconable == false then
+            if s.menuText and not foldedSet[s.id] then
                 local ok, vis = pcall(s.visible or function() return true end, ctx)
                 if ok and vis then extra[#extra + 1] = s end
             end
@@ -582,6 +609,16 @@ function Mux._showContentLibrary(pane)
     })
     if dlg.contentBg then dlg.contentBg:echo(""); dlg.contentBg:hide() end
 
+    -- Track on the pane so MuxPane:close() / teardown closes us too — otherwise the
+    -- library would be orphaned, listing content for a pane that no longer exists.
+    pane._propertiesDialogs = pane._propertiesDialogs or {}
+    pane._propertiesDialogs[dlg.id] = dlg
+    local _prevOnClose = dlg.onClose
+    dlg.onClose = function()
+        if pane._propertiesDialogs then pane._propertiesDialogs[dlg.id] = nil end
+        if _prevOnClose then _prevOnClose() end
+    end
+
     local c   = dlg.content
     local pfx = dlg._gid .. "_cl_"
 
@@ -610,10 +647,21 @@ function Mux._showContentLibrary(pane)
             and def._activeTargetRef and def._activeTargetRef ~= pane
             and def._activeTargetRef._activeContent == contentName
 
+        -- Content may refuse to apply in this pane's current state (e.g. the console
+        -- can't go in a floating pane). canApply returns ok, reason — checked even when
+        -- singleton-locked so the state-specific reason takes precedence.
+        local canAdd, blockReason = true, nil
+        if not isHere and def and type(def.canApply) == "function" then
+            local ok, reason = def.canApply(pane)
+            if ok == false then canAdd, blockReason = false, reason end
+        end
+        -- Greyed: held by a singleton elsewhere, or not applicable here.
+        local greyed = isLocked or (not canAdd)
+
         local rowBg = Geyser.Label:new({
             name=pfx.."r"..i.."bg", x=0, y=yOff, width="100%", height=LIB_ROW_H, fillBg=1,
         }, list)
-        if isLocked then
+        if greyed then
             rowBg:setStyleSheet(isEven
                 and "background:rgba(18,19,28,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.04);"
                 or  "background:rgba(14,15,22,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.04);")
@@ -628,7 +676,7 @@ function Mux._showContentLibrary(pane)
         local icon = Geyser.Label:new({
             name=pfx.."r"..i.."ic", x=10, y=yOff+15, width=22, height=22, fillBg=1,
         }, list)
-        if isLocked then
+        if greyed then
             icon:setStyleSheet([[
                 QLabel {
                     background: rgba(28,32,44,0.70);
@@ -658,12 +706,11 @@ function Mux._showContentLibrary(pane)
         end
         icon:rawEcho("<center>i</center>")
         if dispDesc ~= "" then icon:setToolTip(dispDesc, 6) end
-
         -- Name label (vertically centered in row)
         local nameLbl = Geyser.Label:new({
             name=pfx.."r"..i.."nm", x=40, y=yOff+16, width=contentW-128, height=20,
         }, list)
-        nameLbl:setStyleSheet(isLocked
+        nameLbl:setStyleSheet(greyed
             and "background:transparent;color:#4a5568;font-size:11px;font-weight:bold;"
             or  "background:transparent;color:#c6d2ee;font-size:11px;font-weight:bold;")
         nameLbl:rawEcho(dispName)
@@ -682,6 +729,15 @@ function Mux._showContentLibrary(pane)
             ]])
             addBtn:rawEcho("<center>Remove</center>")
             addBtn:setClickCallback(function() Mux._removeContent(pane); refresh() end)
+        elseif not canAdd then
+            addBtn:setStyleSheet([[
+                QLabel{background:rgba(22,24,34,0.80);color:#3a4458;font-size:9px;font-weight:bold;
+                       border:1px solid rgba(40,45,60,0.45);border-radius:4px;}
+                QToolTip{background-color:#1d2030;color:#e8ebf5;border:1px solid rgba(255,255,255,0.18);
+                         padding:5px 8px;border-radius:4px;}
+            ]])
+            addBtn:rawEcho("<center>—</center>")
+            addBtn:setToolTip(blockReason or "Can't be added here.", 6)
         elseif isLocked then
             addBtn:setStyleSheet([[
                 QLabel{background:rgba(22,24,34,0.80);color:#3a4458;font-size:9px;font-weight:bold;
@@ -763,11 +819,12 @@ function Mux._createGhostSlot(slot, split, side, paneSpace)
         border-radius: 3px;
     ]])
     local tc = "rgba(80, 95, 155, 0.65)"
+    local dropText = (Mux.settings and Mux.settings.get("mux", "ghostDropText")) or "Drop a pane here"
     bg:echo(string.format(
         "<div align='center' style='padding-top:22%%;color:%s;font-size:10px;"
         .. "font-family:Consolas,Monaco,monospace;'>"
         .. "<span style='font-size:18px;color:rgba(80,95,155,0.40);'>⬚</span>"
-        .. "<br/><br/>Drop a pane here</div>", tc))
+        .. "<br/><br/>%s</div>", tc, dropText))
 
     local dismissBtn = Geyser.Label:new({
         name   = gid .. "_ghost_x",
@@ -1043,58 +1100,31 @@ Mux._log("Muxlet globals loaded (v%s)", Mux._version)
 -- drops same-sized icon buttons straight down from the origin, styled to match
 -- the titlebar, with a transparent full-screen scrim that dismisses on outside
 -- click. Reusable by any titlebar button that needs sub-actions in its own
--- footprint (used by the anchor button for re-anchor / return / remove).
-Mux._iconStack = Mux._iconStack or { scrim = nil, btns = {} }
+-- footprint (used by the anchor button for return / remove). Now a thin wrapper
+-- over the shared Mux.ui.iconCascade widget (scrim + dismiss-on-pick).
+Mux._iconStack = Mux._iconStack or {}
 
 function Mux._hideTitlebarIconStack()
-    local s = Mux._iconStack
-    if s.scrim then s.scrim:hide() end
-    for _, b in ipairs(s.btns) do b:hide() end
+    if Mux._iconStack.cas then Mux._iconStack.cas:hide() end
 end
 
 function Mux._showTitlebarIconStack(x, y, w, h, items)
-    local theme  = Mux.activeTheme()
-    local s      = Mux._iconStack
-    local sw, sh = getMainWindowSize()
-
-    if not s.scrim then
-        s.scrim = Geyser.Label:new(
-            { name = "mux_iconstack_scrim", x = 0, y = 0, width = sw, height = sh, fillBg = 1 }, Geyser)
-        s.scrim:setStyleSheet("background-color: rgba(0,0,0,0); border: none;")
-    end
-    resizeWindow("mux_iconstack_scrim", sw, sh)
-    s.scrim:setClickCallback(function() Mux._hideTitlebarIconStack() end)
-    s.scrim:show(); s.scrim:raiseAll()
-
-    local btnCss   = theme.btnCss or "background-color: rgba(40,46,72,240); border: 1px solid rgba(100,160,255,0.35); border-radius: 3px;"
-    local hoverCss = theme.minHoverCss or btnCss
-    local textCol  = theme.btnTextColor or "#aaaabb"
-
+    local theme   = Mux.activeTheme()
+    local btnCss  = theme.btnCss or "background-color: rgba(40,46,72,240); border: 1px solid rgba(100,160,255,0.35); border-radius: 3px;"
+    local textCol = theme.btnTextColor or "#aaaabb"
+    -- Colour each glyph to the titlebar resting colour; the cascade applies btnCss
+    -- (which carries any :hover rule) as the box style.
+    local mapped = {}
     for i, item in ipairs(items) do
-        local by = math.floor(y + (i - 1) * h)   -- straight down from the supplied start point
-        local b  = s.btns[i]
-        if not b then
-            b = Geyser.Label:new(
-                { name = "mux_iconstack_btn" .. i, x = 0, y = 0, width = w, height = h, fillBg = 1 }, Geyser)
-            s.btns[i] = b
-        end
-        resizeWindow(b.name, w, h)
-        moveWindow(b.name, math.floor(x), by)
-        local icon = item.icon or "•"
-        local function paint(hovered)
-            b:setStyleSheet(hovered and hoverCss or btnCss)
-            b:echo(string.format("<center><font color='%s'>%s</font></center>", hovered and "white" or textCol, icon))
-        end
-        paint(false)
-        if item.tooltip then b:setToolTip(item.tooltip) end
-        b:setOnEnter(function() paint(true) end)
-        b:setOnLeave(function() paint(false) end)
-        b:setClickCallback(function(event)
-            if event and event.button ~= "LeftButton" then return end
-            Mux._hideTitlebarIconStack()
-            if item.fn then item.fn() end
-        end)
-        b:show(); b:raiseAll()
+        mapped[i] = {
+            id = i, css = btnCss, tooltip = item.tooltip, fn = item.fn,
+            icon = string.format("<font color='%s'>%s</font>", textCol, item.icon or "•"),
+        }
     end
-    for i = #items + 1, #s.btns do s.btns[i]:hide() end
+    if Mux._iconStack.cas then Mux._iconStack.cas:destroy() end
+    Mux._iconStack.cas = Mux.ui.iconCascade(Geyser, {
+        name = "mux_iconstack", x = math.floor(x), y = math.floor(y),
+        direction = "down", size = w, gap = math.max(0, h - w),
+        items = mapped, scrim = true, dismissOnClick = true,
+    })
 end

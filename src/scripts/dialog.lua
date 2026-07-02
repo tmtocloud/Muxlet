@@ -228,16 +228,13 @@ local function _dialogCascadePos(w, h, sw, sh)
     local baseY = math.floor((sh - h) / 2)
     local step, maxSteps = 30, 12
 
+    -- Slots are claimed by stored index, not re-derived from geometry: auto-fit
+    -- resizes a dialog's height, which would shift a geometry-derived Y index off
+    -- the diagonal and make open dialogs invisible to the cascade (so new ones
+    -- stacked on top). The stored slot survives any later resize.
     local taken = {}
     for _, p in pairs(Mux._panes) do
-        if p._dialog and p.outer then
-            local pw, ph = p.outer:get_width(), p.outer:get_height()
-            local pcx    = math.floor((sw - pw) / 2)
-            local pcy    = math.floor((sh - ph) / 2)
-            local idxX   = math.floor((p.outer:get_x() - pcx) / step + 0.5)
-            local idxY   = math.floor((p.outer:get_y() - pcy) / step + 0.5)
-            if idxX == idxY and idxX >= 0 then taken[idxX] = true end  -- on the cascade diagonal
-        end
+        if p._dialog and p.outer and p._cascadeSlot then taken[p._cascadeSlot] = true end
     end
 
     local k = 0
@@ -245,7 +242,7 @@ local function _dialogCascadePos(w, h, sw, sh)
 
     local x = Mux._clamp(baseX + k * step, 0, math.max(0, sw - w))
     local y = Mux._clamp(baseY + k * step, 0, math.max(0, sh - h))
-    return x, y
+    return x, y, k
 end
 
 --- Constructs the dialog. Called by MuxDialog:new(opts) via Mux._class.
@@ -265,12 +262,12 @@ function MuxDialog:init(opts)
 
     -- Explicit x or y is honoured verbatim (callers restoring a remembered
     -- position). With neither given, cascade off any dialogs already open.
-    local x, y
+    local x, y, cascadeSlot
     if opts.x or opts.y then
         x = opts.x or math.floor((sw - w) / 2)
         y = opts.y or math.floor((sh - h) / 2)
     else
-        x, y = _dialogCascadePos(w, h, sw, sh)
+        x, y, cascadeSlot = _dialogCascadePos(w, h, sw, sh)
     end
 
     -- Build the underlying pane with dialog defaults.
@@ -298,6 +295,11 @@ function MuxDialog:init(opts)
     })
 
     self._dialog = true   -- marks this pane for dialog cascade bookkeeping
+    self._cascadeSlot = cascadeSlot   -- claimed diagonal slot (nil if explicitly positioned)
+    -- Autofit/scroll parameters (used by :mountForm / :fitContent). A dialog grows to
+    -- fit its content up to _fitMaxPct of the screen height, then scrolls.
+    self._fitMaxPct = opts.maxHeightPct or 0.82
+    self._fitMinH   = opts.minHeight    or 140
     if opts.singleton then
         self._singletonKey = opts.singleton
         Mux._singletonDialogs[opts.singleton] = self
@@ -324,6 +326,92 @@ end
 --- Creates and returns a dialog overlay. The ergonomic verb wrapping
 --- MuxDialog:new — preferred in calling code, and what existing callers use.
 -- @return MuxDialog  add widgets to dialog.content; dismiss with dialog:close()
+
+-- ── Holistic content sizing/scrolling ────────────────────────────────────────
+-- Any dialog can hand its content to :mountForm (a widget-form spec list) or build
+-- into a scrolling body and call :fitContent(height). The dialog then grows to fit
+-- the content up to _fitMaxPct of the screen height, scrolls beyond that, snaps back
+-- when content shrinks, and repositions to stay on screen — so content authors and
+-- new popups get correct sizing/scrolling for free instead of re-implementing it.
+
+-- Resize the dialog to fit `contentH` pixels of content (clamped), size the scroll
+-- body, and keep the dialog on screen.
+function MuxDialog:fitContent(contentH)
+    self._contentH = contentH or self._contentH or 0
+    local _, sh   = getMainWindowSize()
+    local theme   = Mux.activeTheme() or {}
+    local titleH  = (self.titlebarVisible ~= false) and (theme.titlebarHeight or 22) or 0
+    local chrome  = titleH + 2 * 2 + 8           -- titlebar + border inset + footer pad
+    local maxH    = math.floor((sh or 1000) * (self._fitMaxPct or 0.82))
+    local minH    = self._fitMinH or 140
+    local h       = math.max(minH, math.min(maxH, self._contentH + chrome))
+    local visH    = h - chrome                   -- visible content viewport
+
+    -- Body is as tall as the content, but at least the viewport, so short content
+    -- fills the area and tall content scrolls (no empty scroll gap on shrink).
+    if self._body then
+        pcall(function() self._body:resize(self._bodyW or self._body:get_width(), math.max(self._contentH, visH)) end)
+    end
+    if math.abs((self.floatH or 0) - h) >= 2 then
+        self.floatH = h
+        if self.outer then self.outer:resize(self.floatW or self.outer:get_width(), h) end
+        local y = self.floatY or 0
+        if y + h > (sh or 0) then self.floatY = math.max(0, (sh or 0) - h) end
+        if self.outer and self.outer.reposition then self.outer:reposition() end
+    end
+end
+
+-- Build a widget form into a fresh scrolling body and wire it to autofit. Returns
+-- the buildForm handle. Rebuild-safe: each call fully replaces the previous body and
+-- uses a generation-unique widget prefix, so repeated rebuilds (add/remove rows)
+-- never collide widget names or leave stale widgets behind.
+function MuxDialog:mountForm(specs, formOpts)
+    formOpts = formOpts or {}
+    self._formGen = (self._formGen or 0) + 1
+    local gen = self._formGen
+
+    -- Tear the previous body down completely (delete, not just hide) so its widgets
+    -- and any open dropdown overlays don't linger under the new one.
+    if self._scrollBox then
+        pcall(function() if self._scrollBox.delete then self._scrollBox:delete() else self._scrollBox:hide() end end)
+    end
+
+    local sb = Geyser.ScrollBox:new(
+        { name = self.id .. "_sb" .. gen, x = 0, y = 0, width = "100%", height = "100%" }, self.content)
+    local bw = self.content:get_width(); if not bw or bw < 40 then bw = (self.floatW or 320) - 8 end
+    bw = bw - 2
+    local theme = Mux.activeTheme() or {}
+    local bg    = (theme.ui and theme.ui.bg) or "rgb(18,18,26)"
+    local body  = Geyser.Label:new(
+        { name = self.id .. "_body" .. gen, x = 0, y = 0, width = bw, height = 10 }, sb)
+    body:setStyleSheet(string.format("background:%s; border:none;", bg))
+    self._scrollBox, self._body, self._bodyW = sb, body, bw
+
+    local opts = {}
+    for k, v in pairs(formOpts) do opts[k] = v end
+    opts.width  = bw
+    -- Generation-unique prefix: prevents Geyser name collisions across rebuilds,
+    -- which otherwise leave the form blank until the dialog is reopened.
+    opts.prefix = (formOpts.prefix or (self.id .. "_f")) .. "_g" .. gen
+    local this = self
+    opts.onLayoutChange = function(h) this:fitContent(h) end   -- collapsibles/edits refit
+    -- Dropdown/colour popups need the absolute screen position of the content area.
+    -- Nested-in-scrollbox get_x/get_y isn't reliable inside a floating dialog, so
+    -- compute it from the dialog's own float position + chrome (as the settings
+    -- dialog does). Content authors get correct popups with no per-dialog code.
+    opts.getContentScreenPos = formOpts.getContentScreenPos or function()
+        local theme  = Mux.activeTheme() or {}
+        local bi     = 2
+        local titleH = (this.titlebarVisible ~= false) and (theme.titlebarHeight or 22) or 0
+        return (this.floatX or 0) + bi, (this.floatY or 0) + bi + titleH
+    end
+
+    local handle = Mux.ui.buildForm(body, specs, opts)
+    self._muxRelayout = handle and handle.relayout
+    self:fitContent(Mux.ui.formHeight(specs, formOpts))
+    return handle
+end
+
 function Mux.createDialog(opts)
     opts = opts or {}
     if opts.singleton then

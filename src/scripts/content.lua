@@ -124,6 +124,30 @@ end
 -- a dialog tells the user where it is currently open.
 -- Tracking uses a direct object reference (def._activeTargetRef) so it works
 -- correctly for both panes and tabs without a registry lookup.
+-- Content-declared parameter locks. A content def may carry:
+--   paramLocks = { closeable = { value=false, why="…" }, … }
+-- On apply we snapshot the target's current value for each locked prop and set the
+-- declared value; on removal we restore the snapshot. The read-only/why metadata is
+-- read live by MuxPane:_recomputeLocks(); here we only manage the values + snapshot.
+local function _applyParamLocks(target, def)
+    if not (def and def.paramLocks) then return end
+    target._lockSnapshot = target._lockSnapshot or {}
+    for prop, spec in pairs(def.paramLocks) do
+        if target._lockSnapshot[prop] == nil then target._lockSnapshot[prop] = target[prop] end
+        if type(spec) == "table" and spec.value ~= nil then target[prop] = spec.value end
+    end
+end
+
+local function _restoreParamLocks(target, def)
+    if not (def and def.paramLocks and target._lockSnapshot) then return end
+    for prop in pairs(def.paramLocks) do
+        if target._lockSnapshot[prop] ~= nil then
+            target[prop] = target._lockSnapshot[prop]
+            target._lockSnapshot[prop] = nil
+        end
+    end
+end
+
 function Mux._applyContent(target, contentName, force)
     local def = Mux._content[contentName]
     if not def then
@@ -156,6 +180,7 @@ function Mux._applyContent(target, contentName, force)
             if old.singleton and old._activeTargetRef == target then
                 old._activeTargetRef = nil
             end
+            _restoreParamLocks(target, old)   -- give back the outgoing content's locked values
             if type(old.remove) == "function" then
                 pcall(old.remove, target)
             end
@@ -188,9 +213,24 @@ function Mux._applyContent(target, contentName, force)
 
     target._activeContent = contentName
     if def.singleton then def._activeTargetRef = target end
+    -- Apply this content's parameter locks (sets values + snapshots prior ones), then
+    -- recompute the read-only set so Properties reflects them immediately.
+    _applyParamLocks(target, def)
+    if type(target._recomputeLocks) == "function" then target:_recomputeLocks() end
     -- Content may contribute titlebar elements; refresh the placement engine so
     -- they appear (and fold into the menu) immediately.
-    if type(target._syncButtons) == "function" then target:_syncButtons(true) end
+    if type(target._syncButtons) == "function" then
+        target._contentTbSig = nil
+        target:_syncButtons(true)
+    end
+    -- When content landed on a tab, its titlebar elements belong to the OWNING
+    -- pane's titlebar, so refresh that too.
+    local ownerPane = target
+    while ownerPane and ownerPane.pane do ownerPane = ownerPane.pane end
+    if ownerPane and ownerPane ~= target and ownerPane._layoutTitlebarButtons then
+        ownerPane._contentTbSig = nil
+        pcall(function() ownerPane:_layoutTitlebarButtons() end)
+    end
 
     if not ok then
         Mux._err("content '%s' apply error: %s", contentName, tostring(err))
@@ -234,10 +274,13 @@ function Mux._removeContent(target)
     local def  = Mux._content[name]
     if def then
         if def.singleton and def._activeTargetRef == target then def._activeTargetRef = nil end
+        _restoreParamLocks(target, def)   -- give back pre-content values (closeable, etc.)
         if type(def.remove) == "function" then pcall(def.remove, target) end
     end
     destroyContentSlot(target)
     target._activeContent = nil
+    -- Recompute read-only locks now the content (and its paramLocks) is gone.
+    if type(target._recomputeLocks) == "function" then target:_recomputeLocks() end
     -- Drop any content-contributed titlebar elements and re-layout.
     if type(target._syncButtons) == "function" then target:_syncButtons(true) end
     if type(target._updatePlaceholder) == "function" then

@@ -17,9 +17,10 @@
 # Mudlet's binary connection files so the profile connects automatically.
 # Pass --username to pre-fill the login field.
 #
-# --fresh wipes the profile directory (keeping connection files) and writes a
-# bootstrap XML so Muxlet installs automatically on the next Mudlet load —
-# no Package Manager step required. Close the profile in Mudlet first.
+# --fresh writes a fresh flag file alongside the stamp file. The in-session
+#   stamp watcher picks up both files and reloads with fresh=true, which resets
+#   Muxlet's update-skip counter to simulate a first-time install. Mudlet does
+#   not need to be closed, and no other profile content is touched.
 #
 # Works in WSL, native Linux, and macOS.
 #
@@ -109,66 +110,6 @@ if [[ -z "$PROFILE" ]]; then
     exit 0
 fi
 
-# Pause if Mudlet is running — any profile could be open.
-wait_for_profile_close() {
-    local profile_name="$1"
-    local running
-    running=$(powershell.exe -NoProfile -Command \
-        "if (Get-Process mudlet -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }" \
-        2>/dev/null | tr -d '\r\n') || true
-    if [[ "$running" == "yes" ]]; then
-        echo ""
-        echo "  Mudlet is running. Close the '$profile_name' profile, then press Enter."
-        read -r _
-    fi
-}
-
-# Remove all entries in DIR except the named files passed as additional args.
-wipe_profile() {
-    local dir="$1"; shift
-    local -a keep=("$@")
-    local find_args=("$dir" -maxdepth 1 -mindepth 1)
-    for k in "${keep[@]}"; do find_args+=("!" "-name" "$k"); done
-    find_args+=("-print0")
-    while IFS= read -r -d '' entry; do
-        echo "Removed       : $(basename "$entry")"
-        rm -rf "$entry"
-    done < <(find "${find_args[@]}")
-}
-
-# Write a minimal Mudlet profile XML containing a bootstrap script that
-# auto-installs PKG_NAME.mpackage from the profile directory on first load.
-write_bootstrap_xml() {
-    local xml_path="$1"
-    local pkg_name="$2"
-    sed "s/__PKG__/$pkg_name/g" > "$xml_path" << 'BOOTSTRAP_XML_EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE MudletPackage>
-<MudletPackage version="1.001">
-  <ScriptPackage>
-    <Script isActive="yes" isFolder="no">
-      <name>__PKG__ dev autoinstall</name>
-      <packageName></packageName>
-      <script>
-local _pkgPath = getMudletHomeDir() .. "/__PKG__.mpackage"
-tempTimer(0, function()
-  local _f = io.open(_pkgPath, "r")
-  if _f then
-    _f:close()
-    if not table.contains(getPackages(), "__PKG__") then
-      installPackage(_pkgPath)
-    end
-  end
-end)
-</script>
-      <eventHandlerList />
-    </Script>
-  </ScriptPackage>
-</MudletPackage>
-BOOTSTRAP_XML_EOF
-    echo "Bootstrap XML : $xml_path"
-}
-
 echo ""
 echo "=== Deploying to profile: $PROFILE ==="
 
@@ -220,15 +161,6 @@ if [[ ! -d "$PROFILE_DIR" ]]; then
     FIRST_TIME=1
 else
     echo "Profile       : $PROFILE"
-    if [[ $FRESH -eq 1 ]]; then
-        echo ""
-        echo "=== Fresh wipe: $PROFILE ==="
-        wait_for_profile_close "$PROFILE"
-        wipe_profile "$PROFILE_DIR" url port login description
-        echo "=== Wipe complete ==="
-        echo ""
-        FIRST_TIME=1
-    fi
 fi
 
 if [[ -n "$GAME_HOST" || -n "$GAME_PORT" ]]; then
@@ -254,9 +186,10 @@ STAMP_PATH="$PROFILE_DIR/Muxlet-rebuild.stamp"
 date +%s > "$STAMP_PATH"
 echo "Stamp written : $STAMP_PATH"
 
-if [[ $FIRST_TIME -eq 1 ]]; then
-    mkdir -p "$PROFILE_DIR/current"
-    write_bootstrap_xml "$PROFILE_DIR/current/bootstrap.xml" "Muxlet"
+if [[ $FRESH -eq 1 ]]; then
+    FRESH_PATH="$PROFILE_DIR/Muxlet-fresh.stamp"
+    date +%s > "$FRESH_PATH"
+    echo "Fresh flag    : $FRESH_PATH"
 fi
 
 echo ""
@@ -275,9 +208,9 @@ if [[ $FIRST_TIME -eq 1 ]]; then
         echo "  3. Configure connection (host/port) and connect"
         echo "     (or re-run with --host and --port to write them automatically)"
     fi
+    echo "  4. Open Package Manager and install Muxlet.mpackage from the profile folder"
     echo ""
-    echo "  Muxlet installs automatically on connect. No Package Manager step needed."
-    echo "  After the first connect, the auto-reload handles everything."
+    echo "  After the first install, Muxlet auto-reloads on every build."
     echo ""
 fi
 

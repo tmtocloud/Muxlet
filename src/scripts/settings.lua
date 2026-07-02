@@ -315,6 +315,22 @@ local function contentScreenPos(ns)
     return cx, cy
 end
 
+-- Absolute screen position of a settings tab's content area, derived from the tab's
+-- own nesting depth (number of tab bars above it) rather than a namespace path —
+-- works for custom tabs (Theme > General/Panes/Tabs) that have no ns. Used so popup
+-- overlays (theme dropdown, colour pickers) anchor at the widget, not the screen edge.
+local function tabContentScreenPos(target)
+    local win = settingsUi.window
+    if not win then return 0, 0 end
+    local theme   = Mux.activeTheme()
+    local tabBarH = theme.tabBarHeight or 30
+    local depth, h = 0, target
+    while h and h.pane do depth = depth + 1; h = h.pane end   -- one tab bar per ancestor host
+    local cx = (win.floatX or 0) + 2
+    local cy = (win.floatY or 0) + 2 + (theme.titlebarHeight or 22) + depth * tabBarH
+    return cx, cy
+end
+
 local function closeDropdown()
     local win = settingsUi.window
     if not win then return end
@@ -325,6 +341,21 @@ local function closeDropdown()
         end
     end
 end
+
+-- Re-read every settings form across all tabs so their widgets reflect the
+-- current values. Used after a global change (e.g. "Reset all to theme") that
+-- affects forms on tabs other than the one the user is looking at.
+local function refreshAllForms()
+    local win = settingsUi.window
+    if not win then return end
+    for _, tab in ipairs(win._tabs or {}) do
+        if tab._settingsForm and tab._settingsForm.refreshAll then tab._settingsForm.refreshAll() end
+        for _, subTab in ipairs(tab._tabs or {}) do
+            if subTab._settingsForm and subTab._settingsForm.refreshAll then subTab._settingsForm.refreshAll() end
+        end
+    end
+end
+Mux._settings_ui._refreshAllForms = refreshAllForms
 
 local function hideTooltip() end  -- Qt native tooltips auto-dismiss; kept for call-site compat
 
@@ -509,16 +540,42 @@ local function tabHierarchy()
     end
     promote(root)
 
-    -- Muxlet gets a "Main" tab (main-pane properties) plus an Actions management
-    -- tab. Conditions are set per-pane (Rules), so there is no Conditions tab.
-    -- Final order is forced below: General | Main | Tabs | Actions.
+    -- Muxlet top level: General | Theme | Actions. Theme is built from the
+    -- muxtheme (picker) namespace; we add the spec-driven Pane, Tabs and Interface
+    -- token editors as custom children here.
     local muxNode = root._map["Muxlet"]
     if muxNode then
+        local themeNode = muxNode._map["Theme"]
+        if themeNode then
+            -- Ensure a "General" child holds the theme picker + Interface colours.
+            -- promote() only adds one when Theme had children at that point; now that
+            -- Panes/Tabs are injected here (after promote), create it explicitly so the
+            -- picker ns isn't orphaned on Theme itself.
+            local generalNode
+            for _, c in ipairs(themeNode.children) do
+                if c.label == "General" then generalNode = c; break end
+            end
+            if not generalNode then
+                generalNode = { label = "General", children = {}, _map = {} }
+                table.insert(themeNode.children, 1, generalNode)
+            end
+            generalNode.order = 1; generalNode.ns = nil; generalNode.custom = "themegeneral"
+            themeNode.ns = nil   -- picker now lives inside the General custom tab
+            -- Panes: one tab with Style + Colors separator sections (no sub-tabs).
+            local panesNode = { label = "Panes", order = 2,
+                custom = "tok|Pane,Titlebar,Buttons,Slot,Drag,Handle|all", children = {}, _map = {} }
+            -- Tabs: same token editor as Panes, editing the tab.* tokens (global layer).
+            local tabsNode = { label = "Tabs", order = 3,
+                custom = "tok|Tab|all", children = {}, _map = {} }
+            table.insert(themeNode.children, panesNode)
+            table.insert(themeNode.children, tabsNode)
+        end
+
         muxNode.children[#muxNode.children + 1] =
-            { label = "Main", main = true, children = {}, _map = {} }
+            { label = "Conditions", custom = "conditions", children = {}, _map = {} }
         muxNode.children[#muxNode.children + 1] =
             { label = "Actions", custom = "actions", children = {}, _map = {} }
-        local DESIRED = { General = 1, Main = 2, Tabs = 3, Actions = 4 }
+        local DESIRED = { General = 1, Theme = 2, Conditions = 3, Actions = 4 }
         for _, c in ipairs(muxNode.children) do
             if DESIRED[c.label] then c.order = DESIRED[c.label] end
         end
@@ -597,6 +654,8 @@ local function buildSettingsContent(targetTab, ns, bgCol)
     contentLbl:setStyleSheet(string.format("background:%s; border:none;", bgCol))
     local formHandle, totalH = buildRows(ns, contentLbl)
     targetTab._settingsForm = formHandle
+    targetTab._muxRelayout   = formHandle and formHandle.relayout
+    targetTab._muxContentH = totalH
     resizeWindow("mux_set_cl_" .. safeName, cw - 8, math.max(totalH or 1, 1))
 end
 
@@ -610,6 +669,8 @@ local function buildMultiNsContent(targetTab, nsList, bgCol)
     -- Build allSpecs first so we can pre-size contentLbl correctly.
     -- Transparent divider rows must sit within contentLbl's painted area or they
     -- fall through to the ScrollBox's white Qt background and appear white.
+    -- A multi-namespace tab gets one collapsible divider per namespace, labelled
+    -- from the namespace name.
     local allSpecs = {}
     for _, ns in ipairs(nsList) do
         local divLabel = prettifySettingKey(ns)
@@ -633,6 +694,7 @@ local function buildMultiNsContent(targetTab, nsList, bgCol)
         x = 0, y = 0, width = cw - 8, height = math.max(totalH, 10),
     }, scrollBox)
     contentLbl:setStyleSheet(string.format("background:%s; border:none;", bgCol))
+    targetTab._muxContentH = totalH
 
     local formHandle
     local formOpts = {
@@ -658,240 +720,14 @@ local function buildMultiNsContent(targetTab, nsList, bgCol)
         getContentScreenPos = function()
             return contentScreenPos(firstNs)
         end,
+        onLayoutChange = function(h)
+            targetTab._muxContentH = h
+            Mux._scheduleFit(Mux._ownerDialog(targetTab))
+        end,
     }
     formHandle = Mux.ui.buildForm(contentLbl, allSpecs, formOpts)
     targetTab._settingsForm = formHandle
-end
-
-local function buildMainPaneContent(targetTab, bgColor)
-    targetTab.contentBg:hide()
-    local mainPane
-    if Mux._panes then
-        for _, p in pairs(Mux._panes) do
-            if p.mainConsoleHost then mainPane = p; break end
-        end
-    end
-    local scrollBox = Geyser.ScrollBox:new({
-        name = "mux_set_sb_mainpane",
-        x = 0, y = 0, width = "100%", height = "100%",
-    }, targetTab.content)
-    local cw = targetTab.content:get_width()
-    if cw < 50 then cw = 400 end
-    local contentLbl = Geyser.Label:new({
-        name = "mux_set_cl_mainpane",
-        x = 0, y = 0, width = cw - 8, height = 100,
-    }, scrollBox)
-    contentLbl:setStyleSheet(string.format("background:%s; border:none;", bgColor))
-
-    if not mainPane then
-        contentLbl:echo("<center><i>No main pane found. Load a workspace first.</i></center>")
-        return
-    end
-
-    local rows = {}
-
-    if mainPane.titlebarHideable then
-        rows[#rows+1] = {
-            label      = "Titlebar",
-            desc       = "Show or hide the titlebar strip",
-            type       = "toggle",
-            trueLabel  = "Visible",
-            falseLabel = "Hidden",
-            readFn     = function() return mainPane.titlebarVisible end,
-            writeFn    = function(v) mainPane:setTitlebarVisible(v) end,
-        }
-    end
-
-    rows[#rows+1] = {
-        label      = "Settings",
-        desc       = "Show the ⚙ button in the titlebar. If hidden, access Main properties here in Settings",
-        type       = "toggle",
-        trueLabel  = "Visible",
-        falseLabel = "Hidden",
-        readFn     = function() return mainPane.showSettingsInMenu ~= false end,
-        writeFn    = function(v)
-            mainPane.showSettingsInMenu = v
-            mainPane.propertiesButton   = v
-            mainPane:_applyTitlebarVisibility()
-        end,
-    }
-
-    rows[#rows+1] = {
-        label      = "Minimizable",
-        desc       = "Show the minimize (–) button in the titlebar",
-        type       = "toggle",
-        trueLabel  = "Yes",
-        falseLabel = "No",
-        readFn     = function() return mainPane.minimizable end,
-        writeFn    = function(v)
-            mainPane.minimizable = v
-            mainPane:_applyTitlebarVisibility()
-        end,
-    }
-
-    rows[#rows+1] = {
-        label      = "Name Align",
-        desc       = "Where the pane name sits in the titlebar",
-        type       = "segmentedControl",
-        widgetWidth = 138,
-        options    = {
-            { value = "left",   label = "Left"   },
-            { value = "center", label = "Center" },
-            { value = "right",  label = "Right"  },
-        },
-        readFn     = function() return mainPane.nameAlign or "left" end,
-        writeFn    = function(v) mainPane:setNameAlign(v) end,
-    }
-
-    rows[#rows+1] = {
-        label      = "addPane",
-        desc       = "Show a + button in the titlebar (and right-click menu when compact) to add a new floating pane",
-        type       = "toggle",
-        trueLabel  = "Visible",
-        falseLabel = "Hidden",
-        readFn     = function() return mainPane.addable end,
-        writeFn    = function(v)
-            mainPane.addable = v
-            mainPane:_syncButtons(true)
-        end,
-    }
-
-    rows[#rows+1] = {
-        label      = "Splittable",
-        desc       = "Allow this pane to be split horizontally or vertically",
-        type       = "toggle",
-        trueLabel  = "Yes",
-        falseLabel = "No",
-        readFn     = function() return mainPane.splittable end,
-        writeFn    = function(v)
-            mainPane.splittable = v
-            mainPane:_applyTitlebarVisibility()
-        end,
-    }
-
-    rows[#rows+1] = {
-        label      = "Swappable",
-        desc       = "Allow this pane to swap position with its sibling within a split",
-        type       = "toggle",
-        trueLabel  = "Yes",
-        falseLabel = "No",
-        readFn     = function() return mainPane.swappable end,
-        writeFn    = function(v)
-            mainPane.swappable = v
-            mainPane:_applyTitlebarVisibility()
-        end,
-    }
-
-    rows[#rows+1] = {
-        label      = "Zoomable",
-        desc       = "Allow this pane to temporarily zoom to fill the window",
-        type       = "toggle",
-        trueLabel  = "Yes",
-        falseLabel = "No",
-        readFn     = function() return mainPane.zoomable end,
-        writeFn    = function(v)
-            mainPane.zoomable = v
-            mainPane:_applyTitlebarVisibility()
-        end,
-    }
-
-    rows[#rows+1] = {
-        label      = "Resizable",
-        desc       = "Show drag handles to resize this pane's split slot",
-        type       = "toggle",
-        trueLabel  = "Yes",
-        falseLabel = "No",
-        readFn     = function() return mainPane.resizable ~= false end,
-        writeFn    = function(v)
-            mainPane.resizable = v
-            if not v then mainPane:_hideCornerHandles() end
-            if mainPane._split then mainPane._split:_updateHandleResizability() end
-        end,
-    }
-
-    rows[#rows+1] = {
-        label      = "Bordered",
-        desc       = "Draw the pane's frame border. When off, content fills edge-to-edge",
-        type       = "toggle",
-        trueLabel  = "Yes",
-        falseLabel = "No",
-        readFn     = function() return mainPane.bordered ~= false end,
-        writeFn    = function(v) mainPane:setBordered(v) end,
-    }
-
-    rows[#rows+1] = {
-        label   = "Border Color",
-        desc    = "Custom border color. Leave unset to use theme default",
-        type    = "color",
-        readFn  = function()
-            if mainPane.borderColor then return mainPane.borderColor end
-            local theme = Mux.activeTheme() or {}
-            local css = theme.paneOuterCss or ""
-            local r, g, b = css:match("border:%s*%S+%s+%S+%s+rgb%((%d+),%s*(%d+),%s*(%d+)%)")
-            if r then
-                return string.format("#%02x%02x%02x", tonumber(r), tonumber(g), tonumber(b))
-            end
-            return "#444455"
-        end,
-        writeFn = function(hex) mainPane:setBorderColor(hex) end,
-    }
-
-    rows[#rows+1] = {
-        label   = "Width %",
-        desc    = "Width as a percentage of screen width (applies when in a horizontal split)",
-        type    = "text",
-        readFn  = function()
-            local sw = getMainWindowSize()
-            if mainPane._split and mainPane._split.direction == "h" then
-                local r = (mainPane._slotSide == "a") and mainPane._split.ratio or (1 - mainPane._split.ratio)
-                return tostring(math.floor(r * 100))
-            end
-            return ""
-        end,
-        writeFn = function(v)
-            local pct = tonumber(v:match("%d+"))
-            if pct then Mux.resizePaneToWidth(mainPane, pct) end
-        end,
-    }
-
-    rows[#rows+1] = {
-        label   = "Height %",
-        desc    = "Height as a percentage of screen height (applies when in a vertical split)",
-        type    = "text",
-        readFn  = function()
-            local _, sh = getMainWindowSize()
-            if mainPane._split and mainPane._split.direction == "v" then
-                local r = (mainPane._slotSide == "a") and mainPane._split.ratio or (1 - mainPane._split.ratio)
-                return tostring(math.floor(r * 100))
-            end
-            return ""
-        end,
-        writeFn = function(v)
-            local pct = tonumber(v:match("%d+"))
-            if pct then Mux.resizePaneToHeight(mainPane, pct) end
-        end,
-    }
-
-    local formOpts = {
-        width         = cw - 8,
-        prefix        = "mux_main_prop",
-        rowHeight     = settingsFormOpts.rowHeight,
-        textRowHeight = settingsFormOpts.textRowHeight,
-        widgetWidth   = settingsFormOpts.widgetWidth,
-        widgetHeight  = settingsFormOpts.widgetHeight,
-        getContentScreenPos = function()
-            local win = settingsUi.window
-            if not win then return 0, 0 end
-            local theme = Mux.activeTheme()
-            local tabBarH = theme.tabBarHeight or 22
-            local bi = 2
-            return (win.floatX or 0) + bi,
-                   (win.floatY or 0) + bi + (theme.titlebarHeight or 22) + 2 * tabBarH
-        end,
-    }
-    local formHandle, totalH = Mux.ui.buildForm(contentLbl, rows, formOpts)
-    targetTab._mainPropForm = formHandle
-    resizeWindow("mux_set_cl_mainpane", cw - 8, math.max(totalH or 1, 1))
+    targetTab._muxRelayout   = formHandle and formHandle.relayout
 end
 
 -- Settings content is registered the same way pane/tab properties are
@@ -935,246 +771,539 @@ local function neutralBtnCss()
         .. "QLabel::hover{ background:rgb(58,58,84); }"
 end
 
--- Shared builder for the Conditions and Actions managers. `cfg` supplies the
--- entity-specific bits (labels, registries, kind options, per-kind fields,
--- create/delete, listing). Clicking a registered entry selects it: declarative
--- entries load into the editable form, built-ins show read-only info. The Kind
--- control is a segmented multi-button that rebuilds the form so only the fields
--- relevant to the chosen kind are shown.
-local function buildEntityManager(target, bg, cfg)
-    if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
-    target._customEpoch = (target._customEpoch or 0) + 1
-    local gid   = target._gid .. "e" .. target._customEpoch
-    local P     = cfg.prefix                      -- widget-name prefix, e.g. "mux_condm"
-    local cw    = target.content:get_width();  if cw    < 50 then cw    = 420 end
-    local fullH = target.content:get_height(); if fullH < 50 then fullH = 360 end
-
-    local root = Geyser.Label:new({ name = P.."_"..gid, x=0, y=0, width=cw, height="100%" }, target.content)
-    root:setStyleSheet("background:"..bg.."; border:none;")
-
-    local selKey   = target[cfg.selField]                 -- selected name/id (or nil = new)
-    local declSpec = selKey and cfg.getDecl(selKey) or nil
-    local builtin  = selKey ~= nil and declSpec == nil and cfg.builtinInfo ~= nil
-
-    -- Bind the editor to a draft, reloading it from the spec when the selection
-    -- changes (so typing persists while a kind switch rebuilds the form).
-    local draft
-    if declSpec then
-        if target[cfg.draftForField] ~= selKey then
-            draft = cfg.draftFromSpec(declSpec)
-            target[cfg.draftField], target[cfg.draftForField] = draft, selKey
-        else
-            draft = target[cfg.draftField]
-        end
+-- ── Action editor (Settings → Muxlet → Actions) ───────────────────────────────
+-- A layman-friendly designer: an action is a NAME plus an ordered list of STEPS,
+-- each chosen from the operation palette (Mux.actionOps in conditional.lua). The
+-- whole thing is one scrolling form — identity, the steps with their own fields,
+-- an "add step" picker, save/delete, and the list of saved actions to click into.
+local function _aeContentOpts()
+    local out = {}
+    for _, n in ipairs(Mux._listContent and Mux._listContent() or {}) do
+        out[#out+1] = { value = n, label = (Mux._content[n] and Mux._content[n].name) or n }
+    end
+    if #out == 0 then out[1] = { value = "", label = "(no content registered)" } end
+    return out
+end
+local function _aeThemeOpts()
+    local out = {}
+    for name in pairs(Mux._themes or {}) do out[#out+1] = { value = name, label = name } end
+    table.sort(out, function(a, b) return a.label < b.label end)
+    if #out == 0 then out[1] = { value = "", label = "(no themes)" } end
+    return out
+end
+local function _aeOpPickerOpts()
+    local out = { { value = "", label = "+ Add step…" } }
+    for _, id in ipairs(Mux.actionOpOrder or {}) do
+        local op = Mux.actionOps[id]
+        if op then out[#out+1] = { value = id, label = (op.group or "").." · "..(op.label or id) } end
+    end
+    return out
+end
+local function _aeFieldRow(step, field)
+    local function rd() return step[field.key] end
+    local function wr(v) step[field.key] = v end
+    if field.kind == "lua" then
+        return { label = field.label, type = "code", rowHeight = 150, desc = field.desc,
+            readFn = function() return rd() or "" end, writeFn = wr }
+    elseif field.kind == "content" then
+        return { label = field.label, type = "array", display = "dropdown", desc = field.desc,
+            options = _aeContentOpts(), readFn = function() return rd() or "" end, writeFn = wr }
+    elseif field.kind == "theme" then
+        return { label = field.label, type = "array", display = "dropdown", desc = field.desc,
+            options = _aeThemeOpts(), readFn = function() return rd() or "" end, writeFn = wr }
+    elseif field.kind == "choice" then
+        return { label = field.label, type = "array", display = "dropdown", desc = field.desc,
+            options = field.options or {},
+            readFn = function() return rd() or (field.options and field.options[1] and field.options[1].value) end,
+            writeFn = wr }
     else
-        if target[cfg.draftForField] ~= false then
-            target[cfg.draftField]    = cfg.blankDraft()
-            target[cfg.draftForField] = false
-        end
-        draft = target[cfg.draftField]
-    end
-
-    local y = 6
-    local hdr = Geyser.Label:new({ name=P.."_h_"..gid, x=8, y=y, width=cw-16, height=22 }, root)
-    hdr:setStyleSheet("background:transparent;border:none;")
-    if declSpec then
-        hdr:echo("<span style='color:#cdd2f0;font-size:13px;font-weight:bold;'>Editing</span>"
-              .. "<span style='color:#7f8bbf;font-size:11px;'>  "..selKey.."</span>")
-    elseif builtin then
-        hdr:echo("<span style='color:#cdd2f0;font-size:13px;font-weight:bold;'>Viewing</span>"
-              .. "<span style='color:#7f8bbf;font-size:11px;'>  "..selKey.." (built-in)</span>")
-    else
-        hdr:echo("<span style='color:#cdd2f0;font-size:13px;font-weight:bold;'>New "..cfg.noun.."</span>")
-    end
-    y = y + 28
-
-    if builtin then
-        local info = Geyser.Label:new({ name=P.."_i_"..gid, x=8, y=y, width=cw-16, height=70 }, root)
-        info:setStyleSheet("background:rgba(255,255,255,0.04);border:none;border-radius:4px;")
-        info:echo(cfg.builtinInfo(selKey))
-        y = y + 78
-
-        local dupBtn = Geyser.Label:new({ name=P.."_dup_"..gid, x=8, y=y, width=150, height=28 }, root)
-        dupBtn:setStyleSheet(okBtnCss())
-        dupBtn:echo("<center><span style='font-size:12px;'>Duplicate as editable</span></center>")
-        dupBtn:setClickCallback(function()
-            target[cfg.draftField]    = cfg.duplicateDraft(selKey)
-            target[cfg.draftForField] = false        -- keep this seeded draft
-            target[cfg.selField]      = nil           -- drop into "new" editing mode
-            customRefresh(target)
-        end)
-        local newBtnB = Geyser.Label:new({ name=P.."_newb_"..gid, x=cw-92, y=y, width=84, height=28 }, root)
-        newBtnB:setStyleSheet(neutralBtnCss())
-        newBtnB:echo("<center><span style='font-size:11px;'>+ New</span></center>")
-        newBtnB:setClickCallback(function()
-            target[cfg.selField], target[cfg.draftForField] = nil, nil
-            target[cfg.draftField] = cfg.blankDraft()
-            customRefresh(target)
-        end)
-        y = y + 34
-    else
-        local specs = {}
-        specs[#specs+1] = (declSpec and cfg.idRowReadOnly or cfg.idRowEditable)(draft)
-        specs[#specs+1] = { key="label", label="Label", type="string", display="text",
-            readFn=function() return draft.label or "" end, writeFn=function(v) draft.label=v end }
-        specs[#specs+1] = { key="kind", label="Kind", type="segmentedControl",
-            widgetWidth=cfg.kindWidth or 200, options=cfg.kindOpts,
-            readFn=function() return draft.kind end,
-            writeFn=function(v) draft.kind=v; customRefresh(target) end }
-        for _, mk in ipairs(cfg.fieldsForKind(draft.kind)) do
-            specs[#specs+1] = mk(draft)
-        end
-
-        local fh = Mux.ui.formHeight(specs)
-        local formLbl = Geyser.Label:new({ name=P.."_f_"..gid, x=0, y=y, width=cw, height=fh }, root)
-        Mux.ui.buildForm(formLbl, specs, { width=cw, prefix=P.."_x_"..gid })
-        y = y + fh + 4
-
-        -- Plain-language explanation of the selected kind.
-        local helpTxt = cfg.kindHelp and cfg.kindHelp(draft.kind)
-        if helpTxt then
-            local help = Geyser.Label:new({ name=P.."_help_"..gid, x=8, y=y, width=cw-16, height=34 }, root)
-            help:setStyleSheet("background:transparent;border:none;")
-            help:echo("<span style='color:#8b93c4;font-size:10px;'>"..helpTxt.."</span>")
-            y = y + 38
-        end
-
-        local btnY = y
-        local saveBtn = Geyser.Label:new({ name=P.."_save_"..gid, x=8, y=btnY, width=110, height=28 }, root)
-        saveBtn:setStyleSheet(okBtnCss())
-        saveBtn:echo("<center><span style='font-size:12px;'>"..(declSpec and "Save" or ("+ Add "..cfg.noun)).."</span></center>")
-        saveBtn:setClickCallback(function()
-            local key, err = cfg.save(draft, declSpec and selKey or nil)
-            if key then
-                target[cfg.selField]      = key
-                target[cfg.draftForField] = nil
-                customRefresh(target)
-            elseif err then cecho("\n<red>[mux]<reset> "..tostring(err).."\n") end
-        end)
-        if declSpec then
-            local delBtn = Geyser.Label:new({ name=P.."_del_"..gid, x=124, y=btnY, width=90, height=28 }, root)
-            delBtn:setStyleSheet(delBtnCss())
-            delBtn:echo("<center><span style='font-size:12px;'>Delete</span></center>")
-            delBtn:setClickCallback(function()
-                cfg.del(selKey)
-                target[cfg.selField], target[cfg.draftForField] = nil, nil
-                customRefresh(target)
-            end)
-        end
-        local newBtn = Geyser.Label:new({ name=P.."_new_"..gid, x=cw-92, y=btnY, width=84, height=28 }, root)
-        newBtn:setStyleSheet(neutralBtnCss())
-        newBtn:echo("<center><span style='font-size:11px;'>New</span></center>")
-        newBtn:setClickCallback(function()
-            target[cfg.selField], target[cfg.draftForField] = nil, nil
-            target[cfg.draftField] = cfg.blankDraft()
-            customRefresh(target)
-        end)
-        y = btnY + 34
-    end
-
-    local sep = Geyser.Label:new({ name=P.."_s_"..gid, x=8, y=y, width=cw-16, height=18 }, root)
-    sep:setStyleSheet("background:transparent;border:none;")
-    sep:echo("<span style='color:#7f8bbf;font-size:11px;font-weight:bold;'>Registered  "
-          .. "<span style='color:#5a6090;'>(click to select)</span></span>")
-    y = y + 20
-
-    local entries = cfg.list()
-    if #entries == 0 then
-        local none = Geyser.Label:new({ name=P.."_none_"..gid, x=8, y=y, width=cw-16, height=20 }, root)
-        none:setStyleSheet("background:transparent;border:none;")
-        none:echo("<span style='color:#7f8bbf;font-size:11px;'>None yet.</span>")
-        return
-    end
-    local rowH   = 22
-    local bottom = fullH - 4
-    for i, e in ipairs(entries) do
-        local ry = y + (i - 1) * rowH
-        if ry + rowH - 2 > bottom then break end   -- clip rows that would overflow
-        local key      = e.key
-        local selected  = (key == selKey)
-        local row = Geyser.Label:new({ name=P.."_le"..i.."_"..gid, x=8, y=ry, width=cw-16, height=rowH-2 }, root)
-        row:setStyleSheet(selected
-            and "QLabel{background:rgba(120,140,220,0.22);border:none;border-radius:3px;} QLabel::hover{background:rgba(120,140,220,0.30);}"
-            or  "QLabel{background:rgba(255,255,255,0.03);border:none;border-radius:3px;} QLabel::hover{background:rgba(120,140,220,0.16);}")
-        row:setCursor("PointingHand")
-        row:echo(string.format(
-            "<span style='color:%s;font-size:11px;'>&nbsp;%s</span>"
-            .. "<span style='color:#7f8bbf;font-size:10px;'>&nbsp;&nbsp;%s</span>"
-            .. "<span style='color:%s;font-size:10px;'>&nbsp;&nbsp;%s</span>",
-            selected and "#cfe0ff" or "#e0e3f4", key, e.label or "",
-            e.editable and "#c9b06a" or "#5a6090", e.editable and "editable" or "built-in"))
-        row:setClickCallback(function()
-            target[cfg.selField] = key; target[cfg.draftForField] = nil; customRefresh(target)
-        end)
+        return { label = field.label, type = "text", desc = field.desc,
+            readFn = function() return rd() or "" end, writeFn = wr }
     end
 end
 
-local function buildActionsManager(target, bg)
-    buildEntityManager(target, bg, {
-        prefix = "mux_actm", noun = "action",
-        selField = "_actSel", draftField = "_actDraft", draftForField = "_actDraftFor",
-        getDecl = function(id) return Mux.getDeclarativeAction(id) end,
-        blankDraft = function() return { kind="send" } end,
-        draftFromSpec = function(s) return { id=s.id, label=s.label, kind=s.kind, command=s.command, event=s.event, code=s.code } end,
-        kindWidth = 220,
-        kindOpts = {
-            { value="send",  label="send" },
-            { value="raise", label="raise" },
-            { value="lua",   label="run Lua" },
-        },
-        idRowEditable = function(draft) return { key="id", label="ID", type="string", display="text",
-            readFn=function() return draft.id or "" end, writeFn=function(v) draft.id=v end } end,
-        idRowReadOnly = function(draft) return { key="id", label="ID", type="readOnly",
-            readFn=function() return draft.id or "" end } end,
-        fieldsForKind = function(kind)
-            local f = {}
-            if kind=="send" then
-                f[#f+1] = function(draft) return { key="command", label="Command", type="string", display="text",
-                    desc="text sent to the game", readFn=function() return draft.command or "" end, writeFn=function(v) draft.command=v end } end
+local function buildActionEditor(target, bg)
+  local ok, err = pcall(function()
+    if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
+    if not target._aeDraft then target._aeDraft = { id = "", label = "", steps = {} }; target._aeId = nil end
+    local d = target._aeDraft
+    local function refresh() customRefresh(target) end
+    local function loadDraft(id)
+        local s = Mux.getDeclarativeAction and Mux.getDeclarativeAction(id)
+        if not s then return end
+        local steps = {}
+        for _, st in ipairs(Mux._actionSteps(s)) do
+            local c = {}; for k, v in pairs(st) do c[k] = v end; steps[#steps+1] = c
+        end
+        target._aeDraft = { id = s.id, label = s.label or s.id, steps = steps }
+        target._aeId = id
+    end
+
+    local specs = {}
+    if target._aeViewId then
+        -- Read-only view of a built-in action (Muxlet-provided; not editable). Shown
+        -- so people can see what exists and use them as starting examples.
+        local v = Mux.getAction and Mux.getAction(target._aeViewId)
+        specs[#specs+1] = { type = "divider", label = "Built-in action (read-only)" }
+        specs[#specs+1] = { label = "ID",    type = "readOnly", readFn = function() return target._aeViewId end }
+        specs[#specs+1] = { label = "Name",  type = "readOnly", readFn = function() return (v and v.name) or target._aeViewId end }
+        specs[#specs+1] = { label = "Group", type = "readOnly", readFn = function() return (v and v.group) or "" end }
+        if v and v.desc and v.desc ~= "" then
+            specs[#specs+1] = { label = "What it does", type = "readOnly", readFn = function() return v.desc end }
+        end
+        specs[#specs+1] = { type = "divider", label = "Built-ins can't be edited — pick them directly in a rule's Do/Else, or build your own below." }
+        specs[#specs+1] = { type = "button", label = "+ New action", _noReset = true,
+            onClick = function() target._aeViewId = nil; target._aeDraft = { id = "", label = "", steps = {} }; target._aeId = nil; refresh() end }
+    else
+    if target._aeId then
+        specs[#specs+1] = { label = "ID", type = "readOnly", readFn = function() return d.id or target._aeId end }
+    else
+        specs[#specs+1] = { label = "ID", type = "text", desc = "short unique id, e.g. open_map",
+            readFn = function() return d.id or "" end, writeFn = function(v) d.id = (v or ""):gsub("%s+", "") end }
+    end
+    specs[#specs+1] = { label = "Name", type = "text", desc = "shown in pickers",
+        readFn = function() return d.label or "" end, writeFn = function(v) d.label = v end }
+
+    specs[#specs+1] = { type = "divider", label = "Steps (run top to bottom)" }
+    if #d.steps == 0 then specs[#specs+1] = { type = "divider", label = "— no steps yet —" } end
+    for i, step in ipairs(d.steps) do
+        local op = Mux.actionOps[step.op]
+        specs[#specs+1] = { type = "divider", label = i .. ".  " .. ((op and op.label) or step.op) }
+        if op and op.fields then for _, f in ipairs(op.fields) do specs[#specs+1] = _aeFieldRow(step, f) end end
+        local idx = i
+        if i > 1 then
+            specs[#specs+1] = { type = "button", label = "↑ Move up", _noReset = true,
+                onClick = function() d.steps[idx], d.steps[idx-1] = d.steps[idx-1], d.steps[idx]; refresh() end }
+        end
+        specs[#specs+1] = { type = "button", label = "✖ Remove step " .. i, _noReset = true,
+            onClick = function() table.remove(d.steps, idx); refresh() end }
+    end
+    specs[#specs+1] = { label = "Add step", type = "array", display = "dropdown",
+        desc = "pick an operation to append", options = _aeOpPickerOpts(),
+        readFn = function() return "" end,
+        writeFn = function(opId) if opId and opId ~= "" then d.steps[#d.steps+1] = { op = opId }; refresh() end end }
+
+    specs[#specs+1] = { type = "divider", label = "" }
+    specs[#specs+1] = { type = "button", label = (target._aeId and "Save changes" or "Create action"), _noReset = true,
+        onClick = function()
+            local id = (target._aeId or d.id or ""):gsub("%s+", "")
+            if id == "" then cecho("\n<red>[mux]<reset> Give the action an ID first.\n"); return end
+            if not target._aeId and Mux.getDeclarativeAction and Mux.getDeclarativeAction(id) then
+                cecho("\n<red>[mux]<reset> An action with that ID already exists.\n"); return
             end
-            if kind=="raise" then
-                f[#f+1] = function(draft) return { key="event", label="Event", type="string", display="text",
-                    desc="Mudlet event to raise", readFn=function() return draft.event or "" end, writeFn=function(v) draft.event=v end } end
+            Mux.createDeclarativeAction({ id = id, label = (d.label ~= "" and d.label or id), steps = d.steps })
+            target._aeId = id
+            cecho(string.format("\n<green>[mux]<reset> Action '<cyan>%s<reset>' saved.\n", id)); refresh()
+        end }
+    if target._aeId then
+        specs[#specs+1] = { type = "button", label = "Delete this action", _noReset = true,
+            onClick = function()
+                if Mux.deleteDeclarativeAction then Mux.deleteDeclarativeAction(target._aeId) end
+                target._aeDraft, target._aeId = nil, nil; refresh()
+            end }
+    end
+    specs[#specs+1] = { type = "button", label = "+ New action", _noReset = true,
+        onClick = function() target._aeDraft = { id = "", label = "", steps = {} }; target._aeId = nil; refresh() end }
+    end
+
+    specs[#specs+1] = { type = "divider", label = "Saved actions (click to edit)" }
+    local anyUser, builtins = false, {}
+    if Mux.listActions then
+        for _, a in ipairs(Mux.listActions()) do
+            if Mux._declActions and Mux._declActions[a.id] then
+                anyUser = true
+                local aid = a.id
+                specs[#specs+1] = { type = "button", label = (a.name or aid) .. "   ·   " .. aid, _noReset = true,
+                    onClick = function() target._aeViewId = nil; loadDraft(aid); refresh() end }
+            elseif not a.hidden then
+                builtins[#builtins+1] = a
             end
-            if kind=="lua" then
-                f[#f+1] = function(draft) return { key="code", label="Lua", type="string", display="text",
-                    desc="Lua run when fired; the action context is the vararg, e.g. local ctx=... (ctx.pane)",
-                    readFn=function() return draft.code or "" end, writeFn=function(v) draft.code=v end } end
-            end
-            return f
-        end,
-        kindHelp = function(kind)
-            if kind == "send" then
-                return "Sends the command text to the game, exactly as if you typed it at the input line."
-            elseif kind == "raise" then
-                return "Raises a named Mudlet event. Other scripts — or a condition's <i>event fired</i> test — can react to it."
-            elseif kind == "lua" then
-                return "Runs the Lua you enter. It receives the action context as its vararg — write <i>local ctx = ...</i> to read <i>ctx.pane</i>. Call your own functions for anything longer."
-            end
-            return nil
-        end,
-        save = function(draft, editingKey)
-            local id = editingKey or ((draft.id or ""):gsub("%s+",""))
-            if id == "" then return nil, "Action needs an id." end
-            local ok, err = pcall(Mux.createDeclarativeAction, {
-                id=id, label=(draft.label and draft.label~="") and draft.label or id, kind=draft.kind,
-                command=draft.command, event=draft.event, code=draft.code })
-            if ok then cecho(string.format("\n<green>[mux]<reset> Action '<cyan>%s<reset>' saved.\n", id)); return id end
-            return nil, err
-        end,
-        del = function(id) Mux.deleteDeclarativeAction(id) end,
-        list = function()
-            -- Only YOUR actions are managed here. Built-ins still appear in the
-            -- action pickers (pane Rules, buttons) but aren't listed/edited here.
+        end
+    end
+    if not anyUser then specs[#specs+1] = { type = "divider", label = "— none yet —" } end
+
+    -- Built-in actions, read-only, as a starting reference.
+    if #builtins > 0 then
+        specs[#specs+1] = { type = "divider", label = "Built-in actions (read-only)" }
+        for _, a in ipairs(builtins) do
+            local aid = a.id
+            specs[#specs+1] = { type = "button", label = (a.name or aid) .. "   ·   " .. aid, _noReset = true,
+                onClick = function() target._aeViewId = aid; refresh() end }
+        end
+    end
+
+    local scrollBox = Geyser.ScrollBox:new({ name = "mux_ae_sb", x = 0, y = 0, width = "100%", height = "100%" }, target.content)
+    local cw = target.content:get_width(); if cw < 50 then cw = 400 end
+    local totalH = Mux.ui.formHeight(specs, settingsFormOpts) + 2
+    local contentLbl = Geyser.Label:new({ name = "mux_ae_cl", x = 0, y = 0, width = cw - 8, height = math.max(totalH, 10) }, scrollBox)
+    contentLbl:setStyleSheet(string.format("background:%s; border:none;", bg))
+    target._muxContentH = totalH
+    local formHandle
+    formHandle = Mux.ui.buildForm(contentLbl, specs, {
+        width = cw - 8, prefix = "mxae",
+        rowHeight = settingsFormOpts.rowHeight,
+        widgetWidth = settingsFormOpts.widgetWidth, widgetHeight = settingsFormOpts.widgetHeight,
+        showReset = false,
+        onLayoutChange = function(h) target._muxContentH = h; Mux._scheduleFit(Mux._ownerDialog(target)) end,
+        getContentScreenPos = function() return tabContentScreenPos(target) end,
+        minParentHeight = function() return (target.content and target.content.get_height and target.content:get_height()) or 0 end,
+    })
+    target._settingsForm = formHandle
+    target._muxRelayout  = formHandle and formHandle.relayout
+  end)
+  if not ok then Mux._err("buildActionEditor failed: %s", tostring(err)) end
+end
+
+-- ── Condition editor (Settings → Muxlet → Conditions) ─────────────────────────
+-- Define named conditions from a base type (the primitives in Mux.conditionTypes)
+-- plus its parameters. Named conditions populate the rule "When" dropdown. Mirrors
+-- the action editor: identity, base type + params, save/delete, and a list of saved
+-- + built-in (read-only) conditions.
+local function _ceParamRows(cond)
+    local rows, t = {}, cond.type
+    local function txt(key, label, desc)
+        return { label = label, type = "text", desc = desc,
+            readFn = function() return cond[key] or "" end, writeFn = function(v) cond[key] = v end }
+    end
+    if t == "gmcp_exists" or t == "gmcp_equals" then
+        rows[#rows+1] = txt("path", "GMCP path", "dotted path under gmcp, e.g. char.vitals")
+    end
+    if t == "gmcp_equals" then rows[#rows+1] = txt("value", "Equals", "value to match (text)") end
+    if t == "event_fired" then
+        rows[#rows+1] = txt("event", "Event", "Mudlet event name, e.g. gmcp.char.vitals")
+        rows[#rows+1] = { label = "Seconds", type = "text", desc = "stays true this long after firing",
+            readFn = function() return tostring(cond.seconds or 5) end,
+            writeFn = function(v) cond.seconds = tonumber(v) or 5 end }
+    end
+    if t == "line_match" then
+        rows[#rows+1] = { label = "Match mode", type = "array", display = "dropdown",
+            options = { { value = "substring", label = "Contains text" },
+                        { value = "exact", label = "Whole line equals" },
+                        { value = "regex", label = "Regex (Perl)" } },
+            readFn = function() return cond.mode or "substring" end, writeFn = function(v) cond.mode = v end }
+        rows[#rows+1] = txt("pattern", "Pattern", "text/regex to look for in the game output")
+    end
+    return rows
+end
+
+local function buildConditionEditor(target, bg)
+  local ok, err = pcall(function()
+    if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
+    if not target._ceDraft then target._ceDraft = { id = "", label = "", cond = { type = "gmcp_exists" } }; target._ceId = nil end
+    local d = target._ceDraft
+    local function refresh() customRefresh(target) end
+    local function loadDraft(id)
+        local s = Mux.getDeclarativeCondition and Mux.getDeclarativeCondition(id)
+        if not s then return end
+        local cond = {}; for k, v in pairs(s.cond or {}) do cond[k] = v end
+        target._ceDraft = { id = s.id, label = s.label or s.id, cond = cond }
+        target._ceId = id
+    end
+
+    local specs = {}
+    if target._ceViewId then
+        local v = Mux.getCondition and Mux.getCondition(target._ceViewId)
+        specs[#specs+1] = { type = "divider", label = "Built-in condition (read-only)" }
+        specs[#specs+1] = { label = "ID",   type = "readOnly", readFn = function() return target._ceViewId end }
+        specs[#specs+1] = { label = "Name", type = "readOnly", readFn = function() return (v and v.label) or target._ceViewId end }
+        specs[#specs+1] = { label = "Type", type = "readOnly", readFn = function() return (v and v.cond and v.cond.type) or "" end }
+        specs[#specs+1] = { type = "divider", label = "Built-ins can't be edited — pick them in a rule's When, or build your own below." }
+        specs[#specs+1] = { type = "button", label = "+ New condition", _noReset = true,
+            onClick = function() target._ceViewId = nil; target._ceDraft = { id = "", label = "", cond = { type = "gmcp_exists" } }; target._ceId = nil; refresh() end }
+    else
+        if target._ceId then
+            specs[#specs+1] = { label = "ID", type = "readOnly", readFn = function() return d.id or target._ceId end }
+        else
+            specs[#specs+1] = { label = "ID", type = "text", desc = "short unique id, e.g. in_combat",
+                readFn = function() return d.id or "" end, writeFn = function(v) d.id = (v or ""):gsub("%s+", "") end }
+        end
+        specs[#specs+1] = { label = "Name", type = "text", desc = "shown in the When dropdown",
+            readFn = function() return d.label or "" end, writeFn = function(v) d.label = v end }
+        specs[#specs+1] = { label = "Base type", type = "array", display = "dropdown",
+            desc = "what kind of signal this watches", options = Mux.conditionTypes,
+            readFn = function() return d.cond.type or "gmcp_exists" end,
+            writeFn = function(t) d.cond = { type = t }; refresh() end }
+        specs[#specs+1] = { type = "divider", label = "Parameters" }
+        local prs = _ceParamRows(d.cond)
+        if #prs == 0 then specs[#specs+1] = { type = "divider", label = "— no parameters —" } end
+        for _, r in ipairs(prs) do specs[#specs+1] = r end
+
+        specs[#specs+1] = { type = "divider", label = "" }
+        specs[#specs+1] = { type = "button", label = (target._ceId and "Save changes" or "Create condition"), _noReset = true,
+            onClick = function()
+                local id = (target._ceId or d.id or ""):gsub("%s+", "")
+                if id == "" then cecho("\n<red>[mux]<reset> Give the condition an ID first.\n"); return end
+                if not target._ceId and Mux.getDeclarativeCondition and Mux.getDeclarativeCondition(id) then
+                    cecho("\n<red>[mux]<reset> A condition with that ID already exists.\n"); return
+                end
+                Mux.createDeclarativeCondition({ id = id, label = (d.label ~= "" and d.label or id), cond = d.cond })
+                target._ceId = id
+                cecho(string.format("\n<green>[mux]<reset> Condition '<cyan>%s<reset>' saved.\n", id)); refresh()
+            end }
+        if target._ceId then
+            specs[#specs+1] = { type = "button", label = "Delete this condition", _noReset = true,
+                onClick = function()
+                    if Mux.deleteDeclarativeCondition then Mux.deleteDeclarativeCondition(target._ceId) end
+                    target._ceDraft, target._ceId = nil, nil; refresh()
+                end }
+        end
+        specs[#specs+1] = { type = "button", label = "+ New condition", _noReset = true,
+            onClick = function() target._ceDraft = { id = "", label = "", cond = { type = "gmcp_exists" } }; target._ceId = nil; refresh() end }
+    end
+
+    specs[#specs+1] = { type = "divider", label = "Saved conditions (click to edit)" }
+    local anyUser, builtins = false, {}
+    for _, c in ipairs(Mux.listConditions and Mux.listConditions() or {}) do
+        if c.builtin then builtins[#builtins+1] = c
+        else
+            anyUser = true
+            local cid = c.id
+            specs[#specs+1] = { type = "button", label = c.label .. "   ·   " .. cid, _noReset = true,
+                onClick = function() target._ceViewId = nil; loadDraft(cid); refresh() end }
+        end
+    end
+    if not anyUser then specs[#specs+1] = { type = "divider", label = "— none yet —" } end
+    if #builtins > 0 then
+        specs[#specs+1] = { type = "divider", label = "Built-in conditions (read-only)" }
+        for _, c in ipairs(builtins) do
+            local cid = c.id
+            specs[#specs+1] = { type = "button", label = c.label .. "   ·   " .. cid, _noReset = true,
+                onClick = function() target._ceViewId = cid; refresh() end }
+        end
+    end
+
+    local scrollBox = Geyser.ScrollBox:new({ name = "mux_ce_sb", x = 0, y = 0, width = "100%", height = "100%" }, target.content)
+    local cw = target.content:get_width(); if cw < 50 then cw = 400 end
+    local totalH = Mux.ui.formHeight(specs, settingsFormOpts) + 2
+    local contentLbl = Geyser.Label:new({ name = "mux_ce_cl", x = 0, y = 0, width = cw - 8, height = math.max(totalH, 10) }, scrollBox)
+    contentLbl:setStyleSheet(string.format("background:%s; border:none;", bg))
+    target._muxContentH = totalH
+    local formHandle
+    formHandle = Mux.ui.buildForm(contentLbl, specs, {
+        width = cw - 8, prefix = "mxce",
+        rowHeight = settingsFormOpts.rowHeight,
+        widgetWidth = settingsFormOpts.widgetWidth, widgetHeight = settingsFormOpts.widgetHeight,
+        showReset = false,
+        onLayoutChange = function(h) target._muxContentH = h; Mux._scheduleFit(Mux._ownerDialog(target)) end,
+        getContentScreenPos = function() return tabContentScreenPos(target) end,
+        minParentHeight = function() return (target.content and target.content.get_height and target.content:get_height()) or 0 end,
+    })
+    target._settingsForm = formHandle
+    target._muxRelayout  = formHandle and formHandle.relayout
+  end)
+  if not ok then Mux._err("buildConditionEditor failed: %s", tostring(err)) end
+end
+
+-- ── Token editor (Settings → Theme → Pane/Interface) ────────────────────────
+-- Spec-driven editor for the global token overrides, filtered by group + kind so
+-- it can back split Style (sizes) / Colors sub-tabs. target._settingsCustom looks
+-- like "tok|Pane,Titlebar,Buttons|color". Each row shows the resolved (inherited
+-- or overridden) value and writes a global override; reset reverts to the theme.
+-- Wrapped so any error blanks this tab only and never breaks the dialog.
+local function buildTokenEditor(target, bg)
+    local ok, err = pcall(function()
+        target.contentBg:hide()
+        local groupsCsv, kind = target._settingsCustom:match("^tok|(.*)|(%a+)$")
+        local want = {}
+        for grp in (groupsCsv or ""):gmatch("[^,]+") do want[grp] = true end
+
+        -- Collect rows for one kind ("size" or "color") across the wanted groups.
+        local GROUP_LABELS = {
+            Titlebar = "Titlebar", Buttons = "Buttons", Slot = "Empty Slot",
+            Drag = "Pane Insertion Preview", Handle = "Embedded Pane Separator",
+        }
+        local function rowsForKind(k)
             local out = {}
-            for _, a in ipairs(Mux.listActions and Mux.listActions() or {}) do
-                if Mux._declActions and Mux._declActions[a.id] then
-                    out[#out+1] = { key=a.id, label=a.name, editable=true }
+            for _, grp in ipairs(Mux.tokens.specGroups) do
+                if want[grp] then
+                    for _, s in ipairs(Mux.tokens.spec) do
+                        if s.group == grp and s.type == k then
+                            local key = s.key
+                            local label = s.label
+                            if k == "color" and grp ~= "Pane" then
+                                label = (GROUP_LABELS[grp] or grp) .. ": " .. label
+                            end
+                            local row = {
+                                label = label, _tokenKey = key,
+                                readFn  = function() return Mux.tok(key, nil) end,
+                                writeFn = function(v) Mux.setGlobalToken(key, v) end,
+                            }
+                            if k == "size" then row.type, row.min, row.max = "number", s.min, s.max
+                            else row.type = "color" end
+                            out[#out+1] = row
+                        end
+                    end
                 end
             end
             return out
-        end,
-    })
+        end
+
+        local specs = {}
+        local function addSection(label, rows, collapsed)
+            if #rows == 0 then return end
+            specs[#specs+1] = { type = "divider", label = label, _collapsed = collapsed }
+            for _, r in ipairs(rows) do specs[#specs+1] = r end
+        end
+        if kind == "all" then
+            addSection("Style",  rowsForKind("size"),  false)
+            addSection("Colors", rowsForKind("color"), true)   -- colours start collapsed
+        elseif kind == "size" or kind == "color" then
+            -- single-kind: keep per-group dividers
+            for _, grp in ipairs(Mux.tokens.specGroups) do
+                if want[grp] then
+                    local rows = {}
+                    for _, s in ipairs(Mux.tokens.spec) do
+                        if s.group == grp and s.type == kind then
+                            local key = s.key
+                            local row = {
+                                label = s.label, _tokenKey = key,
+                                readFn  = function() return Mux.tok(key, nil) end,
+                                writeFn = function(v) Mux.setGlobalToken(key, v) end,
+                            }
+                            if kind == "size" then row.type, row.min, row.max = "number", s.min, s.max
+                            else row.type = "color" end
+                            rows[#rows+1] = row
+                        end
+                    end
+                    addSection(grp, rows)
+                end
+            end
+        end
+        if #specs == 0 then return end
+
+        local safe = target._settingsCustom:gsub("[^%w]", "_")
+        local scrollBox = Geyser.ScrollBox:new({
+            name = "mux_set_sb_" .. safe, x = 0, y = 0, width = "100%", height = "100%",
+        }, target.content)
+        local cw = target.content:get_width(); if cw < 50 then cw = 400 end
+        local totalH = Mux.ui.formHeight(specs, settingsFormOpts) + 2
+        local contentLbl = Geyser.Label:new({
+            name = "mux_set_cl_" .. safe, x = 0, y = 0, width = cw - 8, height = math.max(totalH, 10),
+        }, scrollBox)
+        contentLbl:setStyleSheet(string.format("background:%s; border:none;", bg))
+        target._muxContentH = totalH
+
+        local formHandle
+        formHandle = Mux.ui.buildForm(contentLbl, specs, {
+            width = cw - 8, prefix = "mxs_" .. safe,
+            rowHeight = settingsFormOpts.rowHeight,
+            widgetWidth = settingsFormOpts.widgetWidth, widgetHeight = settingsFormOpts.widgetHeight,
+            showReset = true,
+            resetTooltip = "Revert to theme",
+            onReset = function(i, spec)
+                if spec._tokenKey then
+                    Mux.clearGlobalToken(spec._tokenKey)
+                    if formHandle then formHandle.refresh(i) end
+                end
+            end,
+            onLayoutChange = function(h)
+                target._muxContentH = h
+                Mux._scheduleFit(Mux._ownerDialog(target))
+            end,
+            getContentScreenPos = function() return tabContentScreenPos(target) end,
+            minParentHeight = function()
+                return (target.content and target.content.get_height and target.content:get_height()) or 0
+            end,
+        })
+        target._settingsForm = formHandle
+        target._muxRelayout   = formHandle and formHandle.relayout
+    end)
+    if not ok then Mux._err("buildTokenEditor failed: %s", tostring(err)) end
+end
+
+-- Settings → Theme → General: the theme picker plus the global "Interface" chrome
+-- colours (context menu, ghosts, scrollbar) — folded in here so there's no separate
+-- Interface tab. Picker rows don't get a reset icon; colour rows revert to theme.
+local function buildThemeGeneral(target, bg)
+    local ok, err = pcall(function()
+        target.contentBg:hide()
+        local formHandle   -- referenced by the reset button's onClick (assigned below)
+        local specs = {}
+        specs[#specs+1] = { type = "divider", label = "Theme" }
+        -- Dropdown of every registered theme (not a static dark/light list).
+        local themeNames = {}
+        for name in pairs(Mux._themes or {}) do themeNames[#themeNames+1] = name end
+        table.sort(themeNames)
+        if #themeNames == 0 then themeNames = { "dark", "light" } end
+        local themeOptions = {}
+        for _, n in ipairs(themeNames) do themeOptions[#themeOptions+1] = { value = n, label = n } end
+        specs[#specs+1] = {
+            label = "Theme", type = "array", display = "dropdown", options = themeOptions, _noReset = true,
+            readFn  = function() return Mux.settings.get("muxtheme", "active") end,
+            writeFn = function(v) Mux.settings.set("muxtheme", "active", v) end,
+        }
+        specs[#specs+1] = {
+            type = "button", label = "Reset all colors to theme", _noReset = true,
+            desc = "Clear every global colour override so the selected theme shows through.",
+            onClick = function()
+                Mux.resetGlobalTokens()
+                -- Refresh widgets on every settings tab, not just this form, so the
+                -- Panes tab's colour pickers also snap back to the theme values.
+                if Mux._settings_ui and Mux._settings_ui._refreshAllForms then
+                    Mux._settings_ui._refreshAllForms()
+                elseif formHandle then formHandle.refreshAll() end
+            end,
+        }
+        -- Global "chrome" colours, one collapsible section per concept so each is
+        -- self-explanatory rather than a single opaque "Interface" lump.
+        local ifaceOrder  = { "Menu", "Scrollbar" }
+        local ifaceLabels = {
+            Menu = "Right-Click Menu", Scrollbar = "Scrollbar",
+        }
+        for _, grp in ipairs(ifaceOrder) do
+            local rows = {}
+            for _, s in ipairs(Mux.tokens.spec) do
+                if s.group == grp and s.type == "color" then
+                    local key = s.key
+                    rows[#rows+1] = {
+                        label = s.label, type = "color", _tokenKey = key,
+                        readFn  = function() return Mux.tok(key, nil) end,
+                        writeFn = function(v) Mux.setGlobalToken(key, v) end,
+                    }
+                end
+            end
+            if #rows > 0 then
+                specs[#specs+1] = { type = "divider", label = ifaceLabels[grp] or grp, _collapsed = true }
+                for _, r in ipairs(rows) do specs[#specs+1] = r end
+            end
+        end
+
+        local scrollBox = Geyser.ScrollBox:new({
+            name = "mux_set_sb_themegen", x = 0, y = 0, width = "100%", height = "100%",
+        }, target.content)
+        local cw = target.content:get_width(); if cw < 50 then cw = 400 end
+        local totalH = Mux.ui.formHeight(specs, settingsFormOpts) + 2
+        local contentLbl = Geyser.Label:new({
+            name = "mux_set_cl_themegen", x = 0, y = 0, width = cw - 8, height = math.max(totalH, 10),
+        }, scrollBox)
+        contentLbl:setStyleSheet(string.format("background:%s; border:none;", bg))
+        target._muxContentH = totalH
+
+        local formHandle
+        formHandle = Mux.ui.buildForm(contentLbl, specs, {
+            width = cw - 8, prefix = "mxs_themegen",
+            rowHeight = settingsFormOpts.rowHeight,
+            widgetWidth = settingsFormOpts.widgetWidth, widgetHeight = settingsFormOpts.widgetHeight,
+            showReset = true, resetTooltip = "Revert to theme",
+            onReset = function(i, spec)
+                if spec._tokenKey then
+                    Mux.clearGlobalToken(spec._tokenKey)
+                    if formHandle then formHandle.refresh(i) end
+                end
+            end,
+            onLayoutChange = function(h)
+                target._muxContentH = h
+                Mux._scheduleFit(Mux._ownerDialog(target))
+            end,
+            getContentScreenPos = function() return tabContentScreenPos(target) end,
+            minParentHeight = function()
+                return (target.content and target.content.get_height and target.content:get_height()) or 0
+            end,
+        })
+        target._settingsForm = formHandle
+        target._muxRelayout   = formHandle and formHandle.relayout
+    end)
+    if not ok then Mux._err("buildThemeGeneral failed: %s", tostring(err)) end
 end
 
 local muxSettingsContentDef = {
@@ -1184,10 +1313,16 @@ local muxSettingsContentDef = {
         local theme = Mux.activeTheme() or {}
         local ui    = theme.ui or theme.settingsUi or {}
         local bg    = ui.bg or "rgb(18, 18, 26)"
-        if target._settingsMain then
-            buildMainPaneContent(target, bg)
-        elseif target._settingsCustom == "actions" then
-            buildActionsManager(target, bg)
+        if target._settingsCustom == "actions" then
+            local ok, err = pcall(buildActionEditor, target, bg)
+            if not ok and Mux._warn then Mux._warn("actions manager failed: %s", tostring(err)) end
+        elseif target._settingsCustom == "conditions" then
+            local ok, err = pcall(buildConditionEditor, target, bg)
+            if not ok and Mux._warn then Mux._warn("conditions manager failed: %s", tostring(err)) end
+        elseif target._settingsCustom == "themegeneral" then
+            buildThemeGeneral(target, bg)
+        elseif target._settingsCustom and target._settingsCustom:match("^tok|") then
+            buildTokenEditor(target, bg)
         elseif target._settingsNsList then
             buildMultiNsContent(target, target._settingsNsList, bg)
         elseif target._settingsNs then
@@ -1257,10 +1392,12 @@ local function buildWindow()
 
     pane.floatX = x; pane.floatY = y
     pane.floatW = w; pane.floatH = h
+    Mux._fitDialog = pane   -- auto-fit height to the active tab as the user navigates
     pane.onClose = function()
         closeDropdown(); hideTooltip()
         settingsUi.visible = false
         settingsUi.window  = nil
+        if Mux._fitDialog == pane then Mux._fitDialog = nil end
     end
     settingsUi.window = pane
 
@@ -1276,8 +1413,10 @@ local function buildWindow()
         end
         local reasons = {}
         if mainP then
-            if not mainP.titlebarVisible           then reasons[#reasons+1] = "hidden titlebar" end
-            if mainP.showSettingsInMenu == false   then reasons[#reasons+1] = "Settings button hidden" end
+            if not mainP.titlebarVisible then reasons[#reasons+1] = "hidden titlebar" end
+            if Mux.settings.get("mux", "showConsoleGear") == false then
+                reasons[#reasons+1] = "hidden Settings gear"
+            end
         end
         if #reasons > 0 then
             local reasonStr = table.concat(reasons, " and ")
@@ -1294,6 +1433,8 @@ local function buildWindow()
     pane.tabsLocked    = true
     if pane.titlebar then pane.titlebar:setCursor(pane:_titlebarCursor()) end
     pane:_applyTitlebarVisibility()
+    pane.receivable = false   -- workspace tabs can't be dropped into the dialog
+    pane._isDialogRoot = true -- per-dialog auto-fit resolves to this surface
     pane:enableTabs({ noDefaultTab = true })
 
     -- Build tabs from the hierarchy (already computed above for height pre-sizing).
@@ -1349,6 +1490,7 @@ local function buildWindow()
     end
 
     settingsUi.window:raise()
+    if tempTimer then tempTimer(0, function() pcall(Mux._fitDialogToActiveTab, pane) end) end
 end
 
 function Mux.settings.toggle()
@@ -1383,16 +1525,25 @@ function Mux.settings.toggle()
     end
 end
 
-Mux.settings.register("mux", "theme", {
-    tab         = "Muxlet/General",
+Mux.settings.register("muxtheme", "active", {
+    tab         = "Muxlet/Theme",
+    label       = "Theme",
     description = "Active color theme",
     default     = "dark",
     choices     = {"dark", "light"},
 })
 
 Mux.settings.register("mux", "debug", {
+    tab         = "Muxlet/General",   -- anchors the mux namespace to the General tab
     description = "Verbose debug logging to the console",
     default     = false,
+})
+
+Mux.settings.register("mux", "ghostDropText", {
+    tab         = "Muxlet/General",
+    label       = "Empty slot text",
+    description = "Text shown inside an empty pane slot prompting a drop.",
+    default     = "Drop a pane here",
 })
 
 Mux.settings.register("mux", "live_resize_max_panes", {
@@ -1430,28 +1581,34 @@ Mux.settings.register("mux", "welcome_shown", {
     default     = false,
 })
 
-Mux.settings.onChange("mux", "theme", function(value)
+Mux.settings.onChange("muxtheme", "active", function(value)
     if Mux.applyTheme then Mux.applyTheme(value) end
-    if Mux._applyTabStyle then Mux._applyTabStyle() end   -- re-apply tab styling on top of the new theme
-    -- Rebuild the settings window immediately so its widgets reflect the new theme.
+    if Mux._restyleAllTabs then Mux._restyleAllTabs() end   -- restyle tabs on top of the new theme
+    -- Rebuild the settings window so its widgets reflect the new theme. Deferred a
+    -- tick so the originating click (e.g. the theme dropdown option) finishes before
+    -- its host dialog is closed and rebuilt.
     if settingsUi.window then
         local wasVisible = settingsUi.visible
         local savedTab   = settingsUi.currentTab
-        closeDropdown(); hideTooltip()
-        settingsUi.window:close()
-        -- onClose nulled window/visible
-        if wasVisible then
-            local count = 0
-            for _ in pairs(Mux.settings._registry) do count = count + 1 end
-            buildWindow()
-            settingsUi.window._settingsNsCount = count
-            settingsUi.visible = true
-            if savedTab then
-                tempTimer(0.05, function()
-                    if settingsUi.window then Mux.settings.showTab(savedTab) end
-                end)
+        local function rebuild()
+            if not settingsUi.window then return end
+            closeDropdown(); hideTooltip()
+            settingsUi.window:close()
+            -- onClose nulled window/visible
+            if wasVisible then
+                local count = 0
+                for _ in pairs(Mux.settings._registry) do count = count + 1 end
+                buildWindow()
+                settingsUi.window._settingsNsCount = count
+                settingsUi.visible = true
+                if savedTab then
+                    tempTimer(0.05, function()
+                        if settingsUi.window then Mux.settings.showTab(savedTab) end
+                    end)
+                end
             end
         end
+        if tempTimer then tempTimer(0, rebuild) else rebuild() end
     end
 end)
 
@@ -1460,6 +1617,23 @@ Mux.settings.register("mux", "compact_titlebar", {
     description = "Hide all titlebar buttons — use right-click menu instead",
     default     = false,
 })
+
+-- The ⚙ Settings gear on the Mudlet console pane. Lives here (not just in the
+-- pane's Properties) so it is always recoverable: `mux settings` opens this dialog
+-- even when the gear and titlebar are hidden, giving a guaranteed way back.
+Mux.settings.register("mux", "showConsoleGear", {
+    tab         = "Muxlet/General",
+    description = "Show the ⚙ Settings gear on the Mudlet console pane",
+    default     = true,
+})
+Mux.settings.onChange("mux", "showConsoleGear", function()
+    if not Mux._panes then return end
+    for _, p in pairs(Mux._panes) do
+        if p._activeContent == "mux_console" and p._syncButtons then
+            p:_syncButtons(true)
+        end
+    end
+end)
 
 -- Downstream packages (e.g. fed2-tools) set this to true in their muxletReady
 -- handler to suppress the "Started — type mux help" message.
@@ -1478,6 +1652,7 @@ Mux.settings._order["mux"] = {
     "auto_start",
     "quietStart",
     "compact_titlebar",
+    "showConsoleGear",
     "confirmPaneClose",
     "confirmTabClose",
     "live_resize_max_panes",
@@ -1498,172 +1673,9 @@ Mux.settings.onChange("mux", "debug", function(value)
     Mux.debug = value
 end)
 
--- ── Tab styling (Settings → Muxlet → Tabs → Style / Colors) ───────────────────
--- Look-and-feel knobs applied to every tab on the workspace at once. Values write
--- immediately and live-apply. Split across two sub-tabs: Style (dimensions, shape,
--- borders, hover behaviour, bar chrome) and Colors (all colour pickers). Tab text
--- colours are set inline by _echoTabLabel (hover included) so they always apply.
-
--- Style sub-tab.
-Mux.settings.register("muxtab", "tab_height", {
-    tab = "Muxlet/Tabs/Style", order = 1, label = "Bar Height",
-    description = "Tab bar height in pixels", default = 30, min = 16, max = 48,
-})
-Mux.settings.register("muxtab", "tab_font_size", {
-    label = "Font Size", description = "Tab label font size in pixels", default = 12, min = 6, max = 24,
-})
-Mux.settings.register("muxtab", "tab_shape", {
-    widget = "segmented", label = "Shape", description = "Tab shape",
-    default = "Round", choices = { "Square", "Round", "Pill", "Circle" },
-})
-Mux.settings.register("muxtab", "tab_h_gap", {
-    label = "Horizontal Gap", description = "Space between tabs and at the ends of the bar (px)",
-    default = 0, min = 0, max = 40,
-})
-Mux.settings.register("muxtab", "tab_v_gap", {
-    label = "Vertical Gap", description = "Space above/below each tab within the bar (px)",
-    default = 1, min = 0, max = 16,
-})
-Mux.settings.register("muxtab", "tab_border_width", {
-    label = "Border Width", description = "Inactive tab border thickness (px)", default = 1, min = 0, max = 6,
-})
-Mux.settings.register("muxtab", "tab_active_border_width", {
-    label = "Active Border Width", description = "Active tab border thickness (px)", default = 1, min = 0, max = 6,
-})
-Mux.settings.register("muxtab", "tab_hover_mode", {
-    widget = "segmented", label = "Hover Mode",
-    description = "Hover highlights the whole tab (Fill) or just its border (Border)",
-    default = "Border", choices = { "Fill", "Border" },
-})
-Mux.settings.register("muxtab", "tab_bar_background", {
-    label = "Tab Bar Background",
-    description = "Show the tab bar's own (black) background. Off makes the bar invisible (only tabs + the + button show)",
-    default = true,
-})
-
--- Colors sub-tab.
-Mux.settings.register("muxtabc", "tab_text_color", {
-    tab = "Muxlet/Tabs/Colors", order = 2, widget = "color", label = "Text", default = "#ffffff",
-    description = "Inactive tab text color",
-})
-Mux.settings.register("muxtabc", "tab_active_text_color", {
-    widget = "color", label = "Active Text", description = "Active tab text color", default = "#ffffff",
-})
-Mux.settings.register("muxtabc", "tab_bg_color", {
-    widget = "color", label = "Background", description = "Inactive tab background", default = "#1c1c1c",
-})
-Mux.settings.register("muxtabc", "tab_active_bg_color", {
-    widget = "color", label = "Active Background", description = "Active tab background", default = "#373737",
-})
-Mux.settings.register("muxtabc", "tab_border_color", {
-    widget = "color", label = "Border", description = "Inactive tab border color", default = "#484848",
-})
-Mux.settings.register("muxtabc", "tab_active_border_color", {
-    widget = "color", label = "Active Border", description = "Active tab border color", default = "#9b9b9b",
-})
-Mux.settings.register("muxtabc", "tab_hover_bg_color", {
-    widget = "color", label = "Hover Highlight",
-    description = "Tab hover highlight color (fills the tab, or its border in Border mode)", default = "#ffffff",
-})
-Mux.settings.register("muxtabc", "tab_hover_text_color", {
-    widget = "color", label = "Hover Text", description = "Tab hover text color", default = "#ffffff",
-})
-
--- Compose tab CSS from the Style + Colors settings, write it into the active theme
--- so new tabs and activations pick it up, then restyle/resize every live tab host.
--- Tab text colour is applied inline by _echoTabLabel, not via CSS.
-function Mux._applyTabStyle()
-    local theme = Mux.activeTheme and Mux.activeTheme() or nil
-    if not theme then return end
-    local function g(ns, k, d) local v = Mux.settings.get(ns, k); if v == nil then return d end; return v end
-    local h     = g("muxtab",  "tab_height", 30)
-    local fs    = g("muxtab",  "tab_font_size", 12)
-    local shape = g("muxtab",  "tab_shape", "Round")
-    local hg    = g("muxtab",  "tab_h_gap", 0)
-    local vg    = g("muxtab",  "tab_v_gap", 1)
-    local bw    = g("muxtab",  "tab_border_width", 1)
-    local abw   = g("muxtab",  "tab_active_border_width", 1)
-    local hmode = g("muxtab",  "tab_hover_mode", "Border")
-    local barBg = g("muxtab",  "tab_bar_background", true)
-    local tcol  = g("muxtabc", "tab_text_color", "#ffffff")
-    local atc   = g("muxtabc", "tab_active_text_color", "#ffffff")
-    local bg    = g("muxtabc", "tab_bg_color", "#1c1c1c")
-    local abg   = g("muxtabc", "tab_active_bg_color", "#373737")
-    local bc    = g("muxtabc", "tab_border_color", "#484848")
-    local abc   = g("muxtabc", "tab_active_border_color", "#9b9b9b")
-    local hbg   = g("muxtabc", "tab_hover_bg_color", "#ffffff")
-    local htc   = g("muxtabc", "tab_hover_text_color", "#ffffff")
-
-    -- border-radius only renders when a border is present; the default border
-    -- width of 1 keeps Pill/Circle visibly rounded.
-    local radius
-    if     shape == "Square" then radius = "0px"
-    elseif shape == "Pill"   then radius = tostring(math.floor(h / 2)) .. "px"
-    elseif shape == "Circle" then radius = tostring(math.floor(h / 2)) .. "px"
-    else                          radius = "6px" end   -- Round
-
-    -- Hover honours the mode (text colour is handled by _echoTabLabel re-echo):
-    local function hover(borderW, bcol)
-        if hmode == "Border" then
-            return string.format("QLabel::hover{ border:%dpx solid %s; }", (borderW > 0 and borderW or 1), hbg)
-        end
-        return string.format("QLabel::hover{ background-color:%s; }", hbg)
-    end
-
-    theme.tabInactiveCss = string.format(
-        "QLabel{ background-color:%s; border:%dpx solid %s; border-radius:%s; margin:%dpx %dpx; padding:0 4px; } %s",
-        bg, bw, bc, radius, vg, hg, hover(bw, bc))
-    theme.tabActiveCss = string.format(
-        "QLabel{ background-color:%s; border:%dpx solid %s; border-radius:%s; margin:%dpx %dpx; padding:0 4px; } %s",
-        abg, abw, abc, radius, vg, hg, hover(abw, abc))
-    theme.tabActiveParentCss   = theme.tabActiveCss
-    theme.tabInactiveTextColor = tcol
-    theme.tabActiveTextColor   = atc
-    theme.tabHoverTextColor    = htc
-    theme.tabFontSize          = fs
-    theme.tabBarHeight         = h
-    -- Tab bar's own chrome: black background plus the thin grey separator line
-    -- when shown; fully transparent (no line) when the toggle is off.
-    theme.tabBarCss = barBg
-        and "background-color: #000000; border: none; border-bottom: 1px solid rgba(255,255,255,0.10);"
-        or  "background-color: transparent; border: none;"
-
-    for _, host in pairs(Mux._tabHosts or {}) do
-        if host._tabsEnabled then
-            pcall(function()
-                if host._tabBar then
-                    host._tabBar:resize(nil, Mux._toPx(h)); host._tabBar:reposition()
-                    host._tabBar:setStyleSheet(theme.tabBarCss)
-                end
-                if host._tabViewport then
-                    host._tabViewport:move(nil, Mux._toPx(h)); host._tabViewport:reposition()
-                end
-                for _, tab in ipairs(host._tabs or {}) do
-                    if tab.label then
-                        local isActive = (host._activeTabId == tab.id)
-                        tab.label:setStyleSheet(isActive and theme.tabActiveCss or theme.tabInactiveCss)
-                        host:_echoTabLabel(tab.label, tab.name, isActive, false, theme, tab.nameAlign)
-                    end
-                end
-                if host._tabBarBox then host._tabBarBox:organize() end
-                if host.content   then Mux._relayoutContent(host) end
-            end)
-        end
-    end
-end
-
-for _, k in ipairs({
-    "tab_height", "tab_font_size", "tab_shape", "tab_h_gap", "tab_v_gap",
-    "tab_border_width", "tab_active_border_width", "tab_hover_mode", "tab_bar_background",
-}) do
-    Mux.settings.onChange("muxtab", k, function() Mux._applyTabStyle() end)
-end
-for _, k in ipairs({
-    "tab_text_color", "tab_active_text_color", "tab_bg_color", "tab_active_bg_color",
-    "tab_border_color", "tab_active_border_color", "tab_hover_bg_color", "tab_hover_text_color",
-}) do
-    Mux.settings.onChange("muxtabc", k, function() Mux._applyTabStyle() end)
-end
+-- Tab styling is no longer a separate settings system. Tabs use the same token
+-- element templates as panes (Mux.css "tab*"), edited globally via Theme > Tabs
+-- and per-tab via Properties; MuxSurface:_restyleTabBar applies them.
 
 -- tempTimer(0) defers past the synchronous script-loading stack so all Muxlet
 -- functions are defined before this runs. raiseEvent("muxletReady") fires last
@@ -1675,7 +1687,7 @@ tempTimer(0, function()
     if Mux.registerContent then
         Mux.registerContent("mux_settings", muxSettingsContentDef)
     end
-    local savedTheme = Mux.settings.get("mux", "theme")
+    local savedTheme = Mux.settings.get("muxtheme", "active") or Mux.settings.get("mux", "theme")
     if savedTheme and Mux.applyTheme and savedTheme ~= Mux._activeThemeName then
         Mux.applyTheme(savedTheme)
     end

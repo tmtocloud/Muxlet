@@ -1,10 +1,10 @@
 [
   {"name": "globals"},
+  {"name": "style"},
   {"name": "settings"},
   {"name": "content"},
   {"name": "actions"},
   {"name": "update"},
-  {"name": "theme"},
   {"name": "pane"},
   {"name": "tabs"},
   {"name": "connection"},
@@ -19,7 +19,6 @@
   {"name": "contentLibrary"},
   {"name": "properties"},
   {"name": "conditional"},
-  {"name": "blueprintui"},
   {"name": "devmode"},
   {"name": "themes"}
 ]
