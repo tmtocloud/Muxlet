@@ -1369,6 +1369,7 @@ Mux.registerContent("gmcp_inspector", {
     name        = "GMCP Inspector",
     description = "Type-grouped interactive visualiser for any GMCP path. "
                .. "Click PATH to browse; − / + to zoom.",
+    group       = "Muxlet",
     singleton   = false,
     apply       = insApply,
     remove      = insRemove,

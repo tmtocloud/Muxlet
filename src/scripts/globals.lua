@@ -649,8 +649,150 @@ function Mux._showContextMenu(pane, globalX, globalY)
     end
 end
 
+local LIB_ROW_H = 52
+local LIB_DIV_H = 24
+
+-- Renders one content-library row (info icon, name, Add/Remove/Active button) as a
+-- Mux.ui.buildForm block widget. All per-row state travels on the row's own spec
+-- (pane, contentName, dlg, refresh) instead of closing over _showContentLibrary, so
+-- one registered widget type serves every dialog instance.
+local function _buildContentLibraryRow(row, c)
+    local spec        = c.spec
+    local pane        = spec.pane
+    local contentName = spec.contentName
+    local def         = Mux._content[contentName]
+    local dispName     = (def and def.name)        or contentName
+    local dispDesc     = (def and def.description) or ""
+    local isEven       = spec._even
+    local uid          = c.uid
+    local rowW         = c.formW
+
+    -- State for THIS pane: active here (removable), held by a singleton
+    -- elsewhere (greyed/locked), or free to add.
+    local isHere = (pane._activeContent == contentName)
+    local isLocked = def and def.singleton
+        and def._activeTargetRef and def._activeTargetRef ~= pane
+        and def._activeTargetRef._activeContent == contentName
+
+    -- Content may refuse to apply in this pane's current state (e.g. the console
+    -- can't go in a floating pane). canApply returns ok, reason — checked even when
+    -- singleton-locked so the state-specific reason takes precedence.
+    local canAdd, blockReason = true, nil
+    if not isHere and def and type(def.canApply) == "function" then
+        local ok, reason = def.canApply(pane)
+        if ok == false then canAdd, blockReason = false, reason end
+    end
+    -- Greyed: held by a singleton elsewhere, or not applicable here.
+    local greyed = isLocked or (not canAdd)
+
+    if greyed then
+        row:setStyleSheet(isEven
+            and "background:rgba(18,19,28,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.04);"
+            or  "background:rgba(14,15,22,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.04);")
+    else
+        row:setStyleSheet(isEven
+            and "background:rgba(22,25,40,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.05);"
+            or  "background:rgba(16,18,30,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.05);")
+    end
+
+    -- ⓘ info icon — hover to see full description
+    local icon = Geyser.Label:new({
+        name=uid.."_ic", x=10, y=15, width=22, height=22, fillBg=1,
+    }, row)
+    if greyed then
+        icon:setStyleSheet([[
+            QLabel {
+                background: rgba(28,32,44,0.70);
+                border: 1px solid rgba(50,55,70,0.35);
+                border-radius: 4px;
+                color: #4a5568;
+                font-size: 11px;
+                font-weight: bold;
+            }
+        ]])
+    else
+        icon:setStyleSheet([[
+            QLabel {
+                background: rgba(35,55,90,0.80);
+                border: 1px solid rgba(55,85,140,0.40);
+                border-radius: 4px;
+                color: #5888c8;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QLabel::hover {
+                background: rgba(48,72,118,0.90);
+                border-color: rgba(80,125,210,0.65);
+                color: #88b8ff;
+            }
+        ]])
+    end
+    icon:rawEcho("<center>i</center>")
+    if dispDesc ~= "" then icon:setToolTip(dispDesc, 6) end
+
+    -- Name label (vertically centered in row)
+    local nameLbl = Geyser.Label:new({
+        name=uid.."_nm", x=40, y=16, width=rowW-128, height=20,
+    }, row)
+    nameLbl:setStyleSheet(greyed
+        and "background:transparent;color:#4a5568;font-size:11px;font-weight:bold;"
+        or  "background:transparent;color:#c6d2ee;font-size:11px;font-weight:bold;")
+    nameLbl:rawEcho(dispName)
+
+    -- Add / Remove / Active button
+    local addBtn = Geyser.Label:new({
+        name=uid.."_ab", x=rowW-82, y=13, width=72, height=26, fillBg=1,
+    }, row)
+    local capName = contentName
+    local dlg, refresh = spec.dlg, spec.refresh
+    if isHere then
+        addBtn:setStyleSheet([[
+            QLabel{background:rgba(120,40,40,0.9);color:#fdd;font-size:9px;font-weight:bold;
+                   border:1px solid rgba(180,80,80,0.55);border-radius:4px;}
+            QLabel::hover{background:rgba(150,55,55,0.95);}
+        ]])
+        addBtn:rawEcho("<center>Remove</center>")
+        addBtn:setClickCallback(function() Mux._removeContent(pane); refresh() end)
+    elseif not canAdd then
+        addBtn:setStyleSheet([[
+            QLabel{background:rgba(22,24,34,0.80);color:#3a4458;font-size:9px;font-weight:bold;
+                   border:1px solid rgba(40,45,60,0.45);border-radius:4px;}
+            QToolTip{background-color:#1d2030;color:#e8ebf5;border:1px solid rgba(255,255,255,0.18);
+                     padding:5px 8px;border-radius:4px;}
+        ]])
+        addBtn:rawEcho("<center>—</center>")
+        addBtn:setToolTip(blockReason or "Can't be added here.", 6)
+    elseif isLocked then
+        addBtn:setStyleSheet([[
+            QLabel{background:rgba(22,24,34,0.80);color:#3a4458;font-size:9px;font-weight:bold;
+                   border:1px solid rgba(40,45,60,0.45);border-radius:4px;}
+        ]])
+        addBtn:rawEcho("<center>Active</center>")
+    else
+        addBtn:setStyleSheet([[
+            QLabel{background:rgba(28,70,44,0.9);color:#73de94;font-size:9px;font-weight:bold;
+                   border:1px solid rgba(45,115,65,0.5);border-radius:4px;}
+            QLabel::hover{background:rgba(38,90,55,0.95);border-color:rgba(60,145,80,0.7);}
+        ]])
+        addBtn:rawEcho("<center>+ Add</center>")
+        local function applyAndClose()
+            Mux._applyContent(pane, capName)
+            dlg:close()
+        end
+        addBtn:setClickCallback(applyAndClose)
+        nameLbl:setClickCallback(applyAndClose)
+        row:setClickCallback(applyAndClose)
+    end
+end
+
 -- Content library dialog — scrollable list of all registered non-internal content.
 -- Called by contentBtn in the titlebar and by the context menu "Content Library…" item.
+--
+-- Content registered with a `group` (see Mux.registerContent) is bucketed under a
+-- collapsible divider labelled with that group name — built on Mux.ui.buildForm's
+-- divider/section mechanism, all collapsed by default. Content registered without
+-- a group renders as a flat row above the groups: no separator, always visible,
+-- nothing to collapse. Muxlet's own built-in content uses group = "Muxlet".
 function Mux._showContentLibrary(pane)
     if not pane.contentable then return end
     local contentNames = Mux._listContent and Mux._listContent() or {}
@@ -659,10 +801,33 @@ function Mux._showContentLibrary(pane)
         return
     end
 
-    local LIB_ROW_H = 52
-    local dlgW      = 460
-    local dlgH      = math.min(#contentNames * LIB_ROW_H + 26, 500)
-    local innerH    = dlgH - 26
+    -- Register the row widget lazily: widgets.lua (Mux.ui) loads after globals.lua
+    -- in scripts.json, so Mux.ui.registerWidget isn't available at this file's own
+    -- load time — only once something actually opens the dialog at runtime.
+    if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets["mux_contentLibraryRow"]) then
+        Mux.ui.registerWidget("mux_contentLibraryRow", _buildContentLibraryRow, { layout = "block", rowHeight = LIB_ROW_H })
+    end
+
+    -- Bucket by group; sort content within each bucket alphabetically (matches
+    -- Mux._listContent's own ordering) and sort groups alphabetically.
+    local ungrouped, grouped, groupOrder = {}, {}, {}
+    for _, n in ipairs(contentNames) do
+        local g = Mux._content[n] and Mux._content[n].group
+        if g and g ~= "" then
+            if not grouped[g] then grouped[g] = {}; groupOrder[#groupOrder+1] = g end
+            grouped[g][#grouped[g]+1] = n
+        else
+            ungrouped[#ungrouped+1] = n
+        end
+    end
+    table.sort(groupOrder)
+
+    local dlgW = 460
+    -- All groups start collapsed, so the initial dialog only needs room for the
+    -- ungrouped rows plus one header row per group.
+    local visibleH = #ungrouped * LIB_ROW_H + #groupOrder * LIB_DIV_H
+    local dlgH     = math.min(visibleH + 26, 500)
+    local innerH   = dlgH - 26
 
     local paneLabel = Mux._targetPath(pane)
     local dlg = Mux.createDialog({
@@ -692,138 +857,33 @@ function Mux._showContentLibrary(pane)
     }, c)
     local contentW = math.max(50, scroll:get_width() - 17)
     local list     = Geyser.Label:new({
-        name=pfx.."lc", x=0, y=0, width=contentW, height=#contentNames * LIB_ROW_H + 4, fillBg=1,
+        name=pfx.."lc", x=0, y=0, width=contentW, height=math.max(visibleH, 1), fillBg=1,
     }, scroll)
     list:setStyleSheet("background:rgba(10,12,22,0.97);border:none;")
 
-    local rows = {}
-    for i, contentName in ipairs(contentNames) do
-        local def      = Mux._content[contentName]
-        local dispName = (def and def.name)        or contentName
-        local dispDesc = (def and def.description) or ""
-        local isEven   = (i % 2 == 0)
-        local yOff     = (i - 1) * LIB_ROW_H
+    local function refresh() dlg:close(); Mux._showContentLibrary(pane) end
 
-        -- State for THIS pane: active here (removable), held by a singleton
-        -- elsewhere (greyed/locked), or free to add.
-        local isHere = (pane._activeContent == contentName)
-        local isLocked = def and def.singleton
-            and def._activeTargetRef and def._activeTargetRef ~= pane
-            and def._activeTargetRef._activeContent == contentName
-
-        -- Content may refuse to apply in this pane's current state (e.g. the console
-        -- can't go in a floating pane). canApply returns ok, reason — checked even when
-        -- singleton-locked so the state-specific reason takes precedence.
-        local canAdd, blockReason = true, nil
-        if not isHere and def and type(def.canApply) == "function" then
-            local ok, reason = def.canApply(pane)
-            if ok == false then canAdd, blockReason = false, reason end
-        end
-        -- Greyed: held by a singleton elsewhere, or not applicable here.
-        local greyed = isLocked or (not canAdd)
-
-        local rowBg = Geyser.Label:new({
-            name=pfx.."r"..i.."bg", x=0, y=yOff, width="100%", height=LIB_ROW_H, fillBg=1,
-        }, list)
-        if greyed then
-            rowBg:setStyleSheet(isEven
-                and "background:rgba(18,19,28,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.04);"
-                or  "background:rgba(14,15,22,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.04);")
-        else
-            rowBg:setStyleSheet(isEven
-                and "background:rgba(22,25,40,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.05);"
-                or  "background:rgba(16,18,30,0.95);border:none;border-bottom:1px solid rgba(255,255,255,0.05);")
-        end
-        rows[i] = rowBg
-
-        -- ⓘ info icon — hover to see full description
-        local icon = Geyser.Label:new({
-            name=pfx.."r"..i.."ic", x=10, y=yOff+15, width=22, height=22, fillBg=1,
-        }, list)
-        if greyed then
-            icon:setStyleSheet([[
-                QLabel {
-                    background: rgba(28,32,44,0.70);
-                    border: 1px solid rgba(50,55,70,0.35);
-                    border-radius: 4px;
-                    color: #4a5568;
-                    font-size: 11px;
-                    font-weight: bold;
-                }
-            ]])
-        else
-            icon:setStyleSheet([[
-                QLabel {
-                    background: rgba(35,55,90,0.80);
-                    border: 1px solid rgba(55,85,140,0.40);
-                    border-radius: 4px;
-                    color: #5888c8;
-                    font-size: 11px;
-                    font-weight: bold;
-                }
-                QLabel::hover {
-                    background: rgba(48,72,118,0.90);
-                    border-color: rgba(80,125,210,0.65);
-                    color: #88b8ff;
-                }
-            ]])
-        end
-        icon:rawEcho("<center>i</center>")
-        if dispDesc ~= "" then icon:setToolTip(dispDesc, 6) end
-        -- Name label (vertically centered in row)
-        local nameLbl = Geyser.Label:new({
-            name=pfx.."r"..i.."nm", x=40, y=yOff+16, width=contentW-128, height=20,
-        }, list)
-        nameLbl:setStyleSheet(greyed
-            and "background:transparent;color:#4a5568;font-size:11px;font-weight:bold;"
-            or  "background:transparent;color:#c6d2ee;font-size:11px;font-weight:bold;")
-        nameLbl:rawEcho(dispName)
-
-        -- Add / Remove / Active button
-        local addBtn = Geyser.Label:new({
-            name=pfx.."r"..i.."ab", x=contentW-82, y=yOff+13, width=72, height=26, fillBg=1,
-        }, list)
-        local capName = contentName
-        local function refresh() dlg:close(); Mux._showContentLibrary(pane) end
-        if isHere then
-            addBtn:setStyleSheet([[
-                QLabel{background:rgba(120,40,40,0.9);color:#fdd;font-size:9px;font-weight:bold;
-                       border:1px solid rgba(180,80,80,0.55);border-radius:4px;}
-                QLabel::hover{background:rgba(150,55,55,0.95);}
-            ]])
-            addBtn:rawEcho("<center>Remove</center>")
-            addBtn:setClickCallback(function() Mux._removeContent(pane); refresh() end)
-        elseif not canAdd then
-            addBtn:setStyleSheet([[
-                QLabel{background:rgba(22,24,34,0.80);color:#3a4458;font-size:9px;font-weight:bold;
-                       border:1px solid rgba(40,45,60,0.45);border-radius:4px;}
-                QToolTip{background-color:#1d2030;color:#e8ebf5;border:1px solid rgba(255,255,255,0.18);
-                         padding:5px 8px;border-radius:4px;}
-            ]])
-            addBtn:rawEcho("<center>—</center>")
-            addBtn:setToolTip(blockReason or "Can't be added here.", 6)
-        elseif isLocked then
-            addBtn:setStyleSheet([[
-                QLabel{background:rgba(22,24,34,0.80);color:#3a4458;font-size:9px;font-weight:bold;
-                       border:1px solid rgba(40,45,60,0.45);border-radius:4px;}
-            ]])
-            addBtn:rawEcho("<center>Active</center>")
-        else
-            addBtn:setStyleSheet([[
-                QLabel{background:rgba(28,70,44,0.9);color:#73de94;font-size:9px;font-weight:bold;
-                       border:1px solid rgba(45,115,65,0.5);border-radius:4px;}
-                QLabel::hover{background:rgba(38,90,55,0.95);border-color:rgba(60,145,80,0.7);}
-            ]])
-            addBtn:rawEcho("<center>+ Add</center>")
-            local function applyAndClose()
-                Mux._applyContent(pane, capName)
-                dlg:close()
-            end
-            addBtn:setClickCallback(applyAndClose)
-            nameLbl:setClickCallback(applyAndClose)
-            rowBg:setClickCallback(applyAndClose)
-        end
+    local specs, zebra = {}, 0
+    local function addRow(name)
+        zebra = zebra + 1
+        specs[#specs+1] = {
+            type = "mux_contentLibraryRow",
+            contentName = name, pane = pane, dlg = dlg, refresh = refresh,
+            _even = (zebra % 2 == 0),
+        }
     end
+    for _, n in ipairs(ungrouped) do addRow(n) end
+    for _, g in ipairs(groupOrder) do
+        specs[#specs+1] = { type = "divider", label = g, _collapsed = true }
+        for _, n in ipairs(grouped[g]) do addRow(n) end
+    end
+
+    Mux.ui.buildForm(list, specs, {
+        width = contentW,
+        dividerHeight = LIB_DIV_H,
+        prefix = pfx .. "f",
+        minParentHeight = innerH,
+    })
 
     dlg:show()
     dlg:raise()

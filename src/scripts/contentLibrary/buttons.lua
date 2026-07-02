@@ -474,6 +474,7 @@ end
 Mux.registerContent("mux_buttons", {
     name        = "Button Grid",
     description = "A configurable grid of buttons bound to commands or registered actions",
+    group       = "Muxlet",
     singleton   = false,
 
     -- The wrench toggles edit mode; entering fans out Add + Grid-Settings as a

@@ -217,6 +217,7 @@ tab.
 Mux.registerContent("myclock", {
   name        = "Clock",                       -- Content Library label
   description = "A ticking clock.",            -- Content Library subtitle
+  group       = "My Package",                   -- optional; Content Library section (see below)
   singleton   = false,                          -- true = only one instance across all surfaces
   internal    = false,                          -- true = hide from the Content Library
   noTabs      = false,                          -- true = disallow tabs on the hosting pane
@@ -260,6 +261,14 @@ Mux.registerContent("myclock", {
   onReveal = function(target) end,             -- called by `mux reveal <id>`
 })
 ```
+
+`group` controls how the item is presented in the Content Library dialog: items
+sharing a group are bucketed under a collapsible divider labelled with that group
+name, collapsed by default. Omit `group` and the item renders as a flat row above
+the groups instead — no divider, always visible. Muxlet's own built-in content
+(console, button grid, capture, GMCP inspector) is grouped under `"Muxlet"`; pick
+any group name for your own package, or leave content ungrouped if you only
+register a handful of items.
 
 ## Publishing to the titlebar and menu
 

@@ -208,6 +208,7 @@ end
 Mux.registerContent("mux_capture", {
     name        = "Capture / Redirect",
     description = "Watch the game output for text (substring, exact line, or regex) and shunt matching lines into this pane/tab — optionally hiding them from the main console. Click the ⚙ to configure captures.",
+    group       = "Muxlet",
     singleton   = false,
 
     -- Publish the settings control into the pane/tab titlebar + right-click menu,

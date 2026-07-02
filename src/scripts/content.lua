@@ -6,6 +6,7 @@
 --   Mux.registerContent("my_widget", {
 --       name        = "My Widget",
 --       description = "Fills the pane with something cool",
+--       group       = "My Package",   -- optional; see "Content Library grouping" below
 --       singleton   = false,   -- set true to allow only one active instance
 --       apply  = function(target) ... end,   -- REQUIRED
 --       remove = function(target) ... end,   -- optional; called before a new apply
@@ -13,6 +14,15 @@
 --                                            -- is only needed for non-widget teardown
 --                                            -- (event handlers, timers, state resets).
 --   })
+--
+-- Content Library grouping:
+--   `group` is an optional string. The Content Library dialog (Mux._showContentLibrary)
+--   buckets content by this field and renders each group under a collapsible divider,
+--   collapsed by default. Content registered without a group renders as a flat row
+--   above the groups — no divider, always visible, nothing to collapse. Muxlet's own
+--   built-in content (console, button grid, capture, gmcp inspector) uses
+--   group = "Muxlet"; a downstream package is free to pick its own group name, or
+--   leave content ungrouped if it only registers one or two items.
 --
 -- `target` has the same interface whether it is a pane or a tab:
 --   target.id        — unique string id
@@ -34,7 +44,7 @@
 --
 -- Persistence:
 --   Each registration is saved to Muxlet_persistent/content.json as a catalog
---   of {name, description, singleton} pairs.  The apply/remove Lua functions
+--   of {name, description, singleton, group} pairs.  The apply/remove Lua functions
 --   are not serialisable; they are always re-registered at load time.
 
 Mux._content     = Mux._content     or {}
@@ -65,6 +75,7 @@ local function saveContentCatalog()
                 name        = def.name        or id,
                 description = def.description or "",
                 singleton   = def.singleton   or false,
+                group       = def.group       or "",
             }
         end
     end

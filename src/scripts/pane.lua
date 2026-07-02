@@ -2402,6 +2402,7 @@ Mux.registerContent("mux_pane_close_confirm", {
 Mux.registerContent("mux_console", {
     name        = "Main Console",
     description = "Hosts the Mudlet main console. Embedded only — one per layout.",
+    group       = "Muxlet",
     singleton   = true,
     -- The native main console is cropped to this pane via setBorderSizes; it isn't a
     -- Geyser widget that can live inside a tab viewport, so it would paint through any

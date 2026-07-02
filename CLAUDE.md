@@ -67,6 +67,9 @@ target._activeContent  — set to your content id by _applyContent; suppresses p
 ```
 name        string   display name (shown in context menu)
 description string   optional tooltip
+group       string   optional; buckets this item under a collapsible divider of the same
+                     name in the Content Library dialog (collapsed by default). Omit to
+                     render as a flat, always-visible row above the groups instead.
 singleton   bool     only one active instance at a time; extra opens are blocked with a dialog
 internal    bool     Muxlet system-only content; hidden from the "Add Content" menu and
                      excluded from the content catalog persistence.  Use for all internal
@@ -81,6 +84,7 @@ Key behaviour:
 - The content registry is read at context-menu open time, so registrations made after startup appear without a reload.
 - `Mux._listContent()` returns only non-internal entries — the "Add Content" menu never shows system content.
 - Internal content is also excluded from the catalog persistence file (`content.json`).
+- `Mux._showContentLibrary(pane)` (globals.lua) renders the grouped dialog itself, built on `Mux.ui.buildForm`'s divider/collapsible-section mechanism (see below). Muxlet's own visible built-in content (console, button grid, capture, GMCP inspector) is registered with `group = "Muxlet"`.
 
 ---
 
