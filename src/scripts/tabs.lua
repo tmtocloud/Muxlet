@@ -586,13 +586,13 @@ function MuxSurface:enableTabs(opts)
     -- Sub-tab hosts use a different code path for infrastructure setup.
     local isSubTabHost = (self.pane ~= nil)
     if self._tabsEnabled then return end
-    -- Capture and fully remove existing pane content before building tab
-    -- infrastructure. Otherwise the old content widgets remain live siblings of the
-    -- new tab bar and viewport inside self.content — covered by the tab
-    -- infrastructure, but they reappear when tabs are later removed. Removing first
-    -- keeps self.content clean.
-    local priorContent = self._activeContent
-    if priorContent then Mux._removeContent(self) end
+    -- A surface with content can't also host tabs: content occupies the same area a
+    -- tab viewport would. Refuse rather than silently moving the content into a tab.
+    -- (The Properties "Tabs" row is locked read-only in this state, with the reason.)
+    if self._activeContent then
+        Mux._log("enableTabs refused: remove the pane's content first")
+        return
+    end
     self._tabsEnabled  = true
     self._tabs         = self._tabs or {}
     self._activeTabId  = nil
@@ -610,10 +610,7 @@ function MuxSurface:enableTabs(opts)
     if self._syncButtons then self:_syncButtons(true) end
     if self._tabBar and not self.tabsLocked then self:_setAddTabBtnVisible(true) end
     if not opts.noDefaultTab and #self._tabs == 0 then
-        local tab1 = self:addTab("Tab 1")
-        if tab1 and priorContent then
-            Mux._applyContent(tab1, priorContent)
-        end
+        self:addTab("Tab 1")
     end
     -- New tab-bar widgets must not appear above floating panes / dialogs.
     Mux.raiseFloatingPanes()
@@ -1152,9 +1149,10 @@ function MuxSurface:_showTabContextMenu(tab, gx, gy)
         if #extra > 0 then
             if #items > 0 then items[#items+1] = { sep = true } end
             for _, s in ipairs(extra) do
-                local txt = (type(s.menuText) == "function") and s.menuText(ctx) or s.menuText
-                local run = s.run
-                items[#items+1] = { text = txt, fn = run and function() run(ctx) end or nil }
+                -- A tab has no titlebar, so its content is always menu-only: the
+                -- shared builder gives it live text + an in-edit-mode submenu.
+                local it = Mux._contentMenuItem and Mux._contentMenuItem(s, ctx, true)
+                if it then items[#items+1] = it end
             end
         end
     end

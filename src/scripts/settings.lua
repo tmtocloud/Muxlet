@@ -1665,7 +1665,7 @@ Mux.settings._order["mux"] = {
 
 Mux.settings.onChange("mux", "compact_titlebar", function()
     for _, pane in pairs(Mux._panes or {}) do
-        if pane._syncButtons then pane:_syncButtons(true) end
+        if pane._syncButtons then pcall(function() pane:_syncButtons(true) end) end
     end
 end)
 

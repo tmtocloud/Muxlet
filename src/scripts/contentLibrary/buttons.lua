@@ -448,9 +448,27 @@ local function toggleButtonsEdit(ctx)
         st.editCascade:destroy(); st.editCascade = nil
     end
     render(host)                     -- redraw grid (edit visuals) + raise panes first
-    if st.editing then
-        showEditCascade(ctx, host, st)   -- then fan the cascade out on top
+    -- Fan the titlebar cascade only when there's a visible wrench icon to anchor it.
+    -- When the element is menu-only (a tab, or a pane whose icon is folded / compact
+    -- titlebars), Add / Grid-settings come from the right-click submenu instead.
+    if st.editing and not (ctx.menuOnly or ctx.isTab) then
+        showEditCascade(ctx, host, st)
     end
+end
+
+-- Are we editing this ctx's grid? (drives the tab-menu-only Add / Grid rows)
+local function editingHere(ctx)
+    local host = ctx and (ctx.tab or ctx.pane)
+    local st   = host and STATE_BY_TARGET[host.id]
+    return st and st.editing and true or false
+end
+local function addButtonTo(host)
+    local st = STATE_BY_TARGET[host.id]
+    if st then st.editing = true end   -- adding implies editing, so the new button is editable
+    local cfg = configFor(host.id)
+    cfg.buttons[#cfg.buttons + 1] = { label = "Button", width = 1, bg = "#1c2a4e",
+        fg = "#96c8ff", fontSize = 12, shape = "rounded", action = { type = "command", text = "" } }
+    scheduleSave(); render(host)
 end
 
 Mux.registerContent("mux_buttons", {
@@ -474,8 +492,31 @@ Mux.registerContent("mux_buttons", {
             onClick = function(ctx, event)
                 if not event or event.button == "LeftButton" then toggleButtonsEdit(ctx) end
             end,
-            menuText = "🔧  Edit buttons", menuGroup = "info", menuOrder = 95,
+            menuText = function(ctx)
+                return editingHere(ctx) and "🔧  Editing — click to finish" or "🔧  Edit buttons"
+            end,
+            menuGroup = "info", menuOrder = 95,
             run = function(ctx) toggleButtonsEdit(ctx) end,
+            -- On a tab there is no titlebar cascade, so Add / Grid-settings live in a
+            -- right-click SUBMENU off this row, and clicking the row toggles edit mode
+            -- WITHOUT closing the menu (menuKeepOpen) so the submenu stays reachable
+            -- during edit mode. On a pane, menuSubmenu returns nil and keepOpen is
+            -- false, so the row keeps its plain behaviour (toggle edit → titlebar
+            -- cascade fans out).
+            menuKeepOpen = function(ctx) return ctx and ctx.menuOnly or false end,
+            menuSubmenu  = function(ctx)
+                -- The menu equivalent of the titlebar cascade: only when the menu is
+                -- the only way in (tab, or a pane whose icon is folded / compact) AND
+                -- we are actually in edit mode. Otherwise the row is a plain toggle.
+                if not (ctx and ctx.menuOnly and editingHere(ctx)) then return nil end
+                local host = ctx.tab or ctx.pane
+                return {
+                    { text = "＋  Add button", keepOpen = true,
+                      fn = function() addButtonTo(host) end },
+                    { text = "⊞  Grid settings…",
+                      fn = function() openGridSettings(host) end },
+                }
+            end,
         },
     },
 

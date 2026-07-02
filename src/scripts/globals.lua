@@ -277,6 +277,22 @@ local function hideSubmenu()
     submenu.visible = false
 end
 
+-- A keep-open menu action (e.g. "Add button") can trigger a content render that
+-- re-raises pane/floating widgets over the menu. Re-assert the menu's z-order so it
+-- stays on top and clickable — backdrop, panel, rows, then the submenu on top.
+local function raiseMenuChrome()
+    local menu = Mux._contextMenu
+    if not menu then return end
+    if menu.backdrop then pcall(function() menu.backdrop:raiseAll() end) end
+    if menu.panel    then pcall(function() menu.panel:raiseAll()    end) end
+    for _, l in ipairs(menu.rowLabels or {}) do pcall(function() l:raiseAll() end) end
+    local sm = menu.submenu
+    if sm and sm.visible then
+        if sm.panel then pcall(function() sm.panel:raiseAll() end) end
+        for _, l in ipairs(sm.rowLabels or {}) do pcall(function() l:raiseAll() end) end
+    end
+end
+
 local function showSubmenu(submenuItems, parentMenuX, parentRowY)
     local menu       = Mux._contextMenu
     local submenu    = menu.submenu
@@ -345,11 +361,13 @@ local function showSubmenu(submenuItems, parentMenuX, parentRowY)
             label:echo(string.format("<span style='color:%s;'>%s</span>", itemColor, item.text))
             label:setOnEnter(function() label:setStyleSheet(hoverCss) end)
             label:setOnLeave(function() label:setStyleSheet(normalCss) end)
-            local action = item.fn
+            local action   = item.fn
+            local keepOpen = item.keepOpen
             label:setClickCallback(function(event)
                 if event.button ~= "LeftButton" then return end
-                Mux._closeContextMenu()
+                if not keepOpen then Mux._closeContextMenu() end
                 if action then action() end
+                if keepOpen then raiseMenuChrome() end
             end)
         end
         label:show()
@@ -433,33 +451,52 @@ function Mux._showItemMenu(globalX, globalY, items)
             label:setOnEnter(function() hideSubmenu() end)
             label:setOnLeave(function() end)
             label:setClickCallback(function() Mux._closeContextMenu() end)
-        elseif item.submenu then
-            label:setStyleSheet(itemCss)
-            label:echo(string.format("<span style='color:%s;'>%s</span>", textColor, item.text))
-            local capturedSubmenuItems = item.submenu
-            local capturedMenuX, capturedRowY = menuX, rowY
-            label:setOnEnter(function()
-                label:setStyleSheet(itemHoverCss)
-                showSubmenu(capturedSubmenuItems, capturedMenuX, capturedRowY)
-            end)
-            label:setOnLeave(function() label:setStyleSheet(itemCss) end)
-            label:setClickCallback(function(event)
-                if event.button ~= "LeftButton" then return end
-                showSubmenu(capturedSubmenuItems, capturedMenuX, capturedRowY)
-            end)
         else
-            local normalCss   = item.danger and dangerCss   or itemCss
-            local hoverCss    = item.danger and dangerHover or itemHoverCss
-            local itemColor   = item.danger and dangerColor or textColor
+            local danger    = item.danger
+            local normalCss = danger and dangerCss   or itemCss
+            local hoverCss  = danger and dangerHover or itemHoverCss
+            local itemColor = danger and dangerColor or textColor
+            local capturedX, capturedRowY = menuX, rowY
+            -- Text and submenu may depend on live state (e.g. edit mode), so resolve
+            -- them on each interaction rather than once at build: dynText() is the
+            -- current label, curSub() the current submenu items (nil = plain row). A
+            -- row that has a submenu right now behaves as a submenu parent (click keeps
+            -- the menu open); keepOpen keeps a plain row open too. This lets one row
+            -- flip between "Edit buttons" (plain) and "Editing…" (+submenu) live,
+            -- without rebuilding the menu.
+            local function curText() return (item.dynText and item.dynText()) or item.text or "" end
+            local function curSub()
+                if item.submenu    then return item.submenu end
+                if item.dynSubmenu then return item.dynSubmenu() end
+                return nil
+            end
+            local function echoText()
+                label:echo(string.format("<span style='color:%s;'>%s</span>", itemColor, curText()))
+            end
             label:setStyleSheet(normalCss)
-            label:echo(string.format("<span style='color:%s;'>%s</span>", itemColor, item.text))
-            label:setOnEnter(function() hideSubmenu(); label:setStyleSheet(hoverCss) end)
+            echoText()
+            label:setOnEnter(function()
+                label:setStyleSheet(hoverCss)
+                local sub = curSub()
+                if sub then showSubmenu(sub, capturedX, capturedRowY) else hideSubmenu() end
+            end)
             label:setOnLeave(function() label:setStyleSheet(normalCss) end)
-            local action = item.fn
+            local action   = item.fn
+            local keepOpen = item.keepOpen
             label:setClickCallback(function(event)
                 if event.button ~= "LeftButton" then return end
-                Mux._closeContextMenu()
+                if not (curSub() or keepOpen) then
+                    Mux._closeContextMenu()
+                    if action then action() end
+                    return
+                end
+                -- Stay open: run the action, then refresh this row's text + submenu to
+                -- match the new state and re-assert menu z-order.
                 if action then action() end
+                echoText()
+                local sub = curSub()
+                if sub then showSubmenu(sub, capturedX, capturedRowY) else hideSubmenu() end
+                raiseMenuChrome()
             end)
         end
         label:show()
@@ -517,6 +554,43 @@ function Mux._addFloatingPane()
     Mux.raiseFloatingPanes()
 end
 
+-- Build a context-menu item from a titlebar element spec (builtin or content).
+-- menuOnly = the element currently has no titlebar icon (a tab, or a pane where the
+-- icon was folded off the bar / compact titlebars are on), so the right-click menu is
+-- the only way to reach it — the element may then keep the menu open and offer a
+-- submenu. Text and submenu are wrapped so _showItemMenu re-resolves them live (e.g.
+-- an "Edit buttons" row that flips to "Editing…" + a submenu once edit mode is on).
+-- Returns nil when the element has no menu text.
+function Mux._contentMenuItem(spec, baseCtx, menuOnly)
+    local ctx = setmetatable({ menuOnly = menuOnly and true or false }, { __index = baseCtx })
+    local function dynText()
+        local ok, t = pcall(function()
+            return (type(spec.menuText) == "function") and spec.menuText(ctx) or spec.menuText
+        end)
+        return (ok and t) or nil
+    end
+    if not dynText() then return nil end
+    local dynSubmenu
+    if spec.menuSubmenu then
+        dynSubmenu = function() local ok, s = pcall(spec.menuSubmenu, ctx); return ok and s or nil end
+    elseif spec.submenu then
+        dynSubmenu = function() local ok, s = pcall(spec.submenu, ctx); return ok and s or nil end
+    end
+    local keepOpen = spec.menuKeepOpen
+    if type(keepOpen) == "function" then keepOpen = keepOpen(ctx) end
+    local danger = spec.danger
+    if type(danger) == "function" then danger = danger(ctx) end
+    return {
+        text       = dynText(),
+        dynText    = dynText,
+        dynSubmenu = dynSubmenu,
+        keepOpen   = keepOpen and true or nil,
+        danger     = danger,
+        menuGroup  = spec.menuGroup,
+        fn         = spec.run and function() spec.run(ctx) end or nil,
+    }
+end
+
 -- Overflow context menu: appears on titlebar right-click ONLY when the titlebar
 -- is too narrow to show all buttons (self._overflowMode == true).
 -- Items mirror what the buttons do, with the same show/hide conditions.
@@ -534,32 +608,19 @@ function Mux._showContextMenu(pane, globalX, globalY)
     local items = {}
     local lastGroup
 
-    local function addSpec(spec)
-        local ok, txt = pcall(function()
-            return (type(spec.menuText) == "function") and spec.menuText(ctx) or spec.menuText
-        end)
-        if not ok or not txt then return end
-        if lastGroup and spec.menuGroup and spec.menuGroup ~= lastGroup and #items > 0 then
+    local function addSpec(spec, menuOnly)
+        local it = Mux._contentMenuItem(spec, ctx, menuOnly)
+        if not it then return end
+        if lastGroup and it.menuGroup and it.menuGroup ~= lastGroup and #items > 0 then
             items[#items + 1] = { sep = true }
         end
-        lastGroup = spec.menuGroup or lastGroup
-        local sub
-        if spec.submenu then
-            local ok2, s = pcall(spec.submenu, ctx)
-            if ok2 then sub = s end
-        end
-        local danger = spec.danger
-        if type(danger) == "function" then danger = danger(ctx) end
-        items[#items + 1] = {
-            text    = txt,
-            danger  = danger,
-            submenu = sub,
-            fn      = (not sub) and spec.run and function() spec.run(ctx) end or nil,
-        }
+        lastGroup = it.menuGroup or lastGroup
+        items[#items + 1] = it
     end
 
     -- 1) Folded icon-elements (builtins + content), already ordered for the menu.
-    for _, spec in ipairs(pane._foldedElements or {}) do addSpec(spec) end
+    -- These have no icon in the bar right now, so content among them is menu-only.
+    for _, spec in ipairs(pane._foldedElements or {}) do addSpec(spec, true) end
 
     -- 2) Content elements that carry a menu row: always present (deduped against any
     -- already folded in above), so content settings are reachable here even when
@@ -577,7 +638,10 @@ function Mux._showContextMenu(pane, globalX, globalY)
         table.sort(extra, function(a, b) return (a.menuOrder or 500) < (b.menuOrder or 500) end)
         if #extra > 0 and #items > 0 then items[#items + 1] = { sep = true } end
         lastGroup = nil
-        for _, s in ipairs(extra) do addSpec(s) end
+        -- These elements still show an icon in the bar, so they are NOT menu-only:
+        -- the row mirrors the icon (e.g. buttons "Edit buttons" fans the titlebar
+        -- cascade), rather than taking over with a submenu.
+        for _, s in ipairs(extra) do addSpec(s, false) end
     end
 
     if #items > 0 then

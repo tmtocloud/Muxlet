@@ -329,15 +329,19 @@ local function paneRows(pane)
     }
 
     -- Group 1: Tabs, Locked, Titlebar, Properties Button
+    -- A pane with content can't also host tabs (they'd occupy the same area), so the
+    -- Tabs row is locked read-only while any content is active — the console gets its
+    -- own message; other content gets the generic "remove content first".
+    local _forbidsTabs = (Mux._surfaceForbidsTabs and Mux._surfaceForbidsTabs(pane)) or false
+    local _hasContent  = pane._activeContent ~= nil
     rows[#rows+1] = {
         label   = "Tabs",
         desc    = "Enabled: host multiple views in a tab bar; Locked: tab bar frozen, no add/close",
         type    = "choiceCycler",
-        -- Content that can't be containerized into a tab viewport (the Mudlet
-        -- console) locks this row read-only, with the reason on hover.
-        locked       = (Mux._surfaceForbidsTabs and Mux._surfaceForbidsTabs(pane)) or nil,
-        lockedReason = (Mux._surfaceForbidsTabs and Mux._surfaceForbidsTabs(pane))
-            and "Console content can't have tabs — remove the console content first." or nil,
+        locked       = (_forbidsTabs or _hasContent) or nil,
+        lockedReason = (_forbidsTabs and "Console content can't have tabs — remove the console content first.")
+            or (_hasContent and "Remove this pane's content before adding tabs.")
+            or nil,
         options = {
             { value = false,    label = "Disabled", style = "off"  },
             { value = true,     label = "Enabled",  style = "on"   },
@@ -779,10 +783,19 @@ local function tabRows(host, tab)
     while h and h.pane do depth = depth + 1; h = h.pane end
 
     if depth < 3 then
+        -- Mirror the pane rule: a tab hosting content can't also host sub-tabs (they
+        -- would occupy the same area), so lock the row read-only while content is
+        -- active, with the reason on hover. The enableTabs guard enforces this too.
+        local _forbidsTabs = (Mux._surfaceForbidsTabs and Mux._surfaceForbidsTabs(tab)) or false
+        local _hasContent  = tab._activeContent ~= nil
         rows[#rows+1] = {
             label   = "Tabs",
             desc    = "Enabled: host nested tabs inside this tab; NoAdd: tab bar shown but no new tabs can be added",
             type    = "choiceCycler",
+            locked       = (_forbidsTabs or _hasContent) or nil,
+            lockedReason = (_forbidsTabs and "Console content can't have tabs — remove the console content first.")
+                or (_hasContent and "Remove this tab's content before adding tabs.")
+                or nil,
             options = {
                 { value = false,    label = "Disabled", style = "off"  },
                 { value = true,     label = "Enabled",  style = "on"   },

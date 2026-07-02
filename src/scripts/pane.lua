@@ -1073,23 +1073,15 @@ for _, s in ipairs(BUILTIN_TB) do BUILTIN_TB_IDS[s.id] = true end
 
 -- The state snapshot passed to every visible()/onClick(). Reads, never mutates.
 function MuxPane:_elementCtx()
-    -- Content may live directly on the pane, or on the active (leaf) tab when the
-    -- pane is tabbed. Resolve to whichever is showing so its titlebarElements
-    -- (settings icons + menu rows) publish to this titlebar / right-click menu.
-    local contentId, activeTab = self._activeContent, nil
-    if not contentId and self._activeTabId and self._findTab then
-        local t = self:_findTab(self._activeTabId)
-        while t and t._tabs and #t._tabs > 0 and t._activeTabId and t._findTab do
-            local sub = t:_findTab(t._activeTabId)
-            if not sub then break end
-            t = sub
-        end
-        if t then activeTab = t; contentId = t._activeContent end
-    end
+    -- The pane titlebar and the pane's right-click menu reflect the pane's OWN
+    -- content only. Content hosted in a tab publishes solely to that tab's
+    -- right-click menu (see tabs.lua _showTabContextMenu): a tab has no titlebar, so
+    -- its content must never add icons or menu rows to the host pane.
+    local contentId = self._activeContent
     return {
         pane        = self,
-        tab         = activeTab,
-        isTab       = activeTab ~= nil,
+        tab         = nil,
+        isTab       = false,
         isFloating  = self.floating and true or false,
         isEmbedded  = (self._split ~= nil and not self.floating) and true or false,
         content     = contentId and Mux._content and Mux._content[contentId] or nil,
@@ -1128,7 +1120,7 @@ end
 function MuxPane:_syncContentTbButtons()
     local ctx    = self:_elementCtx()
     local def    = ctx.content
-    local sig    = self._activeContent or (ctx.tab and ctx.tab._activeContent) or "none"
+    local sig    = self._activeContent or "none"
     if self._contentTbSig == sig then return end
     self._contentTbSig = sig
     self._contentTbBtns = self._contentTbBtns or {}
@@ -1256,9 +1248,17 @@ function MuxPane:_syncButtons(force)
     -- During a live handle drag this is called on every reposition frame.
     if Mux._resizing and not force then return end
     local headerW = self.header:get_width()
-    if headerW < 10 then return end  -- not yet laid out
+    -- Skip only unforced (per-frame) calls before the pane is measured. A forced
+    -- relayout (setting change, content apply/remove) must proceed even if the header
+    -- momentarily reports a tiny width, so compact folding still applies.
+    if headerW < 10 and not force then return end
 
-    self:_syncContentTbButtons()
+    -- Content-button (re)creation must never abort the titlebar layout below: it runs
+    -- content-provided icon/visible functions and creates Geyser widgets, any of which
+    -- could error. If it did, the builtins would be left un-folded — e.g. toggling
+    -- compact_titlebar while content is applied would leave that pane showing icons
+    -- while every other pane switched to the menu. Isolate it so layout always runs.
+    pcall(function() self:_syncContentTbButtons() end)
 
     local theme   = Mux.activeTheme() or {}
     local btnSize = theme.btnSize or 22
