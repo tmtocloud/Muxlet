@@ -132,11 +132,10 @@ local function openCaptureSettings(target)
     if d.contentBg then d.contentBg:echo(""); d.contentBg:hide() end
     d._capGen = 0
 
-    local function rebuild() Mux._rebuildCaptureRules(target) end   -- full: re-arms line triggers
-    -- Light update: for changes that don't affect the match trigger (gag flags, name).
-    -- The redirect reads gag flags live from the shared capture table, so we only
-    -- autosave — no killTrigger/re-add, which is what injected a stray newline into the
-    -- capture view on the next match.
+    local function rebuild() Mux._rebuildCaptureRules(target) end   -- re-arms the line triggers
+    -- For changes the match trigger doesn't depend on (gag flags, name): the redirect
+    -- reads gag flags live from the shared capture table, so only a save is needed.
+    -- Avoiding a trigger re-arm here keeps a stray newline out of the capture view.
     local function light()
         if Mux._scheduleAutoSave then Mux._scheduleAutoSave() end
     end

@@ -1673,9 +1673,9 @@ Mux.settings.onChange("mux", "debug", function(value)
     Mux.debug = value
 end)
 
--- Tab styling is no longer a separate settings system. Tabs use the same token
--- element templates as panes (Mux.css "tab*"), edited globally via Theme > Tabs
--- and per-tab via Properties; MuxSurface:_restyleTabBar applies them.
+-- Tabs use the same token element templates as panes (Mux.css "tab*"), edited
+-- globally via Theme > Tabs and per-tab via Properties; MuxSurface:_restyleTabBar
+-- applies them.
 
 -- tempTimer(0) defers past the synchronous script-loading stack so all Muxlet
 -- functions are defined before this runs. raiseEvent("muxletReady") fires last

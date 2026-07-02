@@ -50,7 +50,7 @@ function Mux._notifyAllReposition()
         -- Floating dialogs/panes don't sit in the split tree, so a structural change
         -- below them can leave their content's geometry stale (it visibly drifts out
         -- of the frame until the dialog is moved). Re-assert the float position and
-        -- reposition the container — the same fix a manual move performs.
+        -- reposition the container — the same path a manual move takes.
         if p.floating and p.outer then
             if p.floatX and p.floatY and p.outer.move then p.outer:move(p.floatX, p.floatY) end
             if p.outer.reposition then p.outer:reposition() end

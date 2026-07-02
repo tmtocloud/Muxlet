@@ -187,10 +187,10 @@ render = function(target)
         st.widgets[#st.widgets + 1] = lbl
     end
 
-    -- Edit affordances are no longer drawn on the content. Edit mode is toggled from
-    -- the titlebar wrench, which fans out Add + Grid-Settings as a titlebar cascade
-    -- (see the content's titlebarElements). Grid buttons themselves become editable
-    -- while st.editing is on.
+    -- Edit affordances live on the titlebar, not the content: the wrench toggles
+    -- edit mode and fans out Add + Grid-Settings as a titlebar cascade (see the
+    -- content's titlebarElements). Grid buttons themselves become editable while
+    -- st.editing is on.
 
     -- Re-creating the button labels above puts them at the top of the local
     -- stacking order, which would cover an open editor / grid-settings dialog

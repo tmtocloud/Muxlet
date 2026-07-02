@@ -145,7 +145,7 @@ end
 -- Restyle one host's tab bar + every tab label from the token cascade. Shared by
 -- MuxPane and MuxTab (both are MuxSurfaces) so there is ONE styling path: the same
 -- Mux.css(...) element templates panes use, resolved per-tab so a tab's local
--- overrides show. Replaces the old settings-driven _applyTabStyle.
+-- overrides show.
 function MuxSurface:_restyleTabBar()
     if not self._tabsEnabled then return end
     local theme = Mux.activeTheme() or {}
@@ -586,11 +586,11 @@ function MuxSurface:enableTabs(opts)
     -- Sub-tab hosts use a different code path for infrastructure setup.
     local isSubTabHost = (self.pane ~= nil)
     if self._tabsEnabled then return end
-    -- Capture and fully remove existing pane content before building tab infrastructure.
-    -- The inline partial teardown used to run after buildTabInfrastructure, leaving the
-    -- old content widgets as live siblings of the new tab bar and viewport inside
-    -- self.content — the tab infrastructure would cover them but they'd reappear when
-    -- tabs were later removed.  Removing first keeps self.content clean.
+    -- Capture and fully remove existing pane content before building tab
+    -- infrastructure. Otherwise the old content widgets remain live siblings of the
+    -- new tab bar and viewport inside self.content — covered by the tab
+    -- infrastructure, but they reappear when tabs are later removed. Removing first
+    -- keeps self.content clean.
     local priorContent = self._activeContent
     if priorContent then Mux._removeContent(self) end
     self._tabsEnabled  = true

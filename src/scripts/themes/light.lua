@@ -33,7 +33,7 @@ Mux.registerTheme("light", {
     ["close.border.color"]        = "rgba(180,30,30,0.65)",
     ["close.text.color"]          = "white",
     ["close.hover.bg"]            = "rgba(230,55,55,245)",
-    ["close.hover.border.color"]  = "rgba(180,30,30,0.65)",  -- = base (light originally inherited)
+    ["close.hover.border.color"]  = "rgba(180,30,30,0.65)",  -- matches base
     ["close.hover.text.color"]    = "white",
     ["min.bg"]                    = "rgba(200,160,30,225)",
     ["min.border.color"]          = "rgba(180,140,20,0.65)",

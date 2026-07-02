@@ -508,14 +508,12 @@ function MuxPane:_buildTitlebar(theme)
 
         -- Detection order matters. Insertion zones live on the 20% edges of real,
         -- embedded panes; a ghost slot can be large (especially after promotion)
-        -- and may overlap a neighbouring pane's edge zone. Previously ghost-hover
-        -- was tested first and suppressed insertion entirely whenever the cursor sat
-        -- over any ghost rect, which made it impossible to insert "within" a region
-        -- that still contained a ghost. So: test pane-edge insertion FIRST. If the
-        -- cursor is in a pane's edge zone, that wins (and we clear any ghost
-        -- highlight). Only when no insertion edge is found do we treat the position
-        -- as a ghost hover (return-home into the ghost's interior). The two states
-        -- are kept mutually exclusive so the preview and the drop always agree.
+        -- and may overlap a neighbouring pane's edge zone. So test pane-edge
+        -- insertion FIRST: if the cursor is in a pane's edge zone, that wins (and we
+        -- clear any ghost highlight). Only when no insertion edge is found do we
+        -- treat the position as a ghost hover (return-home into the ghost's
+        -- interior). The two states are kept mutually exclusive so the preview and
+        -- the drop always agree.
         local insertPane, insertEdge, rect = nil, nil, nil
         for _, t in ipairs(drag.dropTargets) do
             if gx >= t.x and gx <= t.x + t.w and gy >= t.y and gy <= t.y + t.h then
@@ -2083,10 +2081,9 @@ function MuxPane:close()
     end
 
     if self.floating then
-        -- Closing a floating pane no longer reclaims its home tile. The ghost is an
-        -- ownerless empty tile and simply persists (dismiss it via its ✕ to reclaim
-        -- the space). The pane's home-ghost link gave it a mild preference to return
-        -- there while it lived; now it's gone, the tile just stays as a vacancy.
+        -- Closing a floating pane leaves its home tile as an ownerless empty ghost
+        -- that persists until dismissed via its ✕. There is no home-ghost link that
+        -- would pull the space back automatically.
         self.outer:hide()
     else
         if self._slot then self._slot:remove(self.outer) end
@@ -2122,8 +2119,8 @@ function MuxPane:applyTheme()
         self.titlebar:echo(string.format("<span style='color:%s;'>&nbsp;&nbsp;%s</span>", tbc, self.name))
         self:_updateInfoBtnPos()
     end
-    -- Restyle + re-echo every titlebar button uniformly. Previously a hand-written
-    -- list missed buttons (e.g. add-pane), so some icons only refreshed on hover.
+    -- Restyle + re-echo every titlebar button uniformly by iterating _btnEchos, so
+    -- no button (e.g. add-pane) is skipped.
     for _, e in ipairs(self._btnEchos or {}) do
         if e.btn then
             e.btn:setStyleSheet(btnCss)

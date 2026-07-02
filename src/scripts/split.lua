@@ -685,9 +685,9 @@ function MuxSplit:collapseSlot(closedSide)
         end
     end
 
-    -- Use remove() which clears BOTH windowList AND the windows ordered array —
-    -- VBox.organize() iterates windows, so simply clearing windowList (as done
-    -- previously) left the retired split still consuming layout space.
+    -- Use remove(): it clears BOTH windowList AND the windows ordered array that
+    -- VBox.organize() iterates. Clearing windowList alone leaves the retired split
+    -- still consuming layout space.
     self.box:hide()
     parentContainer:remove(self.box)
     Mux._splits[self.id] = nil

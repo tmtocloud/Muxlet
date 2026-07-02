@@ -8,10 +8,9 @@ function Mux.getPaneSpace(id)  return Mux._paneSpaces[id]  end
 function Mux.currentTheme()  return Mux._activeThemeName end
 
 -- Brings a floating pane or dialog to the front of the z-order. Embedded panes
--- never overlap, so this is a no-op for them. This is all that remains of the
--- old focus system: Muxlet no longer tracks a "focused" pane or draws a focus
--- border — panes are styled by their resting frame (grey panes, gold dialogs)
--- and edited directly from the UI.
+-- never overlap, so this is a no-op for them. There is no "focused" pane concept:
+-- panes are styled by their resting frame (grey panes, gold dialogs) and edited
+-- directly from the UI.
 function Mux.raisePane(pane)
     if pane and pane.floating then
         Mux._raiseSeq = (Mux._raiseSeq or 0) + 1
@@ -417,9 +416,9 @@ function Mux.fullStop()
         killAnonymousEventHandler(Mux._resizeHandler)
         Mux._resizeHandler = nil
     end
-    -- Hide and release the settings window. buildWindow() creates a fresh one
-    -- on the next toggle(), so we just abandon the old one.
-    -- Must happen BEFORE _clearWorkspace so the savedSet guard inside it sees nil.
+    -- Hide and release the settings window; buildWindow() creates a fresh one on
+    -- the next toggle(). Must happen BEFORE _clearWorkspace so the savedSet guard
+    -- inside it sees nil.
     if Mux._settings_ui and Mux._settings_ui.window then
         Mux._settings_ui.window:hide()
         Mux._settings_ui.window     = nil

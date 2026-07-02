@@ -1,1159 +1,570 @@
 # Muxlet
 
-A game-agnostic tiling window manager for [Mudlet](https://mudlet.org). Split the Mudlet window into panes, stack views in tabs, save named workspaces, attach custom content widgets to any pane or tab, and show or hide panes reactively based on game state.
+A game-agnostic tiling window manager for [Mudlet](https://mudlet.org). Split the
+Mudlet window into resizable panes, stack views in tabs, float and anchor panes,
+attach custom content to any pane or tab, react to game state with per-pane rules,
+theme everything through a token system, and save named workspaces.
 
 ---
 
-## For Users
+## Concepts
 
-### Requirements
+A quick vocabulary — the rest of this document uses these terms precisely.
 
-- [Mudlet](https://mudlet.org) 4.x or later
+- **Pane** — the basic tiling container. Has a titlebar, a content area, and a set
+  of capability flags (closeable, movable, zoomable, …). A pane is either *embedded*
+  in the tiling tree or *floating* freely.
+- **Split** — an internal node that divides a region into two children (left/right
+  or top/bottom) at a ratio. You never create splits directly; they appear when you
+  split a pane.
+- **Pane space** — the root region a split tree lives in (normally the whole screen).
+- **Tab** — a sub-surface hosted inside a pane. Panes and tabs share one class,
+  `MuxSurface`, so most operations work on either.
+- **Content** — a swappable module attached to a pane or tab (the main console, a
+  button grid, a capture window, …). Content is registered once and can be applied
+  to any surface.
+- **Rule** — a `condition → action` binding on a pane or tab. When the condition
+  becomes true the action runs; an optional *else* action runs when it becomes false.
+- **Theme** — a set of style *tokens*. Tokens resolve through a cascade so you can
+  override styling globally, per theme, or for one surface.
+- **Workspace** — a complete, named snapshot of the layout (the split tree, floating
+  panes, content, tabs, theme).
 
-### Installation
+There is no "focused pane" concept. Panes are styled by their resting frame and
+acted on directly through their titlebar, context menu, or API.
 
-Open Mudlet's **Package Manager** (Toolbox → Package Manager), search for **Muxlet**, and click Install.
+---
 
-Or download `Muxlet.mpackage` from the [Releases](https://github.com/tmtocloud/Muxlet/releases) page and install via **Install from file**.
+# For Users
 
-### Getting Started
+## Requirements
 
-On first install a welcome dialog walks you through choosing a startup mode. If you skip it, type:
+- [Mudlet](https://mudlet.org) 4.x or later.
+
+## Installation
+
+Open Mudlet's **Package Manager** (Toolbox → Package Manager), search for
+**Muxlet**, and install. Or download `Muxlet.mpackage` from the Releases page and
+use **Install from file**.
+
+## Getting started
+
+On first install a welcome dialog helps you pick a startup mode. Otherwise, type:
 
 ```
 mux
 ```
 
-This starts Muxlet and restores your last session. On the very first run it applies the default workspace — a single pane hosting the main game console.
+This starts Muxlet and restores your last session. On the very first run it applies
+the built-in `default` workspace — a single pane hosting the main game console.
 
 Type `mux help` at any time for a command summary.
 
----
+## Commands
 
-### Commands
+The `mux` alias covers sessions, workspaces, themes, settings, diagnostics, and
+recovery. Panes and tabs themselves are manipulated directly (titlebar buttons,
+context menus, drag gestures) rather than through subcommands.
 
-The `mux` alias covers sessions, workspaces, themes, settings, diagnostics, and recovery. There are no `mux pane …`, `mux tab …`, or `mux focus …` subcommands — panes and tabs are manipulated directly through their titlebar buttons, context menus, and drag gestures, or programmatically through methods on the pane/tab object (see *Accessing the Live Pane Graph*). Muxlet does not track a "focused" pane.
-
-#### Session
+### Session
 
 | Command | Description |
 |---------|-------------|
-| `mux` / `mux start` | Start Muxlet (restores last session, or the `default` workspace on first run) |
+| `mux` / `mux start` | Start Muxlet (restores last session, or `default` on first run) |
 | `mux stop` | Stop Muxlet, restore the normal Mudlet console |
-| `mux reset` | Re-apply the reset workspace (configurable via the `mux.reset_workspace` setting; defaults to `default`) |
-| `mux status` | Show status overview (version, workspace, pane count) |
+| `mux reset` | Re-apply the reset workspace (setting `mux.reset_workspace`, default `default`) |
+| `mux status` | Version, active workspace, pane count |
+| `mux reveal <pane id>` | Undo a "lock/hide editor" on content (e.g. a button grid) |
+| `mux debug [on\|off]` | Toggle diagnostic logging |
 
-#### Panes (interactive + programmatic)
+### Workspaces
 
-Use the pane's **titlebar buttons** (shown according to its capability flags): split vertical, split horizontal, swap with sibling, zoom, Content Library, minimize (floating panes), Properties (≡), and close. **Right-click** a titlebar for the full context menu. **Drag** a titlebar to move a floating pane, drop a pane on another pane's edge to insert a split, and drag a corner handle to resize.
-
-Programmatic equivalents on any pane `p`:
-
-```lua
-p:split("v", 0.6)     -- "v" = left/right divider, "h" = top/bottom; ratio 0.0-1.0
-p:zoom()              -- fill the screen; call again to restore
-p:float() / p:embed()
-p:close()
-p:setName("Map")
-p:lock() / p:unlock()
-p:setTitlebarVisible(false)
-p._split:swapSlots()  -- swap a pane with its split sibling
-```
-
-Locked panes ignore drag, close, split, and rename until `p:unlock()` (or context-menu Unlock).
-
-#### Tabs (interactive + programmatic)
-
-Add tabs from a pane's context menu (**Add Tab**); manage them via the tab labels:
-
-- **Drag** a tab label to reorder it within a bar, or drop it onto a different pane's tab bar to move it.
-- **Middle-click** a tab label to close it (with confirmation).
-- **Double-click** a tab label to enter move mode — the tab turns red and drop targets appear on every bar so you can click to place it anywhere.
-- **Right-click** a tab for rename / lock / close / Properties.
-
-Tabs share the `MuxSurface` API with panes, so these methods exist on both:
-
-```lua
-p:enableTabs()           -- turn a pane into a tab host
-p:addTab("Status")       -- returns the new MuxTab
-p:activateTab(tabId)
-p:renameTab(tabId, "Chat")
-p:removeTab(tabId)
-```
-
-#### Workspace
-
-Save and restore complete window arrangements. Muxlet auto-saves the live session as `"current"` one second after any structural change, so your layout survives Mudlet restarts automatically.
+Muxlet auto-saves the live session as `current` a second after any structural
+change, so your layout survives Mudlet restarts.
 
 | Command | Description |
 |---------|-------------|
 | `mux workspace save <name>` | Snapshot and name the current layout |
 | `mux workspace load <name>` | Restore a saved workspace |
-| `mux workspace list` | List all saved workspaces |
-| `mux workspace delete <name>` | Remove a named workspace |
-| `mux workspaces` | Alias for `mux workspace list` |
+| `mux workspace list` / `mux workspaces` | List saved workspaces |
+| `mux workspace delete <name>` | Remove a saved workspace |
 
-#### Theme
+### Themes
 
 | Command | Description |
 |---------|-------------|
-| `mux theme [name]` | Show the active theme, or switch to a named theme |
+| `mux theme [name]` | Show the active theme, or switch to a named one |
+| `mux theme save <name>` | Save the current look (theme + your global tweaks) as a new named theme |
 | `mux themes` | List all registered themes |
 
-Built-in themes: **dark** (default), **light**.
+Built-in themes: **dark** (default) and **light**.
 
-#### Settings
+### Settings
 
 | Command | Description |
 |---------|-------------|
 | `mux settings` | Open the floating settings window |
-| `mux settings list [ns]` | List all settings for a namespace |
-| `mux settings get ns.key` | Read a setting value |
+| `mux settings list [ns]` | List settings for a namespace |
+| `mux settings get ns.key` | Read a setting |
 | `mux settings set ns.key value` | Change a setting |
 | `mux settings clear ns.key` | Revert a setting to its default |
 
-Common settings:
+Common ones:
 
 ```
-mux settings set mux.auto_start true    — start automatically on every profile load
-mux settings set mux.theme light        — switch to light theme persistently
+mux settings set mux.auto_start true    -- start automatically on profile load
+mux settings set mux.theme light        -- persist the light theme
 ```
 
-The Muxlet section of the settings window is organised as **General · Main · Tabs · Actions**; the Actions tab is where users create and edit their own actions (see *Actions*).
+## Working with panes
 
-#### Recovery
+Each pane's titlebar shows only the buttons its capabilities allow: split vertical,
+split horizontal, swap with sibling, zoom, Content Library, minimize (floating),
+Properties (≡), and close. If the titlebar is too narrow, overflowing buttons fold
+into a **⋯** menu.
 
-If a pane's titlebar or Properties access has been hidden, these commands bring them back.
+- **Right-click** a titlebar for the full context menu (it lists whatever's folded,
+  plus any content settings the current content publishes).
+- **Drag** a titlebar to move a floating pane.
+- **Drop** a pane on another pane's edge (the 20% margins) to insert a split there.
+- **Drag** a corner handle to resize.
+- **Double-click empty titlebar space** or use the menu to float/embed.
 
-| Command | Description |
-|---------|-------------|
-| `mux panes` | List every pane and tab with its id and hidden state |
-| `mux reveal <id>` | Restore the titlebar and Properties access on one pane or tab |
-| `mux reveal all` | Restore them across the entire workspace |
+**Void prevention:** Muxlet refuses actions that would leave the tiling area empty.
+You can't close or float the only embedded pane, and splits never strand an empty
+region. When a pane is the last one, the relevant controls are disabled and shown
+read-only in Properties with the reason on hover.
 
-#### Debug
+## Tabs
 
-| Command | Description |
-|---------|-------------|
-| `mux debug [on\|off]` | Toggle (or set) debug output in the console |
-| `mux version` | Show installed version and check for updates |
-| `mux reload` | Reinstall Muxlet from the local build, preserving settings (development helper) |
-| `mux reload fresh` | Reinstall and reset the update-skip counter, simulating a fresh install |
+Add tabs from a pane's context menu (**Add Tab**), then manage them on the tab bar:
+
+- **Drag** a tab to reorder it, or drop it on another pane's tab bar to move it.
+- **Middle-click** a tab to close it (with confirmation).
+- **Double-click** a tab to enter move mode — drop targets appear on every bar.
+- **Right-click** a tab for rename / lock / close / Properties.
+
+## Content
+
+Every pane and tab has a **Content Library** button (and menu item). It lists the
+registered content you can drop onto that surface — the main console, a button grid,
+a capture window, and anything packages add. Items that can't apply to the current
+surface are greyed with the reason on hover (e.g. the console can't go in a tab), and
+singleton content shows as "Active" where it already lives.
+
+Content can publish its own settings into the host titlebar and right-click menu —
+for example the button grid's wrench (edit mode) or the capture window's settings
+gear. Those controls follow the content, whether it lives on a pane or on a tab.
+
+## Rules (reactive panes and tabs)
+
+Open a pane or tab's **Properties** to give it rules. A rule is *When \<condition\>,
+Do \<action\>* with an optional *Else \<action\>*. Conditions include connection
+state, GMCP values, a recently-fired event, or a line matching the game output;
+actions include showing/hiding/zooming the pane, sending a command, switching
+content, switching theme, or running Lua. Rules start inactive so you can set them up
+first, then flip them Active. You can also define **named conditions** and
+**named actions** once and reuse them across surfaces.
 
 ---
 
-### Attaching Content to Panes
+# For Package Developers
 
-Right-click any pane titlebar and choose **Content Library** to see all available content types. Selecting one fills the pane with that view. Any content types registered by installed packages appear there automatically — no restart required.
+Muxlet exposes a single global table, `Mux`. Everything below is a method or table on
+it. Public API is unprefixed (`Mux.registerContent`); names beginning with an
+underscore (`Mux._applyContent`) are internal but stable enough to call when noted.
 
-#### Built-in: GMCP Inspector
+A Muxlet add-on is just a Mudlet package whose scripts run after Muxlet's. Register
+your content/actions/conditions/themes/workspaces at load time; they slot into the
+same UI users already have.
 
-The **GMCP Inspector** is always available in the Content Library menu. It shows a live, type-grouped view of any GMCP path:
-
-- Click the **PATH** label at the top to open a path browser and select a different GMCP path.
-- Click **−** / **+** to zoom the row height in or out.
-- Click **Live** to pause auto-refresh (it becomes **Paused**; click again to resume).
-
-You can pre-point an inspector at a specific path from script:
+## Accessing the live graph
 
 ```lua
--- Point all active inspectors at a new path
-Mux.gmcpInspect("char.vitals")
-
--- Point only the inspector in a specific pane
-Mux.gmcpInspect("room.info", "sidebar")
+Mux._panes                     -- table: pane id -> MuxPane (the live registry)
+panes[id]                      -- convenience global proxy for Mux._panes[id]
+local p = Mux.newPane(opts)    -- create a pane (see MuxPane options)
 ```
 
----
-
-### Pane Properties
-
-Click the **≡** button on a pane's titlebar (or right-click → Properties) to open its
-properties dialog. The dialog is organised into three tabs:
-
-- **General** — Position & Size (a live, copyable read-out), Tabs, Renamable, Name,
-  Name Align, Width %, Height %, and Connection Awareness.
-- **Behavior** — Titlebar, Properties Button, Minimizable, Closeable, Splittable,
-  Swappable, Zoomable, Convertible, Anchorable, Bordered, Movable, Contentable,
-  Resizable. Each is a toggle that turns the matching capability on or off.
-- **Rules** — when the pane is visible (see *Reactive Panes* below).
-
-Tabs and tab-hosts have their own, simpler properties dialog.
-
----
-
-### Reactive Panes (show / hide by condition)
-
-A pane is visible by default. Give it a **condition** and Muxlet shows or hides it as
-the condition changes — no scripting required. Open the pane's properties, go to
-**Rules**, and choose a **Show when** type. Only the fields that type needs appear:
-
-| Show when      | Fields            | Visible while…                                          |
-|----------------|-------------------|---------------------------------------------------------|
-| Always         | —                 | always (the default; clears the condition)              |
-| GMCP has value | GMCP path         | the value at the path exists and is non-empty           |
-| GMCP equals    | GMCP path, Equals | the value at the path equals the given text             |
-| Event fired    | Event, Seconds    | for *Seconds* after the named Mudlet event last fired   |
-| Connected      | —                 | the session is connected to the game                    |
-| Disconnected   | —                 | the session is not (fully) connected                    |
-
-For the GMCP types, the **path** is dotted and resolved relative to the `gmcp` table
-— for example `room.info.players` or `char.ship.cargo`. A leading `gmcp.` is
-tolerated, so pasting `gmcp.room.info.players` straight from the command line also
-works.
-
-Two optional action pickers — **When true** and **When false** — choose what runs on
-each edge. They default to showing and hiding the pane; pick any registered action
-instead (see *Actions*), for example to flash a different pane or send a command.
-
-How the hide works depends on the pane:
-
-- **Floating** panes simply hide and reappear.
-- **Embedded** panes collapse to zero width/height and their split sibling reclaims
-  the space — exactly as if the pane were closed — then snap back into place when the
-  condition turns true again. Nothing is removed from the layout.
-
-A pane's condition and any non-default actions are saved with the workspace and
-restored automatically.
-
----
-
-## For Developers
-
-This section covers how external packages integrate with Muxlet: registering workspaces, themes, content types, and settings; using the dialog API; and accessing the live pane graph.
-
-### The `muxletReady` Event
-
-Wait for this event before calling any `Mux.*` API. It fires once after all Muxlet scripts have loaded and persisted settings have been applied — always after the synchronous script-loading stack unwinds, so a handler registered at load time never misses it regardless of package load order.
+Useful `MuxPane` methods (panes and tabs share `MuxSurface`, noted):
 
 ```lua
-registerAnonymousEventHandler("muxletReady", function()
-    -- Safe to call any Mux.* API here.
-    Mux.registerWorkspace("my-workspace", { ... })
-end)
+p:split("v", 0.6)      -- "v" = left/right, "h" = top/bottom; ratio 0..1; returns the split
+p:zoom()               -- fill the screen; call again to restore
+p:float() ; p:embed()
+p:close()
+p:setName("Map")
+p:setTitlebarVisible(false)
+p:setBordered(false) ; p:setBorderColor("#88aaff")
+p:setCondition(spec)   -- inline reactive condition (see Rules)
+p:raise() ; p:lower()  -- z-order for floating panes/dialogs
+
+-- MuxSurface (pane OR tab):
+p:enableTabs() ; p:disableTabs()
+local t = p:addTab("Status")   -- returns the new MuxTab
+p:activateTab(tabId) ; p:getTab(tabId)
+p:renameTab(tabId, "Chat") ; p:removeTab(tabId)
 ```
 
-A separate `muxletStarted` event fires at the end of `fullStart()` each time Muxlet is started or restarted at runtime. Use it if you need to re-apply layout changes after a `mux stop` / `mux start` cycle.
+## Registering content
 
----
-
-### Controlling the Startup Sequence
-
-Most packages can ignore this section entirely — register your content and workspaces in `muxletReady` and let the user's Muxlet settings drive the rest. But if your package provides its own onboarding or startup logic, you may want finer control over how and when Muxlet initializes.
-
-**Suppressing the welcome dialog**
-
-Muxlet shows a first-run dialog the first time it loads. If your package provides its own onboarding, you can suppress it by setting `welcome_shown` before the 0.3-second check fires:
+`Mux.registerContent(name, def)` adds a content type. Only `apply` is required.
+Content is attached to a surface with `Mux._applyContent(target, name)` (the Content
+Library and the `applyContent` action op call this for you). `target` is a pane or a
+tab.
 
 ```lua
-registerAnonymousEventHandler("muxletReady", function()
-    Mux.settings.set("mux", "welcome_shown", true)
-    -- Your own onboarding goes here.
-end)
-```
+Mux.registerContent("myclock", {
+  name        = "Clock",                       -- Content Library label
+  description = "A ticking clock.",            -- Content Library subtitle
+  singleton   = false,                          -- true = only one instance across all surfaces
+  internal    = false,                          -- true = hide from the Content Library
+  noTabs      = false,                          -- true = disallow tabs on the hosting pane
 
-**Calling `fullStart()` yourself**
+  -- Optionally forbid applying in some contexts. Return false + reason to block;
+  -- the library greys the item and shows the reason on hover.
+  canApply = function(target)
+    if target.floating then return false, "Clock must be embedded." end
+    return true
+  end,
 
-By default, Muxlet auto-starts 1.5 seconds after `muxletReady` if the user has `auto_start` enabled. If your package wants to register content and workspaces before anything renders — or drive a different startup flow — you can call `Mux.fullStart()` directly at the end of your `muxletReady` handler. The built-in timer checks `Mux._running` before it acts, so there is no double-start.
+  -- Lock host pane properties while this content is active. Sets the value AND marks
+  -- it read-only in Properties (reason on hover). Reverted automatically on remove.
+  paramLocks = {
+    movable = { value = false, why = "The clock pins its pane in place." },
+  },
 
-```lua
-registerAnonymousEventHandler("muxletReady", function()
-    Mux.settings.set("mux", "welcome_shown", true)
-    Mux.registerContent("my-content", { ... })
-    Mux.registerWorkspace("my-workspace", { ... })
-    -- Everything is registered; start Muxlet on our terms.
-    Mux.fullStart()
-end)
-```
+  apply = function(target)
+    -- Build your widget(s) into the surface. target.content is the Geyser container;
+    -- target.contentBg is the background label. target.id is the surface id.
+    target._clock = Geyser.Label:new({ name = target._gid .. "_clock",
+      x = 0, y = 0, width = "100%", height = "100%" }, target.content)
+    target._clockTimer = tempTimer(1, function()
+      if target._clock then target._clock:echo(os.date("%H:%M:%S")) end
+    end, true)
+  end,
 
-If you want Muxlet available but not started — for example, to let the user trigger it manually or after your own async setup — just omit the `fullStart()` call and ensure `mux.auto_start` is not set to `true` in the user's saved settings.
+  remove = function(target)                    -- tear down what apply built
+    if target._clockTimer then killTimer(target._clockTimer) end
+    target._clock, target._clockTimer = nil, nil
+  end,
 
-**Disabling the update checker**
+  resize   = function(target) end,             -- called when the surface changes size
+  serialize = function(target)                 -- return a plain table saved with the workspace
+    return { format = "24h" }
+  end,
+  restore  = function(target, data) end,       -- receive that table on workspace restore
 
-If your package manages which version of Muxlet is installed (for example, by pinning a specific release), you may want to disable Muxlet's built-in update check so it doesn't prompt the user to upgrade to an incompatible version:
-
-```lua
-registerAnonymousEventHandler("muxletReady", function()
-    Mux.settings.set("mux", "update_check_enabled", false)
-end)
-```
-
-The user can still run `mux version` to check manually, and can re-enable automatic checks with `mux settings set mux.update_check_enabled true`.
-
----
-
-### Workspaces
-
-A workspace is a complete snapshot of the pane/split tree, theme, and content assignments. Register from any package; registered workspaces appear in `mux workspace list` and survive package reloads.
-
-```lua
-Mux.registerWorkspace("my-game-layout", {
-    name  = "My Game Layout",
-    theme = "dark",          -- optional; uses the active theme if omitted
-    paneSpace = {
-        id   = "screen",
-        zone = "screen",
-        root = {
-            type = "split", direction = "v", ratio = 0.70,
-            a = {
-                type            = "pane",
-                id              = "output",
-                name            = "Main",
-                mainConsoleHost = true,
-            },
-            b = {
-                type = "split", direction = "h", ratio = 0.50,
-                a = { type = "pane", id = "chat",   name = "Chat" },
-                b = { type = "pane", id = "status", name = "Status",
-                      activeContent = "gmcp:char.vitals" },
-            },
-        },
-    },
+  -- See "Publishing to the titlebar and menu" below.
+  titlebarElements = { … },
+  onReveal = function(target) end,             -- called by `mux reveal <id>`
 })
-
--- Apply immediately (also auto-saves as "current" after 1 second)
-Mux.applyWorkspace("my-game-layout")
 ```
 
-#### Zone types
+## Publishing to the titlebar and menu
 
-The `zone` field on a paneSpace controls how it interacts with the main console borders:
-
-| Zone | Behaviour |
-|------|-----------|
-| `"screen"` | Covers the full window. Use `mainConsoleHost = true` on one pane to show game output. |
-| `"left"` | Left border panel. Pushes the console right by the paneSpace width. |
-| `"right"` | Right border panel. Pushes the console left. |
-| `"top"` | Top border panel. Pushes the console down. |
-| `"bottom"` | Bottom border panel. Pushes the console up. |
-| `"float"` | Free-floating overlay. No border management; supply explicit geometry. |
-
-Only **one paneSpace per workspace** is supported. Use splits within it to arrange multiple panels.
-
-#### Pane node fields
-
-All behavioral flags default to `true` (the permissive state). Set a flag to `false` only when you want to restrict that capability. These same field names are used in workspace registration, the workspace JSON file, and on live `MuxPane` objects.
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `type` | string | — | `"pane"` |
-| `id` | string | — | Unique identifier. Becomes the `panes["id"]` key. |
-| `name` | string | — | Display name shown in the titlebar. |
-| `mainConsoleHost` | bool | `false` | Routes the main game console into this pane. Only one pane should set this. Automatically sets `closeable = false`, `convertible = false`, and `contentable = false`. |
-| `showTitlebar` | bool | `false` | Override the default titlebar visibility for this pane. |
-| `locked` | bool | `false` | Pane starts locked (drag, split, close, minimize disabled). |
-| `activeContent` | string | — | Content type id to apply automatically on load. |
-| `contentable` | bool | `true` | Show the Content Library (▥) button and context menu item. |
-| `tabsLocked` | bool | `false` | Prevent new tabs from being added to an existing tab bar (NoAdd state). Pair with a `tabs` array to define a read-only set of tabs that users cannot extend. |
-| `resizable` | bool | `true` | Show corner resize handles when floating. |
-| `titlebarHideable` | bool | `true` | Allow the titlebar to be hidden via toggle. Set to `false` to keep it permanently visible. |
-| `renamable` | bool | `true` | Allow renaming via UI or command. |
-| `connectionAware` | bool | `false` | Show a ⊘ / ⟳ overlay while the client is disconnected or connecting. Covers the full content area including any tab bar. See **Connection Awareness** below. |
-| `condition` | table | — | Inline reactive condition that shows/hides the pane, e.g. `{ type = "gmcp_exists", path = "char.ship.cargo" }`. Omit (or `{ type = "always" }`) for always-visible. See **Reactive Panes & Conditions**. |
-| `actionTrue` | string | `"mux.showSelf"` | Action id run when the condition becomes true. |
-| `actionFalse` | string | `"mux.hideSelf"` | Action id run when the condition becomes false. |
-| `zoomable` | bool | `true` | Show a zoom button in the titlebar. |
-| `splittable` | bool | `true` | Show split buttons in the titlebar. |
-| `swappable` | bool | `true` | Show the swap button when the pane is part of a split. |
-| `closeable` | bool | `true` | Show the close button and allow `close()`. Set to `false` to make the pane permanently uncloseable (e.g. `mainConsoleHost`). `lock()` sets this to `false`; `unlock()` restores it. |
-| `minimizable` | bool | `true` | Show the minimize (–) button on floating panes. `lock()` sets this to `false`; `unlock()` restores it. |
-| `convertible` | bool | `true` | Allow switching between embedded and floating states. Set to `false` to lock the pane in its initial position permanently. |
-| `movable` | bool | `true` | Allow repositioning by dragging the titlebar. |
-| `contextMenu` | bool | `true` | Show the right-click context menu on the titlebar. |
-| `propertiesButton` | bool | `true` | Show the Properties (≡) button in the titlebar and context menu. |
-| `insertable` | bool | `true` | Include this pane as a drop target when another pane is dragged over it for edge-insertion. |
-| `overlay` | bool | `false` | Pane is always floating and excluded from workspace save/restore and ghost slots. Used for system dialogs and persistent HUDs that should not participate in the split tree. |
-| `transparentFrame` | bool | `false` | Makes the frame transparent and click-through. Use for HUD overlays that sit above the Qt surface without blocking interaction. |
-| `floatX` | number | `100` | Initial left edge (px) when the pane is floating. |
-| `floatY` | number | `100` | Initial top edge (px) when the pane is floating. |
-| `floatW` | number | `400` | Initial width (px) when the pane is floating. |
-| `floatH` | number | `300` | Initial height (px) when the pane is floating. |
-
-#### Tab node fields
-
-Pre-create tabs on a pane by including a `tabs` array in the pane node. Each entry defines one tab in order; `activeTabName` controls which tab is active after restore. The same format is used for sub-tabs inside a tab (tabs-in-tabs).
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `name` | string | — | Display name shown on the tab label. |
-| `renamable` | bool | `true` | Allow renaming via the Properties dialog. |
-| `closeable` | bool | `true` | Allow this tab to be closed. |
-| `movable` | bool | `true` | Allow this tab to be dragged to reorder or moved to another pane. |
-| `contentable` | bool | `true` | Allow Content Library assignments on this tab. |
-| `propertiesButton` | bool | `true` | Show the Properties item in the tab's right-click context menu. |
-| `connectionAware` | bool | `false` | Show a ⊘ / ⟳ overlay when the client is not connected. Suppressed when the parent pane has `connectionAware` enabled. |
-| `tabsLocked` | bool | `false` | Host sub-tabs in this tab but prevent new ones from being added (NoAdd state). |
-| `tabs` | array | — | Sub-tab definitions. Same format as this table — enables tabs-in-tabs. |
-| `activeTabName` | string | — | Name of the sub-tab to activate after restore. |
-| `activeContent` | string | — | Content type id to apply automatically on restore. |
+A content def's `titlebarElements` list adds icons to the host titlebar and/or rows
+to its right-click menu. These follow the content whether it lives on a pane or a
+tab. Every callback receives a **context** table:
 
 ```lua
-{
-    type = "pane",
-    id   = "sidebar",
-    name = "Sidebar",
-    tabs = {
-        { name = "Chat",   activeContent = "my_chat_view" },
-        { name = "Map",    closeable = false, renamable = false },
-        { name = "Status", connectionAware = true },
-    },
-    activeTabName = "Chat",
+ctx = {
+  pane        = <MuxPane>,        -- the host pane (always present)
+  tab         = <MuxTab|nil>,     -- the active tab, if the content lives in one
+  isTab       = <bool>,           -- true when the content is on a tab
+  isFloating  = <bool>,
+  isEmbedded  = <bool>,
+  content     = <content def>,    -- this content's registered definition
 }
 ```
 
-#### Tabs in tabs
-
-Any tab can host its own nested tab bar. Enable this from the Properties dialog on an active tab by setting **Tabs** to **Enabled** or **NoAdd**, or include a `tabs` array in the tab's workspace entry.
-
-Sub-tabs follow the same rules as top-level tabs: they hold content, support connection awareness, and can be dragged and reordered within their bar. Cross-pane tab moves are only supported at the top level — sub-tabs cannot be relocated to a different pane's bar.
+Element spec (all fields optional except `id`):
 
 ```lua
--- A tab that hosts two sub-tabs
-{
-    name  = "Analysis",
-    tabsLocked = true,   -- bar shown but no new sub-tabs can be added
-    tabs  = {
-        { name = "Chart",  activeContent = "my_chart" },
-        { name = "Table",  activeContent = "my_table" },
-    },
-    activeTabName = "Chart",
+titlebarElements = {
+  {
+    id       = "myclock.settings",  -- unique id (avoid built-in ids)
+    side     = "left",              -- "left" | "right" cluster
+    group    = "info",              -- packing/menu group for ordering
+    order    = 0,                   -- order within the group
+    priority = 100,                 -- higher folds into the ⋯ menu last
+    icon     = "⚙",                 -- glyph, or a function(ctx) -> glyph
+    tooltip  = "Clock settings",
+    iconable = true,                -- false = never a titlebar icon, menu-only
+    visible  = function(ctx) return true end,   -- optional; default visible
+    onClick  = function(ctx, event) openClockSettings(ctx.tab or ctx.pane) end,
+
+    -- Menu counterpart (shown in the right-click menu / when folded):
+    menuText  = "⚙  Clock settings…",  -- string or function(ctx) -> string
+    menuGroup = "info",
+    menuOrder = 95,
+    run       = function(ctx) openClockSettings(ctx.tab or ctx.pane) end,
+  },
 }
 ```
 
-#### Lifecycle callbacks
-
-Supply these as fields on the pane node. Each is an optional function that Muxlet calls when the corresponding event occurs.
-
-| Field | Signature | When called |
-|-------|-----------|-------------|
-| `onClose` | `function(pane)` | After the pane is closed and removed from the graph. |
-| `onFloat` | `function(pane)` | After the pane transitions to floating. |
-| `onEmbed` | `function(pane)` | After the pane is embedded back into a split slot. |
-| `onMinimize` | `function(pane, isMinimized)` | After minimize or restore. `isMinimized` is `true` when collapsing, `false` when restoring. |
-| `onReposition` | `function(pane)` | After the pane's geometry changes due to a split rebalance, window resize, workspace restore, or zoom. |
-
-```lua
-{
-    type = "pane",
-    id   = "sidebar",
-    name = "Sidebar",
-
-    onFloat = function(p)
-        echo("sidebar is now floating at " .. p.floatX .. "," .. p.floatY .. "\n")
-    end,
-
-    onEmbed = function(p)
-        echo("sidebar embedded\n")
-    end,
-
-    onMinimize = function(p, minimized)
-        if minimized then
-            echo("sidebar minimized\n")
-        else
-            echo("sidebar restored\n")
-        end
-    end,
-
-    onReposition = function(p)
-        -- fires on every resize; keep external widgets in sync here
-    end,
-}
-```
-
-Callbacks can also be assigned after a workspace is applied:
-
-```lua
-panes["sidebar"].onClose = function(p)
-    echo("sidebar was closed\n")
-end
-```
-
-#### Split node fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | string | `"split"` |
-| `direction` | string | `"v"` — left / right slots. `"h"` — top / bottom slots. |
-| `ratio` | number | Fraction of space given to slot `a` (0.0–1.0). Default `0.5`. |
-| `a` | node | First child (left for `"v"`, top for `"h"`). |
-| `b` | node | Second child (right for `"v"`, bottom for `"h"`). |
-
-#### Floating panes in workspaces
-
-```lua
-Mux.registerWorkspace("with-float", {
-    paneSpace = { ... },
-    floatingPanes = {
-        {
-            type   = "pane",
-            id     = "notes",
-            name   = "Notes",
-            floatX = 200, floatY = 150,
-            floatW = 380, floatH = 260,
-        },
-    },
-})
-```
-
-#### Runtime workspace API
-
-```lua
-Mux.applyWorkspace("my-game-layout")   -- restore a workspace
-Mux.saveWorkspace("afternoon-session") -- snapshot the live layout
-Mux.listWorkspaces()                   -- list all registered workspaces
-Mux.deleteWorkspace("old-layout")      -- remove a saved workspace
-```
-
----
-
-### Content Types
-
-Content types are named widget factories. Once registered they appear in the right-click **Content Library** menu on every pane and tab — immediately, with no restart. The catalog is persisted to `Muxlet_persistent/content.json` so names survive reloads.
-
-```lua
-Mux.registerContent("my_hud", {
-    name        = "My HUD",
-    description = "Shows something useful in a pane",
-    singleton   = false,   -- true = only one active instance at a time
-
-    -- Called when the user selects this content type, or a workspace loads it.
-    -- `target` is a pane or a tab — both expose the same interface.
-    apply = function(target)
-        -- target.id        — unique string id
-        -- target.name      — display name
-        -- target.content   — Geyser.Container; parent all widgets here
-        -- target.contentBg — Geyser.Label placeholder; hide once real content is attached
-        local lbl = Geyser.Label:new({
-            name = target.id .. "_hud_lbl",
-            x = "0%", y = "0%", width = "100%", height = "100%",
-        }, target.content)
-        lbl:rawEcho("Hello from My HUD")
-        target.contentBg:hide()
-    end,
-
-    -- Optional. Called before a different content type replaces this one.
-    remove = function(target)
-        hideWindow(target.id .. "_hud_lbl")
-    end,
-
-    -- Optional. Called whenever the container's pixel size changes (window
-    -- resize, split-divider drag, embed/float, float-edge drag). Use it to
-    -- re-flow pixel-positioned widgets so they track the pane. Muxlet only
-    -- calls this when the size actually changed, so it is safe and cheap.
-    resize = function(target)
-        -- e.g. recompute widths from target.content:get_width() and redraw
-    end,
-
-    -- Optional pair. Per-instance persistence: if serialize is present, Muxlet
-    -- stores the returned table inside the workspace next to this pane's
-    -- activeContent, and calls restore(target, data) right after re-applying the
-    -- content on load. Your content's config then travels with the workspace
-    -- (export/import, multiple workspaces, session restore) at no extra cost.
-    serialize = function(target)
-        return { -- any plain table (will be JSON-encoded)
-            note = target._myNote,
-        }
-    end,
-    restore = function(target, data)
-        target._myNote = data.note
-        -- redraw with the restored state
-    end,
-})
-```
-
-> **Text colour in content widgets:** Use `rawEcho` instead of `echo` when the label's text colour is controlled by `setStyleSheet`. Geyser's `echo` wraps content in a `<div style="color: #ffffff;">` that overrides the stylesheet colour. `rawEcho` bypasses that wrapper and lets the Qt stylesheet take effect.
-
-Set `singleton = true` to allow only one active instance at a time. If the user tries to open it in a second pane, a dialog tells them where it is currently open and the apply is aborted.
-
-#### Content lifecycle & persistence
-
-Two different things persist, and they have different owners:
-
-- **Which content sits on a pane/tab** — the content's *id*. This is workspace/layout state, and **Muxlet owns it**. You never save it yourself; it round-trips with the workspace automatically.
-- **A content instance's own configuration/state** — **the content owns it**, and persists it by implementing the optional `serialize`/`restore` pair above. Because the data is stored *inside the workspace*, it survives session restore, travels on export/import, and stays correct across multiple workspaces — without a side file keyed by pane id (which would not travel with the workspace and could collide on recycled ids).
-
-This is opt-in. Content that wants different behaviour (shared state, an external file, app-global config) simply omits `serialize`/`restore` and manages its own storage. The built-in **Button Grid** uses the hook — it's the reference example of a "universal" content type that persists correctly through the workspace.
-
-The full optional lifecycle, in call order: `apply(target)` → [`resize(target)` on every size change] → `remove(target)` when replaced/removed; and on load, `apply(target)` → `restore(target, data)`.
-
-#### Applying content programmatically
-
-```lua
-Mux._applyContent(panes["sidebar"], "my_hud")
-
--- Apply to a specific tab
-local tab = panes["chat"]:_findTab(panes["chat"]._activeTabId)
-Mux._applyContent(tab, "my_hud")
-```
-
-#### Built-in: GMCP Inspector
-
-`gmcp_inspector` is pre-registered and always available in the Content Library menu. It provides an interactive, type-grouped live view of any GMCP path with click-to-browse, expand/collapse, and zoom controls.
-
-Use it in a workspace definition like any other content type:
-
-```lua
-{ type = "pane", id = "gmcp", name = "GMCP", activeContent = "gmcp_inspector" }
-```
-
-#### Built-in: Fixed-path GMCP viewer
-
-`Mux.registerGmcpViewer(path)` creates a content type that renders a single GMCP path as a clean, card-style read-out — a header band with the path and a type/count badge, colour-coded values, and nested objects indented under accent bars — and auto-refreshes on the corresponding event. Use this when you want a dedicated pane that always shows one specific path:
-
-```lua
-Mux.registerGmcpViewer("char.vitals")   -- → content id "gmcp:char.vitals"
-Mux.registerGmcpViewer("room.info")     -- → content id "gmcp:room.info"
-```
-
-Use the resulting id in a workspace definition:
-
-```lua
-{ type = "pane", id = "vitals", name = "Vitals", activeContent = "gmcp:char.vitals" }
-```
-
-#### Built-in: Button Grid
-
-`mux_buttons` is pre-registered and always available in the Content Library menu. It's a configurable, auto-flowing grid of buttons; each button runs either a raw command (sent via `expandAlias`) or a registered **action** (see below). Click the ⚙ to enter edit mode, add/edit buttons (label, colours via the colour picker, shape, column span, font size), set grid options (columns, gaps, fill vs fixed row height), then click ⚙ again to use them. The grid reflows to fit its pane on resize, and its configuration persists with the workspace via the `serialize`/`restore` hook.
-
-```lua
-{ type = "pane", id = "bar", name = "Quick Buttons", activeContent = "mux_buttons" }
-```
-
----
-
-### Actions
-
-Actions are named, serialisable units of behaviour. They decouple *what a control does* from *the control itself*, so a button, a pane's show/hide reaction, or any future UI can reference behaviour by a stable string id rather than capturing a closure. Register from any package:
-
-```lua
-Mux.registerAction("mypkg.heal", {
-    name  = "Quick Heal",                 -- shown in pickers
-    group = "Combat",                     -- grouping label
-    icon  = "✚",                          -- optional glyph
-    desc  = "Cast the strongest heal you can afford.",  -- shown on hover
-    run   = function(ctx) send("cast 'heal'") end,
-})
-```
-
-`run` receives a context table. For a button it carries `{ source = ... }`; when an
-action runs as a pane's reactive edge (see *Reactive Panes*) it carries
-`{ pane = <pane>, met = true|false }`, so an action can act on the pane that
-triggered it.
-
-Registry API:
-
-```lua
-Mux.runAction("mypkg.heal", { source = "button" })  -- invoke by id
-Mux.listActions()    -- → { {id, name, group, icon, desc}, … }, sorted
-Mux.getAction(id)    -- → the definition, or nil
-Mux.unregisterAction(id)
-```
-
-Built-in actions, always available in the pickers:
-
-| ID                    | Does                                                   |
-|-----------------------|--------------------------------------------------------|
-| `mux.showSelf`        | Show the pane (default *When true* for a condition)    |
-| `mux.hideSelf`        | Hide the pane (default *When false* for a condition)   |
-| `mux.connScreen.show` | Cover the pane with the disconnected/connecting screen |
-| `mux.connScreen.hide` | Remove the connection screen                           |
-| `mux.reconnect`       | Reconnect the session                                  |
-| `mux.clearConsole`    | Clear the main console                                 |
-| `mux.demoEcho`        | Echo a demo line (sample action)                       |
-
-Anything you register also appears automatically in the Button Grid's action
-dropdown and the pane Rules action pickers, with `desc` shown on hover.
-
-#### User-defined actions (Settings → Actions)
-
-End users can build their own actions from **Settings → Actions** without scripting.
-Each has an id, a label, and a **kind** (a segmented toggle that swaps the fields
-shown):
-
-| Kind    | Field   | Does                                                          |
-|---------|---------|--------------------------------------------------------------|
-| send    | Command | sends the text to the game, as if typed at the input line    |
-| raise   | Event   | raises a named Mudlet event                                  |
-| run Lua | Lua     | runs the snippet; it receives the action context as its vararg|
-
-For the Lua kind, write `local ctx = ...` at the top of the snippet to read
-`ctx.pane`. Click an existing action to edit it, or **+ New** to start one; only your
-own actions are listed here (built-ins live in the pickers, not the manager).
-
-User actions are data and persist to `Muxlet_persistent/rules.json`, re-registered on
-load. The same store is reachable from script:
-
-```lua
-Mux.createDeclarativeAction({ id = "fed2.who", label = "Who",
-                              kind = "send", command = "who" })
-Mux.getDeclarativeAction("fed2.who")
-Mux.deleteDeclarativeAction("fed2.who")
-```
-
----
-
-### Reactive Panes & Conditions
-
-A pane carries an inline **condition spec** plus two action ids. There is no
-condition registry and no management screen — the condition is data on the pane,
-defined where it is used.
-
-```lua
-pane.condition   = { type = "gmcp_exists", path = "room.info.players" } -- or nil
-pane.actionTrue  = "mux.showSelf"   -- runs when the condition becomes true
-pane.actionFalse = "mux.hideSelf"   -- runs when it becomes false
-```
-
-`nil` (or `type = "always"`) means always visible. The available types — also
-exposed as `Mux.conditionTypes` so the UI and engine stay in lock-step — are:
-
-| `type`         | Fields            | True when…                                       |
-|----------------|-------------------|--------------------------------------------------|
-| `always`       | —                 | always (normalised to `nil`)                     |
-| `gmcp_exists`  | `path`            | the gmcp value at `path` is non-nil and non-empty|
-| `gmcp_equals`  | `path`, `value`   | the gmcp value at `path` equals `value`          |
-| `event_fired`  | `event`, `seconds`| within `seconds` of the Mudlet `event` firing    |
-| `connected`    | —                 | `Mux._connState == "connected"`                  |
-| `disconnected` | —                 | not fully connected                              |
-
-GMCP `path` is resolved relative to `gmcp`; a leading `gmcp.` is stripped if present.
-
-#### Setting and evaluating
-
-```lua
-pane:setCondition(spec)               -- spec table, or nil to clear (always visible)
-pane:setReactiveActions(trueId, fId)  -- override the edge action ids (nil = keep)
-
-Mux._evaluatePaneCondition(pane)      -- evaluate one pane; run its edge action on change
-Mux.evaluateAllPaneConditions()       -- evaluate every pane carrying a condition
-```
-
-`setCondition` re-wires the pane's event subscriptions and evaluates immediately.
-Conditions are re-evaluated when their backing events fire (GMCP conditions subscribe
-to `gmcp.<first-segment>` and `gmcp.<first-two-segments>`), whenever the connection
-state changes, and once after a workspace finishes loading. Edge actions are invoked
-through the registry as `Mux.runAction(id, { pane = pane, met = met })`.
-
-#### Visibility model
-
-Hidden floating panes simply hide; hidden embedded panes collapse via a zero-weight
-split layout — the slot drops to zero and the sibling reclaims the space, with the
-divider handle hidden — and restore in place when shown. `Mux._nodeVisible(node)`
-reports a pane/split's effective visibility for that layout.
-
-#### Persistence
-
-`condition`, and `actionTrue`/`actionFalse` when non-default, serialize with the pane
-in the workspace JSON and restore automatically:
-
-```lua
-{ type = "pane", id = "cargo", name = "Cargo", activeContent = "fed2_cargo",
-  condition = { type = "gmcp_exists", path = "char.ship.cargo" } }
-```
-
----
-
-### UI Widgets (forms & components)
-
-Muxlet includes a small widget toolkit under `Mux.ui` so package authors can build configuration UIs that match Muxlet's look and behaviour. There are two layers: **`buildForm`** (a labelled-row form builder) and the **standalone components** it's composed from (usable directly in your own dialogs).
-
-#### `Mux.ui.buildForm(parent, rows, opts)`
-
-Builds a vertical form of labelled rows into a Geyser container and returns a handle.
-
-```lua
-local form = Mux.ui.buildForm(dialog.content, {
-    { label = "Enabled",  type = "toggle",
-      readFn = function() return cfg.enabled end,
-      writeFn = function(v) cfg.enabled = v end },
-
-    { label = "Name",     type = "text",            -- commits on Enter
-      readFn = function() return cfg.name end,
-      writeFn = function(v) cfg.name = v end },
-
-    { label = "Size",     type = "number", min = 6, max = 32, step = 1,
-      readFn = function() return cfg.size end,
-      writeFn = function(v) cfg.size = v end },
-
-    { label = "Mode",     type = "segmentedControl",
-      options = { { value = "a", label = "A" }, { value = "b", label = "B" } },
-      readFn = function() return cfg.mode end,
-      writeFn = function(v) cfg.mode = v end },
-
-    { label = "Target",   type = "array", display = "dropdown",
-      options = { { value = "x", label = "X", desc = "hover text" }, … },
-      readFn = function() return cfg.target end,
-      writeFn = function(v) cfg.target = v end },
-
-    { label = "Colour",   type = "color",           -- swatch + hex + presets
-      readFn = function() return cfg.colour end,
-      writeFn = function(v) cfg.colour = v end },
-}, {
-    width    = 320,
-    prefix   = "mypkg_form",
-    hideApply = true,                 -- text rows commit on Enter only, no Apply button
-    getContentScreenPos = function() return dialog.content:get_x(), dialog.content:get_y() end, -- needed for dropdowns
-})
-```
-
-Row types: `toggle` (checkbox), `text` (string), `number` (stepper), `array` (with `display = "cycler" | "segmented" | "dropdown"`), `color`, and `readOnly`. Each row supplies `readFn`/`writeFn`; optional `desc` shows a sub-label (and hover text on dropdown options). `segmentedControl` and `choiceCycler` are aliases for `array` with the matching display.
-
-The returned handle:
-
-```lua
-form.totalHeight   -- pixel height of the built form
-form.refresh(i)    -- re-read row i from its readFn
-form.refreshAll()  -- re-read every row
-form.commitAll()   -- flush all text inputs through their writeFn (use before "Save")
-form.closeDropdown()
-```
-
-`commitAll()` is the key to a clean Save button: text fields commit on Enter, so call `form.commitAll()` from your dialog's Save/Done handler to capture anything typed-but-not-Entered. Use `Mux.ui.formHeight(rows, opts)` to size a dialog to its form before building.
-
-#### Standalone components
-
-Each control is (progressively) available as a self-contained component you can drop into your own UI without a form. They take `(parent, opts)` and return a handle with `read`, `set`, `commit`, `refresh`, `container`, and `height`. The colour picker is the first fully extracted:
-
-```lua
-local picker = Mux.ui.colorField(dialog.content, {
-    x = 10, y = 10, width = 260,
-    value = "#1c2a4e",
-    onChange = function(hex) applyColour(hex) end,
-    -- swatches = { "#…", … },   -- optional; defaults to Mux.ui.COLOR_PRESETS
-})
-picker.read()        -- current hex
-picker.set("#fff")   -- set programmatically
-picker.commit()      -- flush the hex input (e.g. on Save)
-```
-
-`buildForm`'s `color` row uses this exact component internally — the model the rest of the controls are moving toward, so every widget is independently useful.
-
-#### Extending `buildForm` with custom widget types
-
-The form builder is extensible: register a new row type and any spec with that `type` renders through your builder instead of a built-in. This lets a package add purpose-built controls (sliders, key-capture fields, mini colour grids…) that still get the form's label, description, reset icon, alternating-row styling, and `commitAll`/`refreshAll` plumbing for free.
-
-```lua
-Mux.ui.registerWidget("slider", function(parent, o)
-    -- o.x/o.y/o.width/o.height = the widget area (label is already drawn to the
-    -- left, reset icon to the right — you just fill this rectangle).
-    local bar = Geyser.Label:new({
-        name = o.uid .. "_sl", x = o.x, y = o.y, width = o.width, height = o.height,
-    }, parent)
-    local function refresh()
-        local v = o.spec.readFn()
-        bar:echo(("<center>%s</center>"):format(tostring(v)))
-    end
-    refresh()
-    bar:setClickCallback(function()
-        o.closeDropdown()                 -- close any open form dropdown first
-        o.onChange((o.spec.readFn() or 0) + (o.spec.step or 1))
-        refresh()
-    end)
-    return { refresh = refresh }          -- commit/refresh both optional
-end, { rowHeight = 48 })                   -- rowHeight optional (default = form rowHeight)
-```
-
-The builder receives `parent` plus an options table: `x, y, width, height` (the widget rectangle), `value` (current `readFn()` result), `onChange` (persists a new value), and `spec, css, uid, closeDropdown, getScreenPos` for styling, naming, dropdown coordination, and positioning floating overlays. Return `{ commit, refresh }` (either optional) to hook into the form handle. Use a unique type name — this is for adding new widgets rather than overriding the built-ins. `Mux.ui.unregisterWidget(type)` removes one.
-
----
-
-### Themes
-
-A theme is a Lua table of CSS strings, pixel dimensions, and color values. Register from any package; registered themes appear in `mux themes` and the settings dropdown.
-
-The recommended pattern is to extend an existing built-in rather than specifying every field from scratch:
-
-```lua
-registerAnonymousEventHandler("muxletReady", function()
-    local base = Mux._themes["dark"]
-
-    Mux.registerTheme("my-theme", Mux._merge(base, {
-        titlebarHeight  = 28,
-        titlebarCss     = "background-color: #1e1e2e; border: none;",
-        paneOuterCss    = "background-color: #181825; border: 2px solid #313244; border-radius: 4px;",
-        handleCss       = "background-color: #313244;",
-        handleHoverCss  = "background-color: #45475a;",
-    }))
-
-    Mux.applyTheme("my-theme")
-end)
-```
-
-`Mux._merge(base, overrides)` returns a shallow-merged table — every field in `overrides` replaces the corresponding field in `base`, and unspecified fields inherit from `base`. This means your theme stays visually coherent even as new fields are added in future Muxlet versions.
-
-Runtime theme API:
-
-```lua
-Mux.applyTheme("my-theme")   -- applies immediately to all live panes and splits
-Mux.currentTheme()           -- returns the active theme name
-Mux.activeTheme()            -- returns the active theme table
-```
-
-See `src/scripts/themes/dark.lua` in the source for the full field reference.
-
----
-
-### Settings
-
-Muxlet has a two-level namespace settings system (`ns.key`). Packages register their own namespaces, which appear as tabs in the floating settings window.
-
-#### Registering settings
-
-```lua
-registerAnonymousEventHandler("muxletReady", function()
-
-    -- Boolean toggle
-    Mux.settings.register("my-package", "show_timestamps", {
-        tab         = "My Package",
-        description = "Show timestamps on chat messages",
-        default     = true,
-    })
-
-    -- Dropdown from a fixed list
-    Mux.settings.register("my-package", "color_scheme", {
-        description = "Color scheme for chat messages",
-        default     = "blue",
-        choices     = { "blue", "green", "amber", "white" },
-    })
-
-    -- Integer stepper (when max - min ≤ 100)
-    Mux.settings.register("my-package", "font_size", {
-        description = "Font size for MiniConsoles",
-        default     = 12,
-        min         = 8,
-        max         = 24,
-    })
-
-    -- Free-text entry (any other type)
-    Mux.settings.register("my-package", "server_host", {
-        description = "MUD server hostname",
-        default     = "example.com",
-    })
-
-end)
-```
-
-The widget type is inferred automatically:
-- `choices` table → dropdown
-- `boolean` default → toggle
-- `number` default with `min`/`max` where `max − min ≤ 100` → stepper
-- Everything else → text entry with an Apply button
-
-#### Tab hierarchy
-
-The `tab` field on the first registered key for a namespace sets the tab label. A slash creates a sub-tab:
-
-```lua
-Mux.settings.register("my-package", "first_key", {
-    tab = "My Package",
-    ...
-})
-
-Mux.settings.register("my-package/map", "zoom", {
-    tab = "My Package/Map",
-    ...
-})
-```
-
-#### Reading, writing, and reacting to settings
-
-```lua
--- Read (returns persisted value, or default if never set)
-local showTs = Mux.settings.get("my-package", "show_timestamps")
-
--- Write (validates, persists, fires onChange)
-local ok, err = Mux.settings.set("my-package", "font_size", 14)
-
--- Revert to default
-Mux.settings.clear("my-package", "font_size")
-
--- React to changes (fires on both UI and script changes)
-Mux.settings.onChange("my-package", "font_size", function(value)
-    applyFontSize(value)
-end)
-```
-
-Settings are persisted to `Muxlet_persistent/settings.json`.
-
----
-
-### Dialog API
-
-Use `Mux.createDialog()` for all floating popup windows. Dialogs created through this API:
-
-- Get automatic frame, border, and titlebar styling from the active theme.
-- Update instantly when the user switches themes.
-- Stay above workspace panes automatically.
-- Have a working × close button built in.
-- Expose a `pane.content` Geyser.Container for widget placement.
-
-#### Creating a dialog
+Resolve the surface that actually owns the content with `ctx.tab or ctx.pane` — that
+is the value to pass to your own settings dialog and to `serialize`/`restore`.
+
+## Settings dialogs and forms
+
+`Mux.createDialog(opts)` returns a floating `MuxDialog` (itself a pane). Give it a
+form with `d:mountForm(specs, formOpts)`, which builds a scrolling form that grows to
+fit its content up to a share of the screen, snaps back when it shrinks, stays
+on-screen, and positions dropdown/colour popups correctly — no per-dialog code.
 
 ```lua
 local d = Mux.createDialog({
-    title  = "Apply Workspace?",
-    width  = 480,
-    height = 220,
-    -- x, y: pixel coordinates (defaults to centered in main window)
-    -- resizable = true  (default false)
+  title = "Clock — " .. Mux._targetPath(target),
+  width = 380, height = 300,
+  singleton = "myclock_" .. target.id,   -- reuse the same dialog if already open
+  contextMenu = false,
+  maxHeightPct = 0.82, minHeight = 140,  -- autofit bounds
 })
 
-local body = Geyser.Label:new({
-    name = "my_dlg_body", x = "4%", y = 14, width = "92%", height = 50,
-}, d.content)
-body:setStyleSheet(Mux.dialogCss.body)
-body:rawEcho("Apply the recommended workspace?")
-
-local btnYes = Geyser.Label:new({
-    name = "my_dlg_yes", x = "10%", y = 140, width = "35%", height = 34,
-}, d.content)
-btnYes:setStyleSheet(Mux.dialogCss.buttonPrimary)
-btnYes:rawEcho("<center>Yes, Apply</center>")
-btnYes:setClickCallback(function()
-    Mux.applyWorkspace("my-workspace")
-    d:close()
-end)
-
-local btnNo = Geyser.Label:new({
-    name = "my_dlg_no", x = "55%", y = 140, width = "35%", height = 34,
-}, d.content)
-btnNo:setStyleSheet(Mux.dialogCss.button)
-btnNo:rawEcho("<center>Skip</center>")
-btnNo:setClickCallback(function() d:close() end)
-
-d.onClose = function()
-    -- cleanup when dismissed
-end
+d:mountForm({
+  { type = "divider", label = "Clock" },
+  { label = "Format", type = "array", display = "dropdown",
+    options = { { value = "24h", label = "24-hour" }, { value = "12h", label = "12-hour" } },
+    readFn  = function() return cfg.format end,
+    writeFn = function(v) cfg.format = v end },
+  { label = "Show seconds", type = "toggle",
+    readFn  = function() return cfg.seconds end,
+    writeFn = function(v) cfg.seconds = v end },
+  { label = "Label", type = "text", allowEmpty = true,
+    readFn  = function() return cfg.label or "" end,
+    writeFn = function(v) cfg.label = v end },
+}, { prefix = d._gid .. "_clockform" })
 ```
 
-#### `createDialog` options
+Form row `type` values (with common aliases): `text` (string), `wideText` (multi-line
+block), `readOnly`, `number`/`stepper` (`min`,`max`,`step`), `toggle` (bool), `array`
+(choose one; `display = "dropdown" | "cycler" | "segmented"`), `choiceCycler`,
+`color`, `button` (`onClick`), `code` (Lua editor), and `divider` (section header;
+following rows collapse under it). Common per-row fields: `label`, `desc`, `readFn`,
+`writeFn`, `options`, `allowEmpty`, `trueLabel`/`falseLabel`, `locked`,
+`lockedReason`, `readOnly`.
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `title` | string | `"Dialog"` | Titlebar label |
-| `width` | number | `440` | Width in pixels |
-| `height` | number | `280` | Height in pixels |
-| `x` | number | centered | Left edge in pixels |
-| `y` | number | centered | Top edge in pixels |
-| `resizable` | bool | `false` | Enable corner resize handles |
-| `id` | string | auto | Custom pane id |
+Text/`wideText` rows show an **Apply** button that greys out when the field matches
+what's applied and brightens when edited. Set `allowEmpty = true` to let a field be
+cleared by blanking it and pressing Enter.
 
-#### Pre-built CSS palette
+Two more building blocks:
 
-Use these on labels inside your dialog:
+```lua
+Mux.ui.registerWidget(type, builder, opts)   -- add a custom form row type
+Mux.ui.iconCascade(parent, opts)             -- a fan-out strip/popup of icon buttons
+```
 
-| Key | Use for |
-|-----|---------|
-| `Mux.dialogCss.body` | Primary body text |
-| `Mux.dialogCss.subtext` | Secondary / caption text |
-| `Mux.dialogCss.divider` | 1 px horizontal rule (set on a height=1 label) |
-| `Mux.dialogCss.button` | Neutral action button |
-| `Mux.dialogCss.buttonPrimary` | Affirmative button (green) |
-| `Mux.dialogCss.buttonDanger` | Destructive action button (red) |
+## Conditions and actions (the rule engine)
+
+A **rule** on a subject (pane or tab) is `{ id, cond, act, actElse, enabled }`:
+
+```lua
+Mux._addRule(pane, {
+  id      = "hide-when-offline",
+  cond    = { type = "disconnected" },   -- inline spec, or { ref = "<named condition id>" }
+  act     = "mux.hideSelf",              -- action id to run when the condition is met
+  actElse = "mux.showSelf",              -- optional: run when it becomes not-met
+  enabled = true,
+})
+Mux._removeRule(pane, "hide-when-offline")
+Mux._reapplyRule(pane, rule)             -- re-arm after editing cond/enabled in place
+```
+
+Rules are independent, so a subject can react to several signals at once. Rule
+evaluation follows a value change; trigger-backed conditions (below) fire on each
+match instead.
+
+### Condition types
+
+```lua
+{ type = "always" }
+{ type = "connected" }                                   -- live socket status
+{ type = "connecting" }
+{ type = "disconnected" }
+{ type = "gmcp_exists",  path  = "char.vitals" }
+{ type = "gmcp_equals",  path  = "char.vitals.hp", value = "100" }
+{ type = "event_fired",  event = "myEvent", seconds = 5 } -- true if fired in the last N seconds
+{ type = "line_match",   pattern = "You are hungry", mode = "substring" }  -- mode: substring|exact|regex
+```
+
+`line_match` is a *pulse* condition: Muxlet manages a Mudlet trigger for it and fires
+the rule's action once per match, with the matched text/captures in the action
+context.
+
+### Actions and action ops
+
+An action is registered under an id and run with a context. The built-in reactive
+actions are `mux.showSelf` and `mux.hideSelf`; you can register your own:
+
+```lua
+Mux.registerAction("myclock.reset", {
+  name = "Reset clock", group = "user", icon = "⏱",
+  run  = function(ctx) --[[ ctx = { pane, tab, value, met } ]] end,
+})
+Mux.runAction("myclock.reset", { pane = somePane })
+```
+
+User-defined actions in the UI are built from **ops** (steps). Register new palette
+ops so users can compose them:
+
+```lua
+-- def.fields[].kind tells the editor which control to show:
+--   text | lua | content | theme | choice
+Mux.registerActionOp("notify", {
+  label = "Desktop notify", group = "Game", icon = "🔔",
+  desc  = "Show a notification.",
+  fields = { { key = "text", label = "Message", kind = "text" } },
+  run   = function(step, ctx) --[[ step.text, ctx.pane/tab/value ]] end,
+})
+```
+
+Built-in ops: `send`, `echo`, `raise`, `showPane`, `hidePane`, `zoomPane`,
+`unzoomPane`, `removePane`, `applyContent`, `createPane`, `switchTheme`, `lua`.
+
+### Named conditions and actions (persisted)
+
+These round-trip to `rules.json` and populate the editor's dropdowns:
+
+```lua
+Mux.createDeclarativeCondition({ id = "lowhp", label = "Low HP",
+  cond = { type = "gmcp_equals", path = "char.vitals.hp", value = "0" } })
+
+Mux.createDeclarativeAction({ id = "flee", label = "Flee",
+  steps = { { op = "send", command = "flee" }, { op = "echo", text = "Running!" } } })
+
+Mux.listConditions() ; Mux.listActions()      -- for building your own UI
+```
+
+## Theming
+
+Styling resolves through a four-level **token** cascade. For any token key, the value
+is the first of: **local** (set on one surface) → **global** (set everywhere) →
+**active theme** → **fallback** (the shipped defaults). Elements read their CSS
+through this cascade, so an override at any level flows through automatically.
+
+```lua
+Mux.tok(key, scope)               -- resolve a token value (scope = a pane/tab, optional)
+Mux.css(element, scope)           -- assembled stylesheet string for an element
+Mux.tokenSource(key, scope)       -- "local" | "global" | "theme" | "fallback"
+
+Mux.setGlobalToken(key, val)      -- override everywhere
+Mux.clearGlobalToken(key)
+Mux.setLocalToken(scope, key, v)  -- override on one pane/tab only
+```
+
+A theme is a sparse table of token overrides. Register one, then switch to it:
+
+```lua
+Mux.registerTheme("ocean", {
+  ["pane.bg"]              = "rgba(18,30,46,248)",
+  ["pane.border.color"]   = "rgba(120,180,255,0.35)",
+  ["titlebar.bg"]         = "rgba(24,42,64,240)",
+  ["titlebar.text.color"] = "rgba(220,235,255,0.95)",
+  ["btn.bg"]              = "rgba(40,70,104,200)",
+})
+Mux.applyTheme("ocean")
+```
+
+Anything a theme omits inherits the fallback, so the dark theme is literally an empty
+table (`Mux.registerTheme("dark", {})`) — it *is* the fallback. Look at
+`themes/light.lua` for the full set of keys you can override.
+
+Two escape hatches:
+
+```lua
+-- Save the current look (active theme overlaid with the user's global tweaks) as a
+-- new named, persistent theme — the same thing `mux theme save <name>` does:
+Mux.saveThemeFromGlobals("mylook")
+
+-- Persistent profile-wide Qt CSS that survives theme switches:
+Mux.addProfileCss("QToolTip { color: #eee; }")
+```
+
+For total control over one element, set its `cssOverride` token to a raw stylesheet
+string (at any cascade level); `Mux.css` returns it verbatim, bypassing the template:
+
+```lua
+Mux.setLocalToken(pane, "titlebar.cssOverride",
+  "background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #203, stop:1 #406);")
+```
+
+## Workspaces
+
+A workspace is a declarative snapshot. Register one and it becomes loadable by name;
+users can also save/restore their own at runtime.
+
+```lua
+Mux.registerWorkspace("combat", {
+  name  = "Combat",
+  theme = "dark",
+  paneSpace = {
+    id = "screen", zone = "screen",
+    root = {                                   -- a split node or a pane node
+      type = "split", direction = "v", ratio = 0.7,
+      a = { type = "pane", id = "main", name = "Mudlet",
+            mainConsoleHost = true, activeContent = "mux_console" },
+      b = { type = "pane", id = "side", name = "Status",
+            activeContent = "myclock" },
+    },
+  },
+  floatingPanes = {                            -- optional; restored after the tree
+    { type = "pane", id = "notes", name = "Notes",
+      floating = true, floatX = 80, floatY = 80, floatW = 320, floatH = 200 },
+  },
+})
+
+Mux.applyWorkspace("combat")
+```
+
+Node shapes:
+
+- **Split:** `{ type = "split", direction = "v"|"h", ratio = 0..1, a = <node>, b = <node> }`
+- **Pane:** `{ type = "pane", id, name, activeContent, contentState, tabs, condition,
+  actionTrue, actionFalse, … capability flags (mainConsoleHost, closeable, movable,
+  bordered, …) }`
+
+Runtime workspace API:
+
+```lua
+Mux.saveWorkspace(name)      -- snapshot the live layout under a name
+Mux.listWorkspaces()
+Mux.deleteWorkspace(name)
+```
+
+Muxlet auto-saves the live layout to `current` shortly after any structural change,
+including each pane/tab's content (via your `serialize`/`restore`).
+
+## Persistence
+
+- **Rules, named conditions, named actions** → `rules.json`.
+- **Workspaces** → the workspaces file (auto-saved `current` plus any you name).
+- **Settings** → Mudlet's per-profile setting store, under namespaces (`mux.*`).
+
+Content persists via its own `serialize`/`restore`, embedded in the workspace snapshot.
 
 ---
 
-### Connection Awareness
+# Package layout
 
-Panes and tabs can display a status overlay when the game client is disconnected or mid-handshake. The overlay shows **⊘ DISCONNECTED** or **⟳ CONNECTING…** and disappears automatically once the connection is ready.
+Muxlet is a Mudlet package. Source lives under `src/`:
 
-#### Enabling via Properties
-
-Open the Properties dialog for any pane or tab and toggle **Connection Awareness** to **On**. The overlay appears immediately if the client is currently in a non-connected state.
-
-Enabling connection awareness on a **pane** covers the entire content area, including the tab bar. Per-tab overlays are suppressed for all tabs in that pane while pane-level awareness is active. Disabling pane-level awareness restores any enrolled tab overlays automatically.
-
-Under the hood, pane-level connection awareness is a *reactive condition*: the toggle sets the pane's condition to `disconnected` with the `mux.connScreen.show` / `mux.connScreen.hide` actions, so it shows and overrides like any other rule (visible in the pane's **Rules** tab). Tab-level awareness keeps its own dedicated path.
-
-#### API
-
-```lua
--- Pane-level: covers the full content area including the tab bar.
-pane:setConnectionAware(true)
-pane:setConnectionAware(false)
-
--- Tab-level: covers one tab's content area only.
--- Has no effect when the parent pane already has connectionAware = true.
-pane:setTabConnectionAware(tabId, true)
-pane:setTabConnectionAware(tabId, false)
-
--- Drive state from game-specific logic.
--- States: "connected" | "connecting" | "disconnected"
-Mux.setConnectionState("connected")
+```
+src/
+  aliases/            the `mux` command
+  scripts/
+    scripts.json      load order (engine + UI, in dependency order)
+    globals.lua style.lua settings.lua content.lua actions.lua …
+    contentLibrary/   built-in content items (scripts.json: gmcp, buttons, capture)
+    themes/           built-in themes (scripts.json: dark, light)
 ```
 
-#### State machine
+Scripts load in the order listed in `scripts.json`; the engine (globals, style,
+content, actions, conditional, …) loads before the UI and the content library. Your
+own package's scripts run after Muxlet's, so the whole `Mux` API is available at your
+load time.
 
-Muxlet listens for Mudlet system events and advances state automatically:
-
-| Mudlet event | Argument | State transition |
-|--------------|----------|-----------------|
-| `sysConnectionEvent` | — | → `"connecting"` (⟳) |
-| `sysProtocolEnabled` | `"GMCP"` | → `"connected"` (overlay hidden) |
-| `sysDisconnectionEvent` | — | → `"disconnected"` (⊘) |
-
-`sysProtocolEnabled` fires within milliseconds of a TCP connect on any GMCP-capable MUD, so the connecting screen is effectively invisible on those games. For games that do not use GMCP, a fallback timer advances the state to `"connected"` after a configurable delay.
-
-```lua
--- Default fallback delay is 30 seconds. Change it in a muxletReady handler.
-Mux._connReadyDelay = 10
-
--- Set to 0 to disable the fallback entirely.
--- You are then responsible for calling Mux.setConnectionState("connected")
--- from your own game-ready event handler (e.g. a game-specific GMCP event).
-Mux._connReadyDelay = 0
-```
-
-#### Workspace persistence
-
-`connectionAware` is saved and restored automatically. Set it in a workspace definition:
-
-```lua
--- Pane-level connection awareness
-{ type = "pane", id = "chat", name = "Chat", connectionAware = true }
-
--- Tab-level (inside the pane's tabs array)
-{ name = "Chat", connectionAware = true }
-```
-
----
-
-### Accessing the Live Pane Graph
-
-```lua
--- Lookup by id (panes proxy is always current after workspace changes)
-local p = panes["sidebar"]        -- equivalent to Mux._panes["sidebar"]
-local s = Mux.getSplit("split_0001")
-local ps = Mux.getPaneSpace("screen")
-
--- Structural operations are methods on the pane object (there is no focus concept)
-panes["sidebar"]:split("v", 0.6)   -- "v" = left/right, "h" = top/bottom; ratio 0.0-1.0
-panes["sidebar"]:float()
-panes["sidebar"]:embed()
-panes["sidebar"]:zoom()
-panes["sidebar"]:close()
-s:swapSlots()                      -- swap the two children of a split node
-
--- Raise all floating panes above embedded ones
--- Call this after adding widgets to any floating or dialog pane.
-Mux.raiseFloatingPanes()
-```
-
-The `panes` global is a metatable proxy over `Mux._panes`. Always use `panes["id"]` rather than storing a direct reference — the proxy remains valid after `_clearWorkspace()` rebuilds the internal table.
-
----
-
-### Developer Notes
-
-- All Mux Lua identifiers use **camelCase** — `titlebarHeight`, `setName`, `applyTheme`. Match this in any code that touches Mux internals.
-- All behavioral pane flags use a **positive convention** — `closeable`, `minimizable`, `resizable`, `renamable`, `contentable`, `convertible`, `contextMenu`, `propertiesButton`, `insertable`, `titlebarHideable`. A flag set to `false` restricts that capability; omitting it (or setting `true`) leaves it enabled. `lock()` sets all mutable flags to `false`; `unlock()` restores them.
-- `MuxPane`, `MuxSplit`, and `MuxPaneSpace` are the three concrete classes. Instances are registered in `Mux._panes`, `Mux._splits`, and `Mux._paneSpaces` automatically on creation.
-- IDs (e.g. `pane_0003`) are user-facing and recycle freed numbers. Internal Geyser widget names (e.g. `mux_w_0042`) never recycle — Qt holds named widgets in memory and recycled names would alias destroyed widgets.
-- `Mux._scheduleAutoSave()` is called internally after every structural change. You do not need to call it unless you make external modifications to the pane graph.
-- `Mux._applyBorders()` recomputes all border sizes atomically from `Mux._borders`. Never call `setBorderSizes` directly — route through this function so all PaneSpace contributions are combined correctly.
-
----
-
-## License
-
-MIT
+Built-in content items live in `contentLibrary/` — a good reference for
+`registerContent`, `titlebarElements`, and content settings dialogs (`gmcp.lua`,
+`buttons.lua`, `capture.lua`).

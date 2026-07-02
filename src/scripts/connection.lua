@@ -17,9 +17,9 @@
 -- own state's overlay. No z-order tricks are involved.
 
 -- ── Global state ──────────────────────────────────────────────────────────────
--- Connection awareness no longer keeps its own registry: connection-aware panes/
--- tabs simply carry a rule (connection_state → connection screen) and are tracked
--- by the generic rule engine like any other reactive subject.
+-- Connection awareness keeps no registry of its own: connection-aware panes/tabs
+-- carry a rule (connection_state → connection screen) and are tracked by the
+-- generic rule engine like any other reactive subject.
 
 -- Determine initial state synchronously from Mudlet's connection status.
 -- Default to "connected" when isConnected() is unavailable so that profiles
@@ -188,9 +188,8 @@ function MuxSurface:_refreshTabConnScreen(tab)
 end
 
 -- ── Overlay actions (Connection group) ────────────────────────────────────────
--- Connection awareness is no longer special-cased. Instead there are plain actions
--- that show/hide a keyed state overlay on the pane/tab, paired with the built-in
--- "Connecting"/"Disconnected" conditions. Build awareness with rules, e.g.:
+-- Plain actions that show/hide a keyed state overlay on the pane/tab, paired with
+-- the built-in "Connecting"/"Disconnected" conditions. Build awareness with rules:
 --   When Disconnected → Do: Show "Disconnected" overlay, Else: Hide "Disconnected"
 --   When Connecting   → Do: Show "Connecting" overlay,   Else: Hide "Connecting"
 -- The overlay is keyed so each rule's Else only hides ITS overlay (the states are

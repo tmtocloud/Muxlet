@@ -392,9 +392,9 @@ end
 
 -- ── User-defined actions (DATA; round-trip to rules.json) ─────────────────────
 -- An action is an ordered list of STEPS, each a typed operation from the palette
--- below (send a command, show/hide/zoom this pane, set content, run Lua, …). This
--- replaces the old single-kind model; legacy kind-based specs are normalised to a
--- one-step list on the fly, so old saves keep working.
+-- below (send a command, show/hide/zoom this pane, set content, run Lua, …).
+-- Legacy single-kind specs are normalised to a one-step list on the fly, so older
+-- saves keep working.
 
 Mux._declActions = Mux._declActions or {}   -- id → spec  ({ id, label, steps })
 
