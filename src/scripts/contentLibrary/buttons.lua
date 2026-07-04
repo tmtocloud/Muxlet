@@ -118,7 +118,20 @@ end
 local function runButton(btn)
     local a = btn.action or {}
     if a.type == "action" and a.actionId then
-        Mux.runAction(a.actionId, { source = "button" })
+        local ctx = { source = "button" }
+        -- Actions flagged needsTarget (e.g. mux.toggleVisibility) act on an explicit
+        -- OTHER pane/tab rather than "self" — resolve the persisted target id (see
+        -- the "Target Pane/Tab" row below) to a live object and hand it over the
+        -- same way the rule engine does (ctxFor, conditional.lua): ctx.tab for a tab
+        -- (plus its host as ctx.pane), else just ctx.pane.
+        if a.targetId then
+            local obj, kind = Mux.findTarget and Mux.findTarget(a.targetId)
+            if obj then
+                if kind == "tab" then ctx.tab = obj; ctx.pane = obj.pane
+                else ctx.pane = obj end
+            end
+        end
+        Mux.runAction(a.actionId, ctx)
     elseif a.type == "command" and a.text and a.text ~= "" then
         expandAlias(a.text)
     end
@@ -241,6 +254,20 @@ openButtonEditor = function(target, idx)
         return opts
     end
 
+    -- Options for the "Target Pane/Tab" row, shown only for actions that declare
+    -- needsTarget (e.g. mux.toggleVisibility) — they act on an explicit other
+    -- pane/tab rather than "self". Mux.listTargets (manager.lua) enumerates every
+    -- pane and tab in the workspace, including tabs currently condition-hidden.
+    local function targetOptions()
+        local opts = { { value = "", label = "— pick a pane/tab —" } }
+        for _, t in ipairs(Mux.listTargets and Mux.listTargets() or {}) do
+            local label = string.format("[%s] %s", t.kind, t.path or t.name or t.id)
+            if t.hidden then label = label .. "  (hidden)" end
+            opts[#opts + 1] = { value = t.id, label = label }
+        end
+        return opts
+    end
+
     local function buildRows()
         local rows = {
             { label = "Label", type = "text",
@@ -259,10 +286,21 @@ openButtonEditor = function(target, idx)
         else
             rows[#rows + 1] = { label = "Action", type = "array", display = "dropdown",
                 desc = "Runs a registered action. Hover an option for what it does. Packages "
-                    .. "register actions (e.g. fed2-tools' Open Galaxy); see Mux.registerAction.",
+                    .. "register actions (e.g. Muxlet's own Toggle Pane/Tab Visibility); see Mux.registerAction.",
                 options = actionOptions(),
                 readFn = function() return btn.action.actionId or "" end,
-                writeFn = function(v) btn.action.actionId = (v ~= "" and v or nil); preview() end }
+                writeFn = function(v)
+                    btn.action.actionId = (v ~= "" and v or nil)
+                    preview(); d._beRebuild()   -- needsTarget may differ; row list can change
+                end }
+            local def = btn.action.actionId and Mux.getAction and Mux.getAction(btn.action.actionId)
+            if def and def.needsTarget then
+                rows[#rows + 1] = { label = "Target Pane/Tab", type = "array", display = "dropdown",
+                    desc = "Which pane or tab this action acts on.",
+                    options = targetOptions(),
+                    readFn = function() return btn.action.targetId or "" end,
+                    writeFn = function(v) btn.action.targetId = (v ~= "" and v or nil); preview() end }
+            end
         end
         rows[#rows + 1] = { label = "Shape", type = "segmentedControl", widgetWidth = 240,
             options = { { value = "square", label = "Square" }, { value = "rounded", label = "Rounded" }, { value = "pill", label = "Pill" }, { value = "circle", label = "Circle" } },

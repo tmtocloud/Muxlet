@@ -217,6 +217,13 @@ function MuxSurface:_findTab(tabId)
     for i, tab in ipairs(self._tabs or {}) do
         if tab.id == tabId then return tab, i end
     end
+    -- Condition-hidden tabs (see MuxTab:_conditionHide) stay resolvable by id —
+    -- e.g. so a target picker can find and re-show one — but have no index into
+    -- the visible _tabs list, so callers that need an index (drag/reorder, close)
+    -- never look up a hidden tab in practice.
+    for _, tab in ipairs(self._hiddenTabs or {}) do
+        if tab.id == tabId then return tab end
+    end
 end
 
 function MuxSurface:getTab(tabId)
@@ -717,6 +724,63 @@ function MuxSurface:removeTab(tabId)
     Mux._scheduleAutoSave()
 end
 
+-- ── Reactive condition (see conditional.lua) ──────────────────────────────────
+-- Reversible hide/show, mirroring MuxPane:_conditionShow/_conditionHide
+-- (pane.lua) but for a tab's presence in its host's tab bar. Unlike removeTab,
+-- the tab object, its rules, dialogs, and content all stay alive — only the
+-- label leaves the bar's layout and its content hides. A hidden tab moves from
+-- host._tabs into host._hiddenTabs so every layout function that walks
+-- host._tabs (_relayoutTabLabels, _restyleTabBar, _calcInsertIdx, _makeDragSpace,
+-- _syncHBoxOrder) sees only visible tabs with no changes needed.
+function MuxTab:_conditionHide()
+    if self._conditionHidden then return end
+    local host = self.pane
+    if not host then return end
+    local _, idx = host:_findTab(self.id)
+    if not idx then return end
+    if host._activeTabId == self.id then
+        local nextTab = nil
+        for _, t in ipairs(host._tabs) do
+            if t.id ~= self.id then nextTab = t; break end
+        end
+        if nextTab then
+            host:_activateTabObj(nextTab)
+        else
+            host._activeTabId = nil
+            self.content:hide()
+        end
+    end
+    host._tabBarBox:remove(self.label)
+    self.label:hide()
+    table.remove(host._tabs, idx)
+    host._hiddenTabs = host._hiddenTabs or {}
+    table.insert(host._hiddenTabs, self)
+    host:_relayoutTabLabels()
+    if host._isSubTabHost then host:_resizeSubTabBar() end
+    self._conditionHidden = true
+    Mux._scheduleAutoSave()
+end
+
+function MuxTab:_conditionShow()
+    if not self._conditionHidden then return end
+    local host = self.pane
+    if not host then return end
+    if host._hiddenTabs then
+        for i, t in ipairs(host._hiddenTabs) do
+            if t.id == self.id then table.remove(host._hiddenTabs, i); break end
+        end
+    end
+    host._tabs = host._tabs or {}
+    table.insert(host._tabs, self)
+    host._tabBarBox:add(self.label)
+    self.label:show()
+    self._conditionHidden = false
+    host:_relayoutTabLabels()
+    if host._isSubTabHost then host:_resizeSubTabBar() end
+    if not host._activeTabId then host:_activateTabObj(self) end
+    Mux._scheduleAutoSave()
+end
+
 -- Shows a confirmation popup before closing a tab.
 -- Silently ignores non-closeable tabs. Calls removeTab on confirm.
 function MuxSurface:_confirmCloseTab(tab)
@@ -1177,48 +1241,61 @@ function MuxSurface:_showTabContextMenu(tab, gx, gy)
     end
 end
 
+local function serializeOneTab(tab, hidden)
+    local tabEntry = {
+        name        = tab.name,
+        renamable   = tab.renamable   ~= false,
+        closeable   = tab.closeable   ~= false,
+        movable     = tab.movable     ~= false,
+        contentable = tab.contentable ~= false,
+        nameAlign      = tab.nameAlign,
+        _activeContent = tab._activeContent,
+        contentState   = Mux._serializeContent and Mux._serializeContent(tab) or nil,
+    }
+    -- Condition-hidden tabs (MuxTab:_conditionHide) live in host._hiddenTabs, not
+    -- host._tabs; mark them so restoreTabsOnPane can re-hide them after rebuild.
+    -- Visible tabs omit the field (matches this function's omit-when-default style).
+    if hidden                        then tabEntry.visible         = false end
+    if tab._connectionAware          then tabEntry.connectionAware  = true  end
+    if tab.tabsLocked                then tabEntry.tabsLocked       = true  end
+    if tab.propertiesButton == false then tabEntry.propertiesButton = false end
+    -- Persist any non-preset rules (the connection preset round-trips via the
+    -- connectionAware flag above, so exclude it to avoid a duplicate on load).
+    if Mux._serializeRules then
+        local rs = Mux._serializeRules(tab)
+        if rs then
+            local keep = {}
+            for _, r in ipairs(rs) do
+                local skip = type(r.id) == "string" and r.id:find("^mux:capture")
+                if not skip then keep[#keep+1] = r end
+            end
+            if #keep > 0 then tabEntry.rules = keep end
+        end
+    end
+    if tab._tokens and next(tab._tokens) then
+        local tk = {}; for k, v in pairs(tab._tokens) do tk[k] = v end
+        tabEntry.tokens = tk
+    end
+    if tab._tabsEnabled then
+        local subTabs, subActiveName = tab:_serializeTabs()
+        if subTabs then
+            tabEntry.tabs          = subTabs
+            tabEntry.activeTabName = subActiveName
+        end
+    end
+    return tabEntry
+end
+
 function MuxSurface:_serializeTabs()
-    if not self._tabsEnabled or not self._tabs or #self._tabs == 0 then return nil end
+    local hasVisible = self._tabsEnabled and self._tabs and #self._tabs > 0
+    local hasHidden  = self._tabsEnabled and self._hiddenTabs and #self._hiddenTabs > 0
+    if not (hasVisible or hasHidden) then return nil end
     local tabs = {}
-    for _, tab in ipairs(self._tabs) do
-        local tabEntry = {
-            name        = tab.name,
-            renamable   = tab.renamable   ~= false,
-            closeable   = tab.closeable   ~= false,
-            movable     = tab.movable     ~= false,
-            contentable = tab.contentable ~= false,
-            nameAlign      = tab.nameAlign,
-            _activeContent = tab._activeContent,
-            contentState   = Mux._serializeContent and Mux._serializeContent(tab) or nil,
-        }
-        if tab._connectionAware          then tabEntry.connectionAware  = true  end
-        if tab.tabsLocked                then tabEntry.tabsLocked       = true  end
-        if tab.propertiesButton == false then tabEntry.propertiesButton = false end
-        -- Persist any non-preset rules (the connection preset round-trips via the
-        -- connectionAware flag above, so exclude it to avoid a duplicate on load).
-        if Mux._serializeRules then
-            local rs = Mux._serializeRules(tab)
-            if rs then
-                local keep = {}
-                for _, r in ipairs(rs) do
-                    local skip = type(r.id) == "string" and r.id:find("^mux:capture")
-                    if not skip then keep[#keep+1] = r end
-                end
-                if #keep > 0 then tabEntry.rules = keep end
-            end
-        end
-        if tab._tokens and next(tab._tokens) then
-            local tk = {}; for k, v in pairs(tab._tokens) do tk[k] = v end
-            tabEntry.tokens = tk
-        end
-        if tab._tabsEnabled then
-            local subTabs, subActiveName = tab:_serializeTabs()
-            if subTabs then
-                tabEntry.tabs          = subTabs
-                tabEntry.activeTabName = subActiveName
-            end
-        end
-        tabs[#tabs+1] = tabEntry
+    for _, tab in ipairs(self._tabs or {}) do
+        tabs[#tabs+1] = serializeOneTab(tab, false)
+    end
+    for _, tab in ipairs(self._hiddenTabs or {}) do
+        tabs[#tabs+1] = serializeOneTab(tab, true)
     end
     local activeTabName
     if self._activeTabId then

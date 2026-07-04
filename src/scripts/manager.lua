@@ -66,18 +66,61 @@ end
 -- A hidden titlebar means you can't read an id off the screen, so the lister is
 -- the way you learn the id to target.
 
--- Finds a workspace pane or tab by id. Returns (pane) or (tab, hostPane), or nil.
-local function _findByIdForReveal(id)
+-- Recursively searches a list of tabs (and each tab's own nested sub-tabs, both
+-- visible and condition-hidden) for a given id.
+local function _findTabRecursive(tabs, id)
+    if not tabs then return nil end
+    for _, t in ipairs(tabs) do
+        if t.id == id then return t end
+        local found = _findTabRecursive(t._tabs, id) or _findTabRecursive(t._hiddenTabs, id)
+        if found then return found end
+    end
+    return nil
+end
+
+-- Finds any pane or tab (visible or condition-hidden, see MuxTab:_conditionHide
+-- in tabs.lua) in the workspace by id. Returns (obj, "pane"|"tab") or nil.
+-- Public so consumers outside this file (e.g. the Button Grid's target picker,
+-- contentLibrary/buttons.lua) can resolve a persisted target id back to a
+-- live object without duplicating the pane/tab tree walk.
+function Mux.findTarget(id)
     if not id then return nil end
     local p = Mux._panes[id]
-    if p and not p._dialog then return p end
+    if p and not p._dialog then return p, "pane" end
     for _, pane in pairs(Mux._panes) do
-        if pane._tabs and not pane._dialog then
-            for _, t in ipairs(pane._tabs) do
-                if t.id == id then return t, pane end
-            end
+        if not pane._dialog then
+            local t = _findTabRecursive(pane._tabs, id) or _findTabRecursive(pane._hiddenTabs, id)
+            if t then return t, "tab" end
         end
     end
+    return nil
+end
+
+-- Every non-dialog pane and tab (including condition-hidden tabs) as flat,
+-- pickable entries — the source list for any "choose a pane/tab" UI.
+function Mux.listTargets()
+    local out = {}
+    local function addTab(t, hidden)
+        out[#out+1] = { id = t.id, name = t.name, path = Mux._targetPath(t), kind = "tab", hidden = hidden }
+        for _, sub in ipairs(t._tabs or {})       do addTab(sub, false) end
+        for _, sub in ipairs(t._hiddenTabs or {}) do addTab(sub, true)  end
+    end
+    for _, p in pairs(Mux._panes) do
+        if not p._dialog then
+            out[#out+1] = { id = p.id, name = p.name, path = Mux._targetPath(p), kind = "pane" }
+            for _, t in ipairs(p._tabs or {})       do addTab(t, false) end
+            for _, t in ipairs(p._hiddenTabs or {}) do addTab(t, true)  end
+        end
+    end
+    table.sort(out, function(a, b) return (a.path or ""):lower() < (b.path or ""):lower() end)
+    return out
+end
+
+-- Finds a workspace pane or tab by id. Returns (pane) or (tab, hostPane), or nil.
+local function _findByIdForReveal(id)
+    local obj, kind = Mux.findTarget(id)
+    if kind == "pane" then return obj end
+    if kind == "tab"  then return obj, obj.pane end
     return nil
 end
 
@@ -113,6 +156,12 @@ function Mux.listPanespace()
                     local ttag = (#tf > 0) and ("  [" .. table.concat(tf, ", ") .. "]") or ""
                     Mux._echo(string.format("      <grey>tab<reset> <white>%s<reset>  \"%s\"%s\n",
                         t.id, t.name or "", ttag))
+                end
+            end
+            if p._hiddenTabs then
+                for _, t in ipairs(p._hiddenTabs) do
+                    Mux._echo(string.format("      <grey>tab<reset> <white>%s<reset>  \"%s\"  [<yellow>condition-hidden<reset>]\n",
+                        t.id, t.name or ""))
                 end
             end
         end
