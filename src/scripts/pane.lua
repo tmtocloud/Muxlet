@@ -1433,13 +1433,28 @@ function MuxPane:_applyTitlebarVisibility()
     -- relayout actually runs), otherwise it keeps its old height and leaves a gap.
     self._lastContentW, self._lastContentH = nil, nil
     if Mux._relayoutContent then
+        -- consoleBorders panes drive the native console via setBorderSizes, which can
+        -- itself raise sysWindowResizeEvent. Without this guard that handler's
+        -- Mux._notifyAllReposition() re-fires every pane's onReposition — including
+        -- this one's chained updateConsoleBorders — so a single toggle calls
+        -- setBorderSizes (and the console scrollback rewrap it triggers) twice.
+        local wasInResize = Mux._inResize
+        Mux._inResize = true
         Mux._relayoutContent(self)
-        tempTimer(0, function()
-            if self and self.content then
-                self._lastContentW, self._lastContentH = nil, nil
-                Mux._relayoutContent(self)
-            end
-        end)
+        Mux._inResize = wasInResize
+        -- The deferred second pass exists for content whose internal geometry needs
+        -- a tick to settle after the container resize. The native console has no
+        -- such lag — updateConsoleBorders reads self.outer's geometry directly,
+        -- already final above — so re-running it here would only add a third
+        -- redundant (and expensive) scrollback rewrap.
+        if not self.consoleBorders then
+            tempTimer(0, function()
+                if self and self.content then
+                    self._lastContentW, self._lastContentH = nil, nil
+                    Mux._relayoutContent(self)
+                end
+            end)
+        end
     end
 end
 

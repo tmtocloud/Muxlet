@@ -32,7 +32,26 @@
 MuxSplit = Mux._class()
 Mux.Split = MuxSplit
 
-local minRatio = 0.05   -- neither slot may shrink below 5 % of dynamic space
+local minRatio = 0.05   -- fallback floor when dynamic space isn't known yet (construction time)
+
+-- Pixel floor below which a pane's titlebar chrome (name + buttons) starts
+-- clipping. Mirrors the minPx MuxPane:toggleMinimize() uses to collapse a pane
+-- down to "just the titlebar" (pane.lua).
+local function minPanePx()
+    local theme = Mux.activeTheme()
+    local bi    = 2   -- borderInset (must match pane.lua constant)
+    return (theme.titlebarHeight or 22) + bi * 2
+end
+
+-- Converts minPanePx() into a ratio of the given dynamic-space size, so the
+-- drag floor sits close to "just enough for a titlebar" in absolute pixels
+-- instead of a flat percentage that's tiny on some screens and huge on others.
+-- Clamped so a split with very little dynamic space (deep nesting, small
+-- screens) still gets a sane floor rather than being crushed toward 0.
+local function minRatioFor(dynamicPx)
+    if not dynamicPx or dynamicPx <= 0 then return minRatio end
+    return Mux._clamp(minPanePx() / dynamicPx, 0.01, 0.4)
+end
 
 function MuxSplit:init(opts)
     opts = opts or {}
@@ -161,6 +180,8 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
             drag.slotAPx   = self.slotA:get_width()
             drag.dynamicPx = self.box:get_width() - handlePx
         end
+        -- Pixel-aware floor for this drag, derived from the space just measured.
+        drag.minRatio = minRatioFor(drag.dynamicPx)
         if drag.preview then
             -- Overlay the guide on the handle's current spot, then let it track
             -- the cursor. The real handle stays put and fully interactive.
@@ -181,7 +202,7 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
         -- Guard against zero dynamic space (layout not yet rendered).
         if drag.dynamicPx <= 0 then return end
         local newSlotA = Mux._clamp(drag.slotAPx + delta,
-            minRatio * drag.dynamicPx, (1 - minRatio) * drag.dynamicPx)
+            drag.minRatio * drag.dynamicPx, (1 - drag.minRatio) * drag.dynamicPx)
         if drag.preview then
             -- Move only the lightweight guide overlay — one cheap native op per
             -- frame, so it tracks the cursor live regardless of pane count.
@@ -209,7 +230,7 @@ function MuxSplit:_setupHandleDrag(theme, handlePx)
             local pos   = (self.direction == "v") and event.globalY or event.globalX
             local delta = pos - drag.startPos
             if drag.dynamicPx > 0 then
-                local ratio = Mux._clamp((drag.slotAPx + delta) / drag.dynamicPx, minRatio, 1 - minRatio)
+                local ratio = Mux._clamp((drag.slotAPx + delta) / drag.dynamicPx, drag.minRatio, 1 - drag.minRatio)
                 Mux._resizing = true
                 self:_setRatio(ratio)
                 self:_flushRatio()
