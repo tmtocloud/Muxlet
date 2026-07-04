@@ -407,19 +407,24 @@ end
 -- collapses it. Nothing is drawn on the content itself.
 local function buttonsHost(ctx) return ctx.tab or ctx.pane end
 
+-- Anchor point for the edit cascade: just under the pane's wrench label if we
+-- can find it; a sane fallback otherwise. Shared by showEditCascade (initial
+-- placement) and the resize hook (repositioning after the wrench moves).
+local function editCascadeAnchor(pane, size)
+    local wl = pane and pane._contentTbBtns and pane._contentTbBtns["buttons.settings"]
+    local label = wl and wl.label
+    if label and label.get_x then
+        return math.floor(label:get_x()), math.floor(label:get_y() + (label:get_height() or size))
+    end
+    return 40, 40
+end
+
 local function showEditCascade(ctx, host, st)
     local theme  = Mux.activeTheme() or {}
     local btnCss = theme.btnCss or "background-color: rgba(40,46,72,240); border: 1px solid rgba(100,160,255,0.35); border-radius: 3px;"
     local txt    = theme.btnTextColor or "#cfe"
     local size   = theme.btnSize or 22
-    -- Anchor under the pane's wrench label if we can find it; else a sane fallback.
-    local wl = ctx.pane and ctx.pane._contentTbBtns and ctx.pane._contentTbBtns["buttons.settings"]
-    local label = wl and wl.label
-    local sx, sy = 40, 40
-    if label and label.get_x then
-        sx = label:get_x()
-        sy = label:get_y() + (label:get_height() or size)
-    end
+    local sx, sy = editCascadeAnchor(ctx.pane, size)
     if st.editCascade then st.editCascade:destroy() end
     st.editCascade = Mux.ui.iconCascade(Geyser, {
         name = "mux_btnedit_" .. tostring(host.id),
@@ -497,6 +502,11 @@ Mux.registerContent("mux_buttons", {
                 return editingHere(ctx) and "🔧  Editing — click to finish" or "🔧  Edit buttons"
             end,
             menuGroup = "info", menuOrder = 95,
+            -- The wrench icon already reaches this directly whenever it's visible
+            -- on the titlebar, so this row must not itself force the right-click
+            -- menu open on a full-size, non-compact pane — it's a fallback for
+            -- tabs/compact/folded only (see menuFallbackOnly in pane.lua).
+            menuFallbackOnly = true,
             run = function(ctx) toggleButtonsEdit(ctx) end,
             -- On a tab there is no titlebar cascade, so Add / Grid-settings live in a
             -- right-click SUBMENU off this row, and clicking the row toggles edit mode
@@ -547,6 +557,15 @@ Mux.registerContent("mux_buttons", {
     end,
     resize = function(target)        -- framework calls this when the container resizes
         render(target)
+        -- The wrench icon moves with the titlebar on resize; keep an open edit
+        -- cascade following it instead of it staying anchored at its old spot.
+        local st = STATE_BY_TARGET[target.id]
+        if st and st.editing and st.editCascade then
+            local pane  = target.pane or target
+            local theme = Mux.activeTheme() or {}
+            local sx, sy = editCascadeAnchor(pane, theme.btnSize or 22)
+            st.editCascade:setOrigin(sx, sy)
+        end
     end,
     serialize = function(target)      -- persist this grid inside the workspace
         return configFor(target.id)

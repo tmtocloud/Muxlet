@@ -878,11 +878,32 @@ function Mux._showContentLibrary(pane)
         for _, n in ipairs(grouped[g]) do addRow(n) end
     end
 
+    -- Divider toggles call buildForm's relayout, which resizes the (dark) content
+    -- label to fit but has no way to resize the dialog itself unless we hand it
+    -- an onLayoutChange callback — mirrors MuxDialog:mountForm's own wiring, but
+    -- inline since this dialog manages its own ScrollBox/list rather than using
+    -- mountForm (needs the pane-fit height cap computed above, not fitContent's
+    -- percent-of-screen one).
     Mux.ui.buildForm(list, specs, {
         width = contentW,
         dividerHeight = LIB_DIV_H,
         prefix = pfx .. "f",
         minParentHeight = innerH,
+        onLayoutChange = function(h)
+            local newDlgH   = math.max(math.min(h + 26, 500), 140)
+            local newInnerH = newDlgH - 26
+            scroll:resize(scroll:get_width(), newInnerH)
+            if math.abs((dlg.floatH or 0) - newDlgH) >= 2 then
+                dlg.floatH = newDlgH
+                if dlg.outer then
+                    dlg.outer:resize(dlg.floatW or dlg.outer:get_width(), newDlgH)
+                    local _, sh = getMainWindowSize()
+                    local y = dlg.floatY or 0
+                    if y + newDlgH > (sh or 0) then dlg.floatY = math.max(0, (sh or 0) - newDlgH) end
+                    if dlg.outer.reposition then dlg.outer:reposition() end
+                end
+            end
+        end,
     })
 
     dlg:show()

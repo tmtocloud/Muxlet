@@ -1007,6 +1007,13 @@ end
 --   danger     bool                               (destructive styling)
 --   menuOrder  sequence within the menu; menuGroup keys separator insertion
 --   iconable   default true; false = menu-only, always in the menu, forces it
+--   menuFallbackOnly  default false; true = this element's menuText does NOT
+--              by itself force the right-click menu open (see hasMenuExtra
+--              below) — its row is only reachable once the menu is already
+--              showing for another reason (overflow, compact, or a sibling
+--              element). Use this when a titlebar icon already reaches the
+--              same action directly, so right-click doesn't offer a
+--              permanent redundant path to it.
 local TB_GROUP_RANK = { window = 1, tiling = 2, info = 1, content = 2, console = 3 }  -- right: lower = nearer edge
 
 -- Builtin pane elements. Each definition is the single source of truth for both
@@ -1279,7 +1286,7 @@ function MuxPane:_syncButtons(force)
     local hasMenuExtra = false
     if ctx.content and ctx.content.titlebarElements then
         for _, s in ipairs(ctx.content.titlebarElements) do
-            if s.menuText and not BUILTIN_TB_IDS[s.id] then
+            if s.menuText and not BUILTIN_TB_IDS[s.id] and not s.menuFallbackOnly then
                 local ok, vis = pcall(s.visible or function() return true end, ctx)
                 if ok and vis then hasMenuExtra = true; break end
             end
