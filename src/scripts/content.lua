@@ -159,6 +159,49 @@ local function _restoreParamLocks(target, def)
     end
 end
 
+-- Shared geometry math for both the one-shot post-apply fit and any later live
+-- re-fit request (Mux.requestAutoFit). initial=true recenters on screen (the
+-- existing "just opened" behavior); initial=false preserves the pane's
+-- current top-left corner and only grows/shrinks from there, clamped to stay
+-- fully on-screen, so a pane the user has already positioned doesn't jump
+-- when its content's live size changes. Also floors width/height at the same
+-- minimum corner-resize uses (pane.lua's drag-resize minW/minH = 120, 60) so
+-- a content module can't shrink the pane below the usable minimum.
+local MIN_AUTOFIT_W, MIN_AUTOFIT_H = 120, 60
+local function computeAutoFit(target, initial)
+    local theme  = Mux.activeTheme and Mux.activeTheme() or {}
+    local chrome = (theme.titlebarHeight or 22) + 4
+    local sw, sh = getMainWindowSize()
+    local newH = math.max(MIN_AUTOFIT_H + chrome,
+                    math.min(target._autoFitHeight + chrome, math.floor(sh * 0.85)))
+    local newW = math.max(MIN_AUTOFIT_W,
+                    math.min(target._autoFitWidth or target.floatW or 380, math.floor(sw * 0.85)))
+    local newX, newY
+    if initial then
+        newX = math.floor((sw - newW) / 2)
+        newY = math.floor((sh - newH) / 2)
+    else
+        newX = math.max(0, math.min(target.floatX or 0, sw - newW))
+        newY = math.max(0, math.min(target.floatY or 0, sh - newH))
+    end
+    return newX, newY, newW, newH
+end
+
+-- Apply computed geometry to the live widget and keep floatX/Y/W/H
+-- authoritative -- the same fields workspace.lua serializes/restores and that
+-- drag/corner-resize treat as the source of truth for the next gesture.
+local function applyAutoFit(target, newX, newY, newW, newH)
+    target.floatX, target.floatY = newX, newY
+    target.floatW, target.floatH = newW, newH
+    target._autoFitHeight = nil
+    target._autoFitWidth  = nil
+    target.outer:move(newX, newY)
+    target.outer:resize(newW, newH)
+    tempTimer(0, function()
+        if target.outer then target.outer:reposition() end
+    end)
+end
+
 function Mux._applyContent(target, contentName, force)
     local def = Mux._content[contentName]
     if not def then
@@ -253,27 +296,33 @@ function Mux._applyContent(target, contentName, force)
         target.outer:hide()
     end
 
-    -- Auto-fit: if apply set _autoFitHeight and the pane is floating, resize to fit content.
+    -- Auto-fit: if apply set _autoFitHeight and the pane is floating, resize to fit
+    -- content. initial=true recenters (dialogs keep exact existing behavior).
     if ok and target.floating and target._autoFitHeight and target.outer then
-        local theme  = Mux.activeTheme and Mux.activeTheme() or {}
-        local chrome = (theme.titlebarHeight or 22) + 4
-        local sw, sh = getMainWindowSize()
-        local newH   = math.min(target._autoFitHeight + chrome, math.floor(sh * 0.85))
-        local newW   = math.min(target._autoFitWidth or target.floatW or 380, math.floor(sw * 0.85))
-        local newX   = math.floor((sw - newW) / 2)
-        local newY   = math.floor((sh - newH) / 2)
-        target.floatX, target.floatY = newX, newY
-        target.floatW, target.floatH = newW, newH
-        target._autoFitHeight = nil
-        target._autoFitWidth  = nil
-        target.outer:move(newX, newY)
-        target.outer:resize(newW, newH)
-        tempTimer(0, function()
-            if target.outer then target.outer:reposition() end
-        end)
+        local newX, newY, newW, newH = computeAutoFit(target, true)
+        applyAutoFit(target, newX, newY, newW, newH)
     end
 
     Mux._scheduleAutoSave()
+end
+
+--- Request a live re-fit of a floating pane's size to its content, without
+--- recentering. Content modules call this any time after their data changes
+--- size (independent of apply()) to ask the hosting pane to grow/shrink from
+--- its CURRENT top-left corner, clamped to stay on-screen. No-op for
+--- docked/tabbed (non-floating) panes. This is the continuous counterpart to
+--- the one-shot fit _applyContent runs immediately after apply() (which still
+--- recenters -- for the initial-open case only).
+-- @param target  a pane or tab with .floating, .outer, .floatX/Y/W/H
+-- @param height  optional; if given, sets target._autoFitHeight before fitting
+-- @param width   optional; if given, sets target._autoFitWidth before fitting
+function Mux.requestAutoFit(target, height, width)
+    if not target then return end
+    if height then target._autoFitHeight = height end
+    if width  then target._autoFitWidth  = width  end
+    if not (target.floating and target._autoFitHeight and target.outer) then return end
+    local newX, newY, newW, newH = computeAutoFit(target, false)
+    applyAutoFit(target, newX, newY, newW, newH)
 end
 
 -- Remove whatever content is active on a target, returning it to its empty
