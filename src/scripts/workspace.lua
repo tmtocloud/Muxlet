@@ -292,6 +292,7 @@ local function serializeNode(obj)
     if not obj.zoomable          then node.zoomable           = false end
     if not obj.contextMenu       then node.contextMenu        = false end
     if not obj.insertable        then node.insertable         = false end
+    if not obj.autoFit           then node.autoFit            = false end
     if not obj.bordered          then node.bordered           = false end
     if obj.borderColor           then node.borderColor        = obj.borderColor end
     -- Per-pane local style-token overrides (pane.border.color etc.).
@@ -614,6 +615,7 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             zoomable         = node.zoomable ~= false,
             contextMenu      = node.contextMenu ~= false,
             insertable       = node.insertable ~= false,
+            autoFit          = node.autoFit ~= false,
             bordered         = node.bordered ~= false,
             borderColor      = node.borderColor,
             tokens           = node.tokens,

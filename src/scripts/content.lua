@@ -296,9 +296,10 @@ function Mux._applyContent(target, contentName, force)
         target.outer:hide()
     end
 
-    -- Auto-fit: if apply set _autoFitHeight and the pane is floating, resize to fit
-    -- content. initial=true recenters (dialogs keep exact existing behavior).
-    if ok and target.floating and target._autoFitHeight and target.outer then
+    -- Auto-fit: if apply set _autoFitHeight and the pane is floating (and the
+    -- pane's Auto-Fit to Content permission is on), resize to fit content.
+    -- initial=true recenters (dialogs keep exact existing behavior).
+    if ok and target.floating and target.autoFit ~= false and target._autoFitHeight and target.outer then
         local newX, newY, newW, newH = computeAutoFit(target, true)
         applyAutoFit(target, newX, newY, newW, newH)
     end
@@ -310,9 +311,12 @@ end
 --- recentering. Content modules call this any time after their data changes
 --- size (independent of apply()) to ask the hosting pane to grow/shrink from
 --- its CURRENT top-left corner, clamped to stay on-screen. No-op for
---- docked/tabbed (non-floating) panes. This is the continuous counterpart to
---- the one-shot fit _applyContent runs immediately after apply() (which still
---- recenters -- for the initial-open case only).
+--- docked/tabbed (non-floating) panes, or when the pane's Auto-Fit to Content
+--- permission (Properties > Permissions, pane.autoFit) is off -- the user can
+--- disable this per-pane the same way they can disable Movable/Resizable/etc.
+--- This is the continuous counterpart to the one-shot fit _applyContent runs
+--- immediately after apply() (which still recenters -- for the initial-open
+--- case only, and is gated by the same flag).
 -- @param target  a pane or tab with .floating, .outer, .floatX/Y/W/H
 -- @param height  optional; if given, sets target._autoFitHeight before fitting
 -- @param width   optional; if given, sets target._autoFitWidth before fitting
@@ -320,6 +324,7 @@ function Mux.requestAutoFit(target, height, width)
     if not target then return end
     if height then target._autoFitHeight = height end
     if width  then target._autoFitWidth  = width  end
+    if target.autoFit == false then return end
     if not (target.floating and target._autoFitHeight and target.outer) then return end
     local newX, newY, newW, newH = computeAutoFit(target, false)
     applyAutoFit(target, newX, newY, newW, newH)

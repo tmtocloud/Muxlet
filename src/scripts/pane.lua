@@ -203,6 +203,12 @@ function MuxPane:init(opts)
     self.consoleBorders   = opts.consoleBorders or false
     -- insertable: when false, excluded from drag-to-split insertion zone detection.
     self.insertable         = opts.insertable ~= false
+    -- autoFit: when false, Mux.requestAutoFit(target, ...) is a no-op for this
+    -- pane -- content may still compute/report a size, but the pane itself
+    -- will not resize to it (initial post-apply fit and any later live re-fit
+    -- both respect this). When true (default), floating panes whose content
+    -- opts in via _autoFitHeight/_autoFitWidth track it automatically.
+    self.autoFit            = opts.autoFit ~= false
     -- anchorable: when true, this floating pane can be anchored to other panes'
     -- edges (graphically via anchor mode, or programmatically). Independent of
     -- convertible/insertable — nothing ever auto-anchors. self.anchor holds the

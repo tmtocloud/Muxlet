@@ -50,7 +50,7 @@ local LABEL_TO_PROP = {
     ["Swappable"]   = "swappable",   ["Minimizable"]    = "minimizable",
     ["Zoomable"]    = "zoomable",    ["Splittable"]     = "splittable",
     ["Anchorable"]  = "anchorable",  ["Contentable"]    = "contentable",
-    ["Add-Pane Button"] = "addable",
+    ["Add-Pane Button"] = "addable", ["Auto-Fit to Content"] = "autoFit",
 }
 
 -- Recompute the subject's read-only locks, then mark any matching grouped rows
@@ -548,6 +548,15 @@ local function paneRows(pane)
             end
             pane:_refreshResizeHandles()
         end,
+    }
+    rows[#rows+1] = {
+        label      = "Auto-Fit to Content",
+        desc       = "When this pane is floating and its content reports a natural size (e.g. a list that grows/shrinks), automatically resize the pane to fit -- both when content is first applied and live as content changes.",
+        type       = "toggle",
+        trueLabel  = "Yes",
+        falseLabel = "No",
+        readFn     = function() return pane.autoFit end,
+        writeFn    = function(v) pane.autoFit = v end,
     }
     rows[#rows+1] = {
         label      = "Renamable",
