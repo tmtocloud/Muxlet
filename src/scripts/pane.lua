@@ -961,8 +961,7 @@ end
 -- The right-align margin-right matches namePad in _layoutTitlebarButtons so the
 -- glyphs line up with the slot reserved for the name.
 function MuxPane:_nameHtml()
-    local theme = Mux.activeTheme and Mux.activeTheme() or {}
-    local tbc   = theme.titlebarTextColor or theme.btnTextColor or "#aaaabb"
+    local tbc = Mux.tok("titlebar.text.color", self) or Mux.tok("btn.text.glyphColor", self) or "#aaaabb"
     local align = self.nameAlign or "left"
     if align == "center" then
         return string.format(
@@ -2131,14 +2130,16 @@ function MuxPane:close()
 end
 
 function MuxPane:applyTheme()
-    local theme = Mux.activeTheme()
     local btnCss = Mux.css("btn", self)
     if self.frame then self.frame:setStyleSheet(self:_baseFrameCss()) end
     if self.contentBg  then self.contentBg:setStyleSheet(Mux.css("content", self))       end
     if self.titlebar   then
         self.titlebar:setStyleSheet(Mux.css("titlebar", self))
-        local tbc = Mux.tok("titlebar.text.color", self) or Mux.tok("btn.text.glyphColor", self) or "#aaaabb"
-        self.titlebar:echo(string.format("<span style='color:%s;'>&nbsp;&nbsp;%s</span>", tbc, self.name))
+        -- Same renderer _refreshTitlebarName uses elsewhere, so a theme switch
+        -- doesn't clobber a pane's nameAlign (this used to hard-code a left-aligned
+        -- echo here, snapping center/right-aligned names back to left on every
+        -- theme change) and picks up the per-pane titlebar.text.color token.
+        self:_refreshTitlebarName()
         self:_updateInfoBtnPos()
     end
     -- Restyle + re-echo every titlebar button uniformly by iterating _btnEchos, so
