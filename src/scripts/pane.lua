@@ -55,6 +55,9 @@ function MuxPane:init(opts)
     self.tabsLocked       = opts.tabsLocked or false
     -- closeable: close button is shown and close() works.
     self.closeable        = opts.closeable ~= false
+    -- confirmClose: when false, close() skips the confirmation prompt for this
+    -- pane regardless of the mux.confirmPaneClose setting.
+    self.confirmClose     = opts.confirmClose ~= false
     -- contextMenu: when false, right-click context menu on the titlebar is suppressed.
     self.contextMenu      = opts.contextMenu ~= false
     -- propertiesButton: when false, the Properties (≡) button and context menu item are hidden.
@@ -2035,6 +2038,7 @@ function MuxPane:_confirmClose()
     if not self.closeable then return end
     if Mux._isLastEmbeddedPane(self) then return end  -- never close the only pane
     if self.overlay then self:close(); return end  -- dialogs: no confirm needed
+    if not self.confirmClose then self:close(); return end
     local doConfirm = Mux.settings.get("mux", "confirmPaneClose")
     if doConfirm == nil then doConfirm = true end
     if not doConfirm then
