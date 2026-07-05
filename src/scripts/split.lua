@@ -436,6 +436,17 @@ function MuxSplit:_flushRatio()
         if not node then return end
         if node.outer then
             if node.titlebar and node._syncButtons then node:_syncButtons() end
+            -- Properties' Width %/Height % rows (and anything else geometry-derived)
+            -- have no live-reposition hook, so a dialog left open across a handle
+            -- drag keeps showing the pre-drag value. Refresh once here, after the
+            -- ratio has actually settled, rather than per-frame during the drag.
+            if node._propertiesDialogs then
+                for _, dlg in pairs(node._propertiesDialogs) do
+                    if dlg._propsFormHandle and dlg._propsFormHandle.refreshAll then
+                        pcall(dlg._propsFormHandle.refreshAll)
+                    end
+                end
+            end
         else
             recheck(node.childA)
             recheck(node.childB)
