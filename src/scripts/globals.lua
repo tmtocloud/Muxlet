@@ -822,10 +822,31 @@ function Mux._showContentLibrary(pane)
     end
     table.sort(groupOrder)
 
+    -- If this pane's active content lives in a group, that group should open
+    -- pre-expanded (instead of everything collapsed) so the user isn't hunting
+    -- for what's already applied. It's also hoisted to the front of groupOrder —
+    -- Geyser's ScrollBox has no scrollTo/ensureVisible hook to jump the viewport
+    -- to an arbitrary row, so putting the expanded group first is the closest
+    -- approximation of "scroll to it" available.
+    local activeGroup = nil
+    if pane._activeContent then
+        local activeDef = Mux._content[pane._activeContent]
+        local g = activeDef and activeDef.group
+        if g and g ~= "" and grouped[g] then activeGroup = g end
+    end
+    if activeGroup then
+        for i, g in ipairs(groupOrder) do
+            if g == activeGroup then table.remove(groupOrder, i); break end
+        end
+        table.insert(groupOrder, 1, activeGroup)
+    end
+
     local dlgW = 460
-    -- All groups start collapsed, so the initial dialog only needs room for the
-    -- ungrouped rows plus one header row per group.
+    -- All groups start collapsed except the active-content group (if any), so the
+    -- initial dialog only needs room for the ungrouped rows, one header row per
+    -- group, plus the expanded rows of the active group.
     local visibleH = #ungrouped * LIB_ROW_H + #groupOrder * LIB_DIV_H
+        + (activeGroup and #grouped[activeGroup] * LIB_ROW_H or 0)
     local dlgH     = math.min(visibleH + 26, 500)
     local innerH   = dlgH - 26
 
@@ -874,7 +895,7 @@ function Mux._showContentLibrary(pane)
     end
     for _, n in ipairs(ungrouped) do addRow(n) end
     for _, g in ipairs(groupOrder) do
-        specs[#specs+1] = { type = "divider", label = g, _collapsed = true }
+        specs[#specs+1] = { type = "divider", label = g, _collapsed = (g ~= activeGroup) }
         for _, n in ipairs(grouped[g]) do addRow(n) end
     end
 
