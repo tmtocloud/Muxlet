@@ -1545,7 +1545,6 @@ end
 -- Placeholder shown on contentBg until real content is attached.
 -- Any user widget placed as a sibling naturally renders above it.
 function MuxSurface:_updatePlaceholder()
-    Mux._log("_updatePlaceholder called for %s, activeContent=%s", tostring(self.id), tostring(self._activeContent))
     if not self.contentBg then return end
     if self._activeContent  then return end
     if self.consoleBorders then return end

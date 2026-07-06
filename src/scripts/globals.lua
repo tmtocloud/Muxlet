@@ -214,7 +214,11 @@ end
 -- updated (e.g. inside Mux._suppressReposition), a single pass applies them.
 function Mux._applyGeometry(win)
     if not win or not win.name then return end
-    if win.type ~= "userwindow" then
+    -- ScrollBox overwrites its own get_x/get_y to a constant 0 after its first
+    -- reposition() (so its children measure relative to its internal window);
+    -- reading that here would move the scrollbox itself to (0,0). Its own
+    -- reposition() (already run by the caller) positions it correctly.
+    if win.type ~= "userwindow" and win.type ~= "scrollBox" then
         moveWindow(win.name, win:get_x(), win:get_y())
         resizeWindow(win.name, win:get_width(), win:get_height())
     end
