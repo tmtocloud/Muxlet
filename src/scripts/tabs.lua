@@ -236,6 +236,10 @@ local function ensureIndicator()
         name = "mux_tab_insert_bar", x = 0, y = 0, width = 80, height = 22, fillBg = 1,
     }, Geyser)
     Mux._tabInsertIndicator:hide()
+    -- Purely decorative, but raiseAll() on every hover puts it above the
+    -- placement overlay; without clickthrough it swallows the click meant
+    -- to land the tab.
+    if enableClickthrough then enableClickthrough(Mux._tabInsertIndicator.name) end
 end
 
 -- Mirrors ATW's makeSpace(). excludeId skips the dragged tab so the other n-1
@@ -341,6 +345,7 @@ local function ensureGhost()
         border-radius: 3px;
     ]])
     Mux._tabDragGhost:hide()
+    if enableClickthrough then enableClickthrough(Mux._tabDragGhost.name) end
 end
 
 function Mux._showTabDragGhost(tabName, gx, gy)

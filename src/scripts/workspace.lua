@@ -472,14 +472,7 @@ function Mux.listWorkspaces()
         return a < b
     end)
 
-    if Mux._running then
-        local active = Mux._activeWorkspaceName or "current"
-        Mux._echo(string.format(
-            "\n<cyan>[Muxlet]<reset> Workspaces  <dim_grey>(running — active: <cyan>%s<reset><dim_grey>)<reset>\n",
-            active))
-    else
-        Mux._echo("\n<cyan>[Muxlet]<reset> Workspaces  <dim_grey>(stopped — type <cyan>mux start<reset><dim_grey> to begin)<reset>\n")
-    end
+    Mux._echo("\n<cyan>[Muxlet]<reset> Workspaces\n")
 
     for _, n in ipairs(names) do
         local def  = Mux._workspaces[n]
@@ -490,14 +483,10 @@ function Mux.listWorkspaces()
         if n == "current" then note = "  <dim_grey>— auto-saved session state<reset>" end
         if n == "default"  then note = "  <dim_grey>— clean Muxlet baseline<reset>"   end
 
-        local active = Mux._running and (n == Mux._activeWorkspaceName)
-        local marker = active and "<green>▶ <reset>" or "  "
-        Mux._echo(string.format("  %s<white>%s<reset>%s\n", marker, n, note))
+        Mux._echo(string.format("  <white>%s<reset>%s\n", n, note))
     end
 
-    if not Mux._running then
-        Mux._echo("  <dim_grey>Use: <cyan>mux workspace load <name><reset><dim_grey> to apply<reset>\n")
-    end
+    Mux._echo("  <dim_grey>Use: <cyan>mux workspace load <name><reset><dim_grey> to apply<reset>\n")
 end
 
 function Mux.deleteWorkspace(name)
