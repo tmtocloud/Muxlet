@@ -11,6 +11,7 @@
 --   always        — always true
 --   gmcp_exists   — gmcp value at `path` is non-nil and non-empty
 --   gmcp_equals   — gmcp value at `path` equals `value`
+--   gmcp_contains — gmcp value at `path` contains any of `values` (comma list or array)
 --   event_fired   — true for `seconds` after the Mudlet event `event` fires
 --   connected     — session is connected
 --   disconnected  — session is not (fully) connected
@@ -29,22 +30,79 @@ Mux._ruleSubjects   = Mux._ruleSubjects   or {}   -- uid → subject (pane/tab) 
 Mux._condEventWired = Mux._condEventWired or {}   -- event name → true once wired
 Mux._ruleUidSeq     = Mux._ruleUidSeq     or 0
 
--- The condition types offered by the Rules UI (also the source of truth for
--- evaluation). connection_state is a VALUE condition (connected/connecting/
--- disconnected) — the engine re-fires its action on every value change, so a
--- tri-state signal is represented faithfully instead of collapsed to a boolean.
+-- The condition types offered by the Rules UI: the source of truth for evaluation
+-- AND for the editors — each entry's `fields` describes the parameter inputs the
+-- Conditions editor renders (via Mux._conditionParamRows below), so a new type
+-- needs no per-editor wiring. connection_state is a VALUE condition (connected/
+-- connecting/disconnected) — the engine re-fires its action on every value change,
+-- so a tri-state signal is represented faithfully instead of collapsed to a boolean.
+local gmcpPathField = { key = "path", label = "GMCP path",
+    desc = "dotted path under gmcp, e.g. room.info.players (a leading 'gmcp.' is fine)" }
 Mux.conditionTypes = {
     { value = "always",           label = "Always" },
-    { value = "gmcp_exists",      label = "GMCP has value" },
-    { value = "gmcp_equals",      label = "GMCP equals value" },
-    { value = "event_fired",      label = "Event fired" },
+    { value = "gmcp_exists",      label = "GMCP has value",
+      fields = { gmcpPathField } },
+    { value = "gmcp_equals",      label = "GMCP equals value",
+      fields = { gmcpPathField,
+        { key = "value", label = "Equals", desc = "value to match (text)" } } },
+    { value = "gmcp_contains",    label = "GMCP contains one of",
+      fields = { gmcpPathField,
+        { key = "values", label = "Contains any of",
+          desc = "comma-separated values; true when the GMCP value contains one (case-insensitive)" } } },
+    { value = "event_fired",      label = "Event fired",
+      fields = {
+        { key = "event", label = "Event", desc = "Mudlet event name, e.g. gmcp.char.vitals" },
+        { key = "seconds", label = "Seconds", kind = "number", default = 5,
+          desc = "stays true this long after the event fires" } } },
     { value = "connected",        label = "Connected" },
     { value = "connecting",       label = "Connecting" },
     { value = "disconnected",     label = "Disconnected" },
-    { value = "line_match",       label = "Line matches text" },
+    { value = "line_match",       label = "Line matches text",
+      fields = {
+        { key = "mode", label = "Match mode", kind = "choice", default = "substring",
+          desc = "how to match each game line",
+          options = { { value = "substring", label = "Contains text" },
+                      { value = "exact",     label = "Whole line equals" },
+                      { value = "regex",     label = "Regex (Perl)" } } },
+        { key = "pattern", label = "Pattern",
+          desc = "text/regex to look for in the game output" } } },
     -- connection_state is an internal value-condition used by the connection-screen
     -- preset (added via the Connection Awareness toggle); it isn't offered here.
 }
+
+-- Editor rows for a condition's parameters, generated from its type's `fields`
+-- spec. onWrite (optional) runs after any field is written (e.g. to re-arm a rule).
+function Mux._conditionParamRows(cond, onWrite)
+    local fields
+    for _, entry in ipairs(Mux.conditionTypes) do
+        if entry.value == cond.type then fields = entry.fields break end
+    end
+    local rows = {}
+    for _, field in ipairs(fields or {}) do
+        local row = { label = field.label, desc = field.desc, type = "text" }
+        if field.kind == "choice" then
+            row.type, row.display, row.options = "array", "dropdown", field.options
+        end
+        row.readFn = function()
+            local v = cond[field.key]
+            if v == nil then v = field.default end
+            if v == nil then return "" end
+            if type(v) == "table" then
+                local parts = {}
+                for _, item in ipairs(v) do parts[#parts+1] = tostring(item) end
+                return table.concat(parts, ", ")
+            end
+            return tostring(v)
+        end
+        row.writeFn = function(v)
+            if field.kind == "number" then v = tonumber(v) or field.default end
+            cond[field.key] = v
+            if onWrite then onWrite() end
+        end
+        rows[#rows+1] = row
+    end
+    return rows
+end
 
 -- Normalise a GMCP path: tolerate a leading "gmcp." (people copy it straight from
 -- `lua gmcp.room.info.players`), since paths are resolved relative to the gmcp table.
@@ -60,12 +118,26 @@ local function gmcpAt(path)
     return node
 end
 
+-- Candidate list for gmcp_contains: accepts an array or a comma-separated string.
+local function containsCandidates(values)
+    local out = {}
+    if type(values) == "table" then
+        for _, candidate in ipairs(values) do out[#out+1] = tostring(candidate) end
+    else
+        for candidate in tostring(values or ""):gmatch("[^,]+") do
+            candidate = candidate:match("^%s*(.-)%s*$")
+            if candidate ~= "" then out[#out+1] = candidate end
+        end
+    end
+    return out
+end
+
 -- Events a condition must listen to so its rule re-evaluates at the right moments.
 local function eventsForCond(cond)
     if not cond then return {} end
     if cond.ref and Mux._resolveCond then cond = Mux._resolveCond(cond) end
     local t = cond.type
-    if t == "gmcp_exists" or t == "gmcp_equals" then
+    if t == "gmcp_exists" or t == "gmcp_equals" or t == "gmcp_contains" then
         local p = normPath(cond.path)
         local s1, s2 = p:match("^([^%.]+)%.?([^%.]*)")
         local evts = {}
@@ -96,6 +168,29 @@ local function conditionValue(cond, subject)
         return true
     elseif t == "gmcp_equals" then
         return tostring(gmcpAt(cond.path)) == tostring(cond.value)
+    elseif t == "gmcp_contains" then
+        -- True when the value (or, for tables, any entry) contains one of the
+        -- candidates, case-insensitive. Returns the matched candidate as the value.
+        local v = gmcpAt(cond.path)
+        if v == nil then return false end
+        local candidates = containsCandidates(cond.values)
+        local function matchIn(haystack)
+            haystack = tostring(haystack):lower()
+            for _, candidate in ipairs(candidates) do
+                if haystack:find(candidate:lower(), 1, true) then return candidate end
+            end
+            return nil
+        end
+        if type(v) == "table" then
+            for _, entry in pairs(v) do
+                if type(entry) ~= "table" then
+                    local hit = matchIn(entry)
+                    if hit then return hit end
+                end
+            end
+            return false
+        end
+        return matchIn(v) or false
     elseif t == "event_fired" then
         local at = Mux._eventFiredAt[cond.event]
         return at ~= nil and (os.time() - at) <= (tonumber(cond.seconds) or 5)

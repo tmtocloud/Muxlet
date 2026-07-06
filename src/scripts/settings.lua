@@ -959,31 +959,10 @@ end
 -- plus its parameters. Named conditions populate the rule "When" dropdown. Mirrors
 -- the action editor: identity, base type + params, save/delete, and a list of saved
 -- + built-in (read-only) conditions.
+-- Parameter rows come from each condition type's `fields` spec (conditional.lua),
+-- so new types need no editor changes here.
 local function _ceParamRows(cond)
-    local rows, t = {}, cond.type
-    local function txt(key, label, desc)
-        return { label = label, type = "text", desc = desc,
-            readFn = function() return cond[key] or "" end, writeFn = function(v) cond[key] = v end }
-    end
-    if t == "gmcp_exists" or t == "gmcp_equals" then
-        rows[#rows+1] = txt("path", "GMCP path", "dotted path under gmcp, e.g. char.vitals")
-    end
-    if t == "gmcp_equals" then rows[#rows+1] = txt("value", "Equals", "value to match (text)") end
-    if t == "event_fired" then
-        rows[#rows+1] = txt("event", "Event", "Mudlet event name, e.g. gmcp.char.vitals")
-        rows[#rows+1] = { label = "Seconds", type = "text", desc = "stays true this long after firing",
-            readFn = function() return tostring(cond.seconds or 5) end,
-            writeFn = function(v) cond.seconds = tonumber(v) or 5 end }
-    end
-    if t == "line_match" then
-        rows[#rows+1] = { label = "Match mode", type = "array", display = "dropdown",
-            options = { { value = "substring", label = "Contains text" },
-                        { value = "exact", label = "Whole line equals" },
-                        { value = "regex", label = "Regex (Perl)" } },
-            readFn = function() return cond.mode or "substring" end, writeFn = function(v) cond.mode = v end }
-        rows[#rows+1] = txt("pattern", "Pattern", "text/regex to look for in the game output")
-    end
-    return rows
+    return Mux._conditionParamRows(cond)
 end
 
 local function buildConditionEditor(target, bg)
