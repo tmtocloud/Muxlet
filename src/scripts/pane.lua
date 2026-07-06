@@ -1821,7 +1821,6 @@ function MuxPane:zoom()
         if self.consoleBorders and self._paneSpace then
             self._paneSpace.outer:hide()
         end
-        tempTimer(0, function() if self.titlebar then self:_syncButtons(true) end end)
     end
     self.outer:move(0, 0)
     self.outer:resize("100%", "100%")
@@ -1830,6 +1829,10 @@ function MuxPane:zoom()
     Mux._reflowContent(self)
     Mux._inResize = wasInResize
     self._zoomed = true
+    -- Force a resync once _zoomed is actually true, regardless of whether this pane
+    -- was already floating: minimize/anchor need to hide, which the embed-only branch
+    -- above previously handled only for panes just detached from the split tree.
+    tempTimer(0, function() if self.titlebar then self:_syncButtons(true) end end)
     -- Raise above everything, then let free floaters come back on top so that
     -- popup dialogs (free floating panes) are never obscured by the zoom.
     self:raise()
