@@ -331,6 +331,10 @@ function Mux.newFloatingPane(opts)
         floatW = math.floor(w * 0.5),
         floatH = math.floor(h * 0.5),
     }, opts or {})
+    -- float() captures self.outer's current geometry as the float geometry
+    -- (right for converting an already-embedded pane) — build outer at the
+    -- requested float geometry up front so that capture is a no-op here.
+    opts.x, opts.y, opts.width, opts.height = opts.floatX, opts.floatY, opts.floatW, opts.floatH
     local p = Mux.newPane(opts)
     p:float()
     Mux.raisePane(p)
