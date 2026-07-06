@@ -1796,6 +1796,14 @@ function MuxPane:zoom()
         slotSide    = self._slotSide,
         paneSpace     = self._paneSpace,
     }
+    -- Held across the whole operation: this pane briefly becomes p.floating with
+    -- stale floatX/floatY (its old pre-zoom position, or none at all). updateConsoleBorders
+    -- below calls setBorderSizes, which raises sysWindowResizeEvent; unguarded, that
+    -- handler's Mux._notifyAllReposition() would see p.floating and yank the pane from
+    -- (0,0) back to those stale floatX/floatY coordinates while it's still sized to fill
+    -- the screen — the zoomed pane then drifts off past the screen edge.
+    local wasInResize = Mux._inResize
+    Mux._inResize = true
     if not self.floating then
         -- Detach from the split tree into the Geyser root, leaving a ghost slot
         -- behind so the layout does not collapse while we are zoomed.
@@ -1817,6 +1825,7 @@ function MuxPane:zoom()
     self.outer:reposition()
     if self.onReposition then self.onReposition(self) end
     Mux._reflowContent(self)
+    Mux._inResize = wasInResize
     self._zoomed = true
     -- Raise above everything, then let free floaters come back on top so that
     -- popup dialogs (free floating panes) are never obscured by the zoom.
@@ -1830,6 +1839,11 @@ function MuxPane:_unzoom()
     local state    = self._preZoomState
     self._zoomed   = false
     self._preZoomState = nil
+    -- See the matching guard in zoom(): updateConsoleBorders below calls setBorderSizes,
+    -- which raises sysWindowResizeEvent; held so that doesn't cascade into an extra
+    -- full-workspace reposition mid-transition.
+    local wasInResize = Mux._inResize
+    Mux._inResize = true
     if state.wasFloating then
         -- Restore to previous floating position and re-show resize/minimize UI.
         self.outer:move(state.floatX, state.floatY)
@@ -1858,6 +1872,7 @@ function MuxPane:_unzoom()
     end
     if self.onReposition then self.onReposition(self) end
     Mux._reflowContent(self)
+    Mux._inResize = wasInResize
     Mux.raiseFloatingPanes()
     Mux._log("MuxPane unzoomed: %s", self.id)
 end
