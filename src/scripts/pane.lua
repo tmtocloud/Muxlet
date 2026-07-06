@@ -1053,7 +1053,7 @@ local BUILTIN_TB = {
       run=function(c) if c.pane._split then c.pane._split:swapSlots() end end },
     { id="anchor", side="right", group="tiling", order=1, priority=50,
       get=function(p) return p.anchorBtn end,
-      visible=function(c) local p=c.pane; return p.floating and p.anchorable and (p.showAnchorElement ~= false) and true or false end,
+      visible=function(c) local p=c.pane; return p.floating and p.anchorable and (p.showAnchorElement ~= false) and not p._zoomed and true or false end,
       menuText="⚓  Anchor", menuGroup="tiling", menuOrder=40,
       submenu=function(c) if c.pane.anchor then return {
           { text="Return to anchor", fn=function() c.pane:returnToAnchor() end },
@@ -1383,6 +1383,9 @@ function MuxPane:_syncButtons(force)
             e.label:move(Mux._fromEdgePx(nameSlot + acc + btnSize), yPx)
             e.label:show()
             if e.spec.id == "anchor" and self._refreshAnchorBtn then self._refreshAnchorBtn() end
+            -- Repaint the zoom glyph here too: it only otherwise redraws on hover,
+            -- so toggling zoom programmatically left the stale icon showing.
+            if e.spec.id == "zoom" and self._zoomBtnEcho then self._zoomBtnEcho(false) end
             acc = acc + btnSize + intraGap
             pg = e.spec.group
         end
