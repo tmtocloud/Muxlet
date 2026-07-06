@@ -317,6 +317,96 @@ function Mux._versionIsNewer(v1, v2)
     return pat1 > pat2
 end
 
+-- ── Downstream version pinning ───────────────────────────────────────────────
+--
+-- Mux.ensureVersion(requiredVersion, url, callback)
+--
+-- For packages built against a specific Muxlet version. Call it from your own
+-- package's `muxletReady` handler (see README "Bootstrapping from your own
+-- package" for the full snippet, including the part that installs Muxlet at
+-- all if it's missing).
+--
+-- If the loaded Muxlet already satisfies requiredVersion, callback runs
+-- immediately. Otherwise Muxlet reinstalls itself in place from `url` (a
+-- GitHub Releases download URL) and does NOT call callback — the freshly
+-- installed Muxlet raises its own muxletReady when ready, which re-invokes
+-- your handler, which calls Mux.ensureVersion again; this time the version
+-- check passes and callback runs. (A handler Mux.ensureVersion registered
+-- itself couldn't reliably survive Muxlet uninstalling itself out from under
+-- it, so the retry has to be driven by your handler, not this function.)
+--
+-- Mux._version of "unknown" (Muxlet loaded but couldn't read its own package
+-- version) is treated as satisfied rather than risking a reinstall loop.
+function Mux.ensureVersion(requiredVersion, url, callback)
+    local installed = Mux._version
+    if installed == "unknown" or not Mux._versionIsNewer(requiredVersion, installed) then
+        local ok, err = pcall(callback)
+        if not ok then Mux._err("Mux.ensureVersion callback error: %s", tostring(err)) end
+        return
+    end
+
+    if not url then
+        Mux._err(
+            "Mux.ensureVersion: installed Muxlet %s does not satisfy required %s, and no url was given to upgrade from.",
+            tostring(installed), requiredVersion)
+        return
+    end
+
+    Mux._echo(string.format(
+        "\n<yellow>[Muxlet]<reset> Upgrading Muxlet %s -> %s...\n", tostring(installed), requiredVersion))
+
+    if table.contains(getPackages(), "Muxlet") then
+        uninstallPackage("Muxlet")
+    end
+    installPackage(url)
+end
+
+-- Mux.configureHost(opts)
+--
+-- The startup choices a hosting package (one with its own onboarding, using
+-- Mux.ensureVersion) almost always needs to make, in one call instead of
+-- several Mux.settings.set(...) lines. Every field is optional — omit one to
+-- leave that setting untouched (whatever the user last configured, or
+-- Muxlet's own default). Call once from your Mux.ensureVersion callback.
+--
+--   opts.suppressWelcome  (bool)   true = don't show Muxlet's own first-run
+--                                  welcome dialog. Set this if your package
+--                                  has its own onboarding.
+--   opts.autoStart        (bool)   true = Mux.fullStart() runs automatically
+--                                  on profile load. Leave false (or omit) if
+--                                  your own onboarding decides when to start.
+--   opts.quietStart        (bool)  true = suppress Muxlet's "Started" message
+--                                  (set this if your package prints its own).
+--   opts.checkForUpdates   (bool)  true = let Muxlet check for newer Muxlet
+--                                  releases and offer to self-upgrade. Usually
+--                                  false for a package pinning a version via
+--                                  Mux.ensureVersion, so a user accepting that
+--                                  offer doesn't drift away from what you test
+--                                  against.
+--   opts.defaultWorkspace  (string) Workspace name to use as this profile's
+--                                  baseline — applied by `mux reset`, and by
+--                                  Mux.fullStart() the first time there's no
+--                                  auto-saved 'current' session yet. Must
+--                                  already be registered (Mux.registerWorkspace).
+function Mux.configureHost(opts)
+    opts = opts or {}
+    if opts.suppressWelcome ~= nil then
+        Mux.settings.set("mux", "welcome_shown", opts.suppressWelcome)
+    end
+    if opts.autoStart ~= nil then
+        Mux.settings.set("mux", "auto_start", opts.autoStart)
+    end
+    if opts.quietStart ~= nil then
+        Mux.settings.set("mux", "quietStart", opts.quietStart)
+    end
+    if opts.checkForUpdates ~= nil then
+        Mux.settings.set("mux", "update_check_enabled", opts.checkForUpdates)
+    end
+    if opts.defaultWorkspace ~= nil then
+        Mux.settings.set("mux", "reset_workspace", opts.defaultWorkspace)
+    end
+end
+
 -- Check MPR for a newer version.
 -- silent=true suppresses "Checking..." and "Up to date" messages.
 function Mux.checkForUpdates(silent)

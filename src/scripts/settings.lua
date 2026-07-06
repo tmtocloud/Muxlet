@@ -1692,6 +1692,7 @@ tempTimer(0, function()
         Mux.applyTheme(savedTheme)
     end
     Mux.debug = Mux.settings.get("mux", "debug")
+    Mux._ready = true
     raiseEvent("muxletReady")
 end)
 

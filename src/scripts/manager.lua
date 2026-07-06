@@ -504,8 +504,16 @@ function Mux.fullStart()
     end
     Mux.debug = Mux.settings.get("mux", "debug") or false
 
-    -- Restore the most recent auto-saved session; fall back to the built-in default.
-    local wsName = Mux._workspaces["current"] and "current" or "default"
+    -- Restore the most recent auto-saved session; otherwise fall back to
+    -- reset_workspace (a hosting package's chosen baseline via
+    -- Mux.configureHost, or "default" if none was configured).
+    local wsName = "current"
+    if not Mux._workspaces[wsName] then
+        wsName = Mux.settings.get("mux", "reset_workspace") or "default"
+    end
+    if not Mux._workspaces[wsName] then
+        wsName = "default"
+    end
 
     if not Mux._workspaces[wsName] then
         Mux._echo("\n<red>[Muxlet]<reset> No workspace found. Use 'mux workspaces' to list available.\n")

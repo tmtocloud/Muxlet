@@ -178,6 +178,78 @@ A Muxlet add-on is just a Mudlet package whose scripts run after Muxlet's. Regis
 your content/actions/conditions/themes/workspaces at load time; they slot into the
 same UI users already have.
 
+## Bootstrapping from your own package
+
+Paste this at the very top of your package's init script, filling in the version
+you've built/tested against and the matching GitHub Releases download URL (see
+Muxlet's own Releases page — `.../releases/download/v<version>/Muxlet.mpackage`
+for a tagged release, or the bare version tag for a pre-release). Nothing else in
+your package should assume `Mux` exists until your callback runs.
+
+```lua
+local MUXLET_VERSION = "2.1.0"
+local MUXLET_URL = "https://github.com/<owner>/Muxlet/releases/download/v2.1.0/Muxlet.mpackage"
+
+local function onMuxletReady()
+    Mux.ensureVersion(MUXLET_VERSION, MUXLET_URL, function()
+        -- Runs once a Muxlet satisfying MUXLET_VERSION is loaded and ready.
+        -- Every field below is optional — omit any you don't have an opinion
+        -- on yet (see Mux.configureHost for the full list and defaults).
+        Mux.configureHost({
+            suppressWelcome = true,   -- you're showing your own onboarding, not Muxlet's
+            autoStart       = false,  -- your onboarding decides when Mux.fullStart() runs
+            quietStart      = true,   -- you're printing your own "started" message
+            checkForUpdates = false,  -- you pin a Muxlet version; don't offer drift from it
+            defaultWorkspace = "myPackageWorkspace",  -- must already be registered
+        })
+
+        -- The rest of your package's real startup goes here: register
+        -- content/workspaces, decide (from your own settings) whether to
+        -- call Mux.fullStart() now or wait for the user.
+    end)
+end
+
+registerAnonymousEventHandler("muxletReady", onMuxletReady)
+
+if Mux and Mux._ready then
+    onMuxletReady()                                  -- Muxlet already ready this session
+elseif not table.contains(getPackages(), "Muxlet") then
+    if not MUXLET_URL then
+        cecho("\n<red>[your-package]<reset> Cannot install Muxlet: build is missing MUXLET_URL injection.\n")
+    else
+        installPackage(MUXLET_URL)                    -- not installed at all yet
+    end
+end
+-- Otherwise Muxlet is installed but hasn't finished loading yet this
+-- session — the handler above will fire naturally once it does.
+```
+
+Why `Mux and Mux._ready` rather than just `Mux`: the `Mux` table is created at
+the very start of Muxlet's own load sequence, before the rest of its scripts
+have necessarily run — checking only `Mux` risks calling into an API that
+doesn't exist yet if your package's Lua happens to execute mid-way through
+Muxlet's. `Mux._ready` only becomes true once Muxlet's `muxletReady` event has
+actually fired. Likewise, the `elseif` uses
+`table.contains(getPackages(), "Muxlet")` rather than reinstalling
+unconditionally, since that reads the profile's package manifest — safe
+regardless of Lua load order — rather than assuming Muxlet is missing just
+because `Mux` isn't ready yet.
+
+The `MUXLET_URL` nil-check guards against a bad build (your package's build
+step failed to inject the URL) — without it, `installPackage(nil)` fails with
+a confusing native error instead of a clear one. `Mux.ensureVersion` has the
+same guard built in for the upgrade path, so it's only needed here for the
+"never installed" path, which runs before `Mux` exists.
+
+`Mux.ensureVersion` handles keeping the *version* correct (installing or
+upgrading in place) every time `onMuxletReady` fires — including the retry
+after it triggers an upgrade, since the freshly installed Muxlet raises its
+own `muxletReady`, which your handler receives again. `Mux.configureHost`
+(called from inside the callback, once the version is confirmed) bundles the
+startup choices that go along with owning your own onboarding — see its
+doc comment in `update.lua` for the full field list and what each defaults to
+if you omit it.
+
 ## Accessing the live graph
 
 ```lua

@@ -242,7 +242,6 @@ function MuxPane:init(opts)
     if self.mainConsoleHost then
         self.closeable        = false
         self.convertible      = false
-        self.contentable      = true    -- a normal content host: console is content, swappable/testable
         self.addable          = true
     end
 

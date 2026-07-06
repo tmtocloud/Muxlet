@@ -10,6 +10,11 @@ Mux._splits   = Mux._splits   or {}   -- id → MuxSplit instance
 Mux._paneSpaces = Mux._paneSpaces or {}   -- id → MuxPaneSpace instance
 Mux._running             = Mux._running             or false
 Mux._activeWorkspaceName = Mux._activeWorkspaceName or nil
+-- True once muxletReady has fired this session. A downstream package's own
+-- bootstrap checks this (not just whether the Mux table exists) before
+-- calling straight into Mux.* — the table is created by the line above
+-- before the rest of Muxlet's scripts.json load order has run.
+Mux._ready               = Mux._ready               or false
 
 -- panes: a global proxy that always delegates reads/writes to Mux._panes.
 -- Users reference panes["pane_0001"].content from scripts and workspace files.

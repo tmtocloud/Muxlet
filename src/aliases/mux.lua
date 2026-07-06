@@ -37,6 +37,8 @@ if sub == "help" then
   mux workspace load <name>    — restore a saved workspace
   mux workspace list           — list all registered workspaces
   mux workspace delete <name>  — remove a saved workspace
+  mux workspace export <name>  — write a workspace as ready-to-paste Lua source
+                                 (for baking a saved layout into a package)
   mux workspaces               — alias for: mux workspace list
 
   <white>Themes<reset>
@@ -114,8 +116,10 @@ elseif sub == "workspace" then
         Mux.listWorkspaces()
     elseif action == "delete" or action == "rm" then
         Mux.deleteWorkspace(words[3])
+    elseif action == "export" then
+        Mux.exportWorkspace(words[3])
     else
-        Mux._echo("\n<red>[Muxlet]<reset> Usage: mux workspace save|load|list|delete <name>\n")
+        Mux._echo("\n<red>[Muxlet]<reset> Usage: mux workspace save|load|list|delete|export <name>\n")
     end
 
 elseif sub == "workspaces" then
