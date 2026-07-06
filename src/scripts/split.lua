@@ -59,7 +59,17 @@ function MuxSplit:init(opts)
 
     self.id        = opts.id or Mux._newId("split")
     self.direction = opts.direction or "v"   -- "v" = top/bottom, "h" = left/right
-    self.ratio     = Mux._clamp(opts.ratio or 0.5, minRatio, 1 - minRatio)
+    -- An explicitly supplied ratio (e.g. restored from a saved workspace) is
+    -- trusted as-is — it was already valid pixel-wise when captured, and the
+    -- true pixel-aware floor (minRatioFor) can't be computed yet since dynamic
+    -- space isn't known until layout resolves. Only the untouched 50/50 default
+    -- gets the flat construction-time floor; live dragging enforces its own
+    -- pixel-aware floor once real geometry is measured.
+    if opts.ratio ~= nil then
+        self.ratio = Mux._clamp(opts.ratio, 0.01, 0.99)
+    else
+        self.ratio = Mux._clamp(0.5, minRatio, 1 - minRatio)
+    end
 
     -- Children: each is a MuxPane or another MuxSplit, or nil (empty slot)
     self.childA = nil
