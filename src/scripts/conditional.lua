@@ -480,30 +480,14 @@ local function ruleSubject(ctx) return ctx and (ctx.tab or ctx.pane) end
 
 if Mux.registerAction then
     Mux.registerAction("mux.showSelf", {
-        name = "Show pane", group = "muxlet", icon = "👁",
+        name = "Show", group = "muxlet", icon = "👁",
         desc = "Show the pane or tab. The default action when a condition becomes true.",
         run  = function(ctx) local s = ruleSubject(ctx); if s and s._conditionShow then s:_conditionShow() end end,
     })
     Mux.registerAction("mux.hideSelf", {
-        name = "Hide pane", group = "muxlet", icon = "🚫",
+        name = "Hide", group = "muxlet", icon = "🚫",
         desc = "Hide the pane or tab. The default action when a condition becomes false.",
         run  = function(ctx) local s = ruleSubject(ctx); if s and s._conditionHide then s:_conditionHide() end end,
-    })
-    -- Generic, button-friendly toggle for an EXPLICIT other pane/tab (as opposed to
-    -- mux.showSelf/hideSelf above, which always act on the rule's own subject). Any
-    -- consumer that resolves a target (e.g. the Button Grid's target picker,
-    -- buttons.lua) passes it as ctx.pane or ctx.tab before calling this.
-    -- needsTarget marks it for such pickers so they know to prompt for a target.
-    Mux.registerAction("mux.toggleVisibility", {
-        name = "Toggle Pane/Tab Visibility", group = "Muxlet", icon = "👁",
-        desc = "Show a hidden pane/tab, or hide a visible one. Needs a target pane/tab "
-            .. "(pick one wherever this action is bound).",
-        needsTarget = true,
-        run = function(ctx)
-            local s = ruleSubject(ctx)
-            if not (s and s._conditionShow and s._conditionHide) then return end
-            if s._conditionHidden then s:_conditionShow() else s:_conditionHide() end
-        end,
     })
 end
 

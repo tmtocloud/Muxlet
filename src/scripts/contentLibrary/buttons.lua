@@ -119,8 +119,8 @@ local function runButton(btn)
     local a = btn.action or {}
     if a.type == "action" and a.actionId then
         local ctx = { source = "button" }
-        -- Actions flagged needsTarget (e.g. mux.toggleVisibility) act on an explicit
-        -- OTHER pane/tab rather than "self" — resolve the persisted target id (see
+        -- Actions flagged needsTarget act on an explicit OTHER pane/tab rather
+        -- than "self" — resolve the persisted target id (see
         -- the "Target Pane/Tab" row below) to a live object and hand it over the
         -- same way the rule engine does (ctxFor, conditional.lua): ctx.tab for a tab
         -- (plus its host as ctx.pane), else just ctx.pane.
@@ -255,7 +255,7 @@ openButtonEditor = function(target, idx)
     end
 
     -- Options for the "Target Pane/Tab" row, shown only for actions that declare
-    -- needsTarget (e.g. mux.toggleVisibility) — they act on an explicit other
+    -- needsTarget — they act on an explicit other
     -- pane/tab rather than "self". Mux.listTargets (manager.lua) enumerates every
     -- pane and tab in the workspace, including tabs currently condition-hidden.
     local function targetOptions()
@@ -286,7 +286,7 @@ openButtonEditor = function(target, idx)
         else
             rows[#rows + 1] = { label = "Action", type = "array", display = "dropdown",
                 desc = "Runs a registered action. Hover an option for what it does. Packages "
-                    .. "register actions (e.g. Muxlet's own Toggle Pane/Tab Visibility); see Mux.registerAction.",
+                    .. "register actions via Mux.registerAction.",
                 options = actionOptions(),
                 readFn = function() return btn.action.actionId or "" end,
                 writeFn = function(v)

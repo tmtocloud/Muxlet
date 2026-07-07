@@ -1532,6 +1532,13 @@ Mux.settings.register("mux", "live_resize_max_panes", {
     max         = 99,
 })
 
+Mux.settings.register("mux", "resize_live_budget_ms", {
+    description = "While dragging a resize, content whose relayout took longer than this many milliseconds is redrawn once at the end of the drag instead of every frame. Lower = more coalescing; raise to force more content to redraw live",
+    default     = 8,
+    min         = 1,
+    max         = 200,
+})
+
 Mux.settings.register("mux", "auto_start", {
     description = "Automatically run mux start on profile load using the configured workspace",
     default     = false,
@@ -1635,6 +1642,7 @@ Mux.settings._order["mux"] = {
     "confirmPaneClose",
     "confirmTabClose",
     "live_resize_max_panes",
+    "resize_live_budget_ms",
     "reset_workspace",
     "update_check_enabled",
     "update_check_remind_skip",

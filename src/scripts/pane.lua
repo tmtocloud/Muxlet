@@ -277,8 +277,10 @@ function MuxPane:init(opts)
         self.contentBg:hide()
     end
 
-    self:_buildTitlebar(theme)
-    self:_buildCornerHandles(theme)
+    -- Chrome builds lazily: titlebar + buttons only when the titlebar is (or
+    -- becomes) visible, corner handles on first float. Panes restored with a
+    -- hidden titlebar (most workspace tiles) skip ~10 Label creations each.
+    if self.titlebarVisible then self:_buildTitlebar(theme) end
     self:_updatePlaceholder()
 
     -- Chain _syncButtons into every pane's onReposition so button visibility
@@ -1407,6 +1409,13 @@ end
 
 function MuxPane:_applyTitlebarVisibility()
     local theme = Mux.activeTheme()
+    -- Lazy chrome: a pane built with a hidden titlebar has no titlebar widgets
+    -- yet. Build them on the first transition to visible; _buildTitlebar ends
+    -- by re-invoking this function with self.titlebar now set.
+    if self.titlebarVisible and not self.titlebar then
+        self:_buildTitlebar(theme)
+        return
+    end
     local bi    = self.bordered and borderInset or 0
     if self.titlebarVisible then
         local h = theme.titlebarHeight
@@ -1425,18 +1434,21 @@ function MuxPane:_applyTitlebarVisibility()
         self.header:reposition()
         self.content:reposition()
         if self._syncConnScreenGeometry then self:_syncConnScreenGeometry() end
-        self.titlebar:hide()
-        if self.infoBtn    then self.infoBtn:hide()    end
-        self.closeBtn:hide()
-        self.minBtn:hide()
-        self.zoomBtn:hide()
-        if self.splitVBtn  then self.splitVBtn:hide()  end
-        if self.splitHBtn  then self.splitHBtn:hide()  end
-        if self.swapBtn    then self.swapBtn:hide()    end
-        if self.contentBtn then self.contentBtn:hide() end
-        if self._contentTbBtns then for _, b in pairs(self._contentTbBtns) do b.label:hide() end end
-        if self.anchorBtn  then self.anchorBtn:hide()  end
-        if self.addPaneBtn then self.addPaneBtn:hide() end
+        -- Titlebar widgets exist only once the titlebar has been visible (lazy build).
+        if self.titlebar then
+            self.titlebar:hide()
+            if self.infoBtn    then self.infoBtn:hide()    end
+            self.closeBtn:hide()
+            self.minBtn:hide()
+            self.zoomBtn:hide()
+            if self.splitVBtn  then self.splitVBtn:hide()  end
+            if self.splitHBtn  then self.splitHBtn:hide()  end
+            if self.swapBtn    then self.swapBtn:hide()    end
+            if self.contentBtn then self.contentBtn:hide() end
+            if self._contentTbBtns then for _, b in pairs(self._contentTbBtns) do b.label:hide() end end
+            if self.anchorBtn  then self.anchorBtn:hide()  end
+            if self.addPaneBtn then self.addPaneBtn:hide() end
+        end
     end
     -- The content container was just resized to span the reclaimed titlebar space;
     -- force the inner content widget to re-fit (clearing the size cache so the
@@ -2232,6 +2244,7 @@ end
 --   dx = -1 → move left edge    dx = 1 → move right edge   dx = 0 → no x change
 --   dy = -1 → move top edge     dy = 1 → move bottom edge  dy = 0 → no y change
 function MuxPane:_buildCornerHandles(theme)
+    if self._cornerHandles then return end   -- lazy-built once, on first show
     if not self.resizable then return end
     local ch       = (theme.cornerHandleSize or 10)
     local css      = theme.cornerHandleCss      or ""
@@ -2289,6 +2302,9 @@ function MuxPane:_buildCornerHandles(theme)
         lbl:setClickCallback(function(event)
             if event.button ~= "LeftButton" then return end
             drag.active = true
+            -- Mark the drag so per-frame work (button sync, heavy content
+            -- resize hooks) coalesces the same way a split-handle drag does.
+            Mux._resizing = true
             drag.startX = event.globalX
             drag.startY = event.globalY
             drag.paneX  = pane.floatX
@@ -2342,7 +2358,11 @@ function MuxPane:_buildCornerHandles(theme)
         lbl:setReleaseCallback(function(event)
             if event.button ~= "LeftButton" then return end
             drag.active = false
+            Mux._resizing = false
             lbl:setStyleSheet(css)
+            -- Per-frame syncs were skipped during the drag; settle once at the
+            -- final size. (Heavy content settles via its own trailing timer.)
+            if pane.titlebar then pane:_syncButtons(true) end
             if pane._atAnchor and Mux._recaptureAlong then Mux._recaptureAlong(pane) end
             Mux._scheduleAutoSave()
         end)
@@ -2352,7 +2372,10 @@ function MuxPane:_buildCornerHandles(theme)
 end
 
 function MuxPane:_showCornerHandles()
-    if not self._cornerHandles then return end
+    -- Lazy chrome: handles are only needed while floating, so they are built
+    -- on the first show rather than at pane construction.
+    if not self._cornerHandles then self:_buildCornerHandles(Mux.activeTheme()) end
+    if not self._cornerHandles then return end   -- non-resizable pane
     for _, lbl in ipairs(self._cornerHandles) do lbl:show() end
 end
 

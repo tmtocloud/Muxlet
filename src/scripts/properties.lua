@@ -109,7 +109,7 @@ local function _buildRuleEditorRows(subject)
     for _, a in ipairs(Mux.listActions and Mux.listActions() or {}) do
         if not a.hidden then actOpts[#actOpts+1] = { value = a.id, label = a.name or a.id } end
     end
-    if #actOpts == 0 then actOpts[1] = { value = "mux.showSelf", label = "Show pane" } end
+    if #actOpts == 0 then actOpts[1] = { value = "mux.showSelf", label = "Show" } end
     local elseOpts = { { value = "", label = "(nothing)" } }
     for _, o in ipairs(actOpts) do elseOpts[#elseOpts+1] = o end
 
@@ -494,7 +494,8 @@ local function paneRows(pane)
         writeFn    = function(v)
             pane.resizable = v
             if v then
-                if pane._cornerHandles and pane.floating then pane:_showCornerHandles() end
+                -- _showCornerHandles lazy-builds the handles if needed.
+                if pane.floating then pane:_showCornerHandles() end
             else
                 pane:_hideCornerHandles()
             end

@@ -591,20 +591,25 @@ end
 -- Wire an Apply button so it visually reflects whether the box text is in effect:
 -- greyed ("done") when the current text equals the applied value, accented
 -- ("active") when it's been edited but not yet applied. Geyser command lines expose
--- no text-changed event, so a light self-terminating poll keeps the state in sync;
--- it stops as soon as the widget is gone (any call on a dead widget errors). Returns
--- a repaint fn to call right after an explicit commit for an instant update.
-local function wireApplyState(input, aBtn, getApplied, css)
+-- no text-changed event, so a light poll keeps the state in sync; it stops when the
+-- widget is gone (any call on a dead widget errors) OR when isLive() goes false —
+-- form rebuilds reuse widget names, so a stale loop's widget calls keep succeeding
+-- while its closure reads an outdated applied value, and the two loops would fight
+-- over the button (visible flicker). Returns a repaint fn to call right after an
+-- explicit commit for an instant update.
+local function wireApplyState(input, aBtn, getApplied, css, isLive)
     if not aBtn then return function() end end
     local activeCss = css.applyBtnActive or css.applyBtn
     local doneCss   = css.applyBtnDone   or css.applyBtn
     local brightCol = css.widgetFg or "#dfe6ff"
     local mutedCol  = css.descText or "rgba(120,130,170,0.85)"
+    local lastDirty
     local function paint()
         local ok, cur = pcall(function() return input:getText() end)
         if not ok then return false end                     -- widget gone → stop
         local applied = tostring(getApplied() or "")
         local dirty   = (tostring(cur or "") ~= applied)
+        if dirty == lastDirty then return true end          -- unchanged → no repaint
         local ok2 = pcall(function()
             aBtn:setStyleSheet(dirty and activeCss or doneCss)
             -- Re-echo the label too: the inline colour overrides the stylesheet, so the
@@ -613,11 +618,15 @@ local function wireApplyState(input, aBtn, getApplied, css)
                 "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
                 dirty and brightCol or mutedCol))
         end)
+        if ok2 then lastDirty = dirty end
         return ok2
     end
     paint()
     if tempTimer then
-        local function loop() if paint() then tempTimer(0.3, loop) end end
+        local function loop()
+            if isLive and not isLive() then return end      -- form rebuilt → stop
+            if paint() then tempTimer(0.3, loop) end
+        end
         tempTimer(0.3, loop)
     end
     return paint
@@ -661,7 +670,7 @@ local function w_wideText(row, c)
             "<center><span style='color:%s;font-size:9px;font-weight:bold;'>Apply</span></center>",
             css.widgetFg))
         aBtn:setClickCallback(commit)
-        applyPaint = wireApplyState(input, aBtn, function() return spec.readFn() end, css)
+        applyPaint = wireApplyState(input, aBtn, function() return spec.readFn() end, css, c.formLive)
     end
 
     if c.showReset and not c.spec._noReset then
@@ -919,7 +928,7 @@ local function w_text(row, c)
     end
     input:setAction(commit)
     aBtn:setClickCallback(commit)
-    applyPaint = wireApplyState(input, aBtn, function() return spec.readFn() end, css)
+    applyPaint = wireApplyState(input, aBtn, function() return spec.readFn() end, css, c.formLive)
     return { commit = commit, refresh = function() input:print(tostring(spec.readFn() or "")); applyPaint() end }
 end
 
@@ -1039,6 +1048,14 @@ function Mux.ui.buildForm(parent, specs, opts)
 
     local formW    = opts.width        or (parent:get_width() > 50 and parent:get_width() or 400)
     local prefix   = opts.prefix       or "muxui"
+
+    -- Form generation, per prefix: rebuilds reuse the same widget names, so widget
+    -- liveness alone can't tell a row's background poll it's been superseded. Each
+    -- build bumps the counter; polls from older builds see formLive() false and stop.
+    Mux.ui._formGen = Mux.ui._formGen or {}
+    Mux.ui._formGen[prefix] = (Mux.ui._formGen[prefix] or 0) + 1
+    local thisGen = Mux.ui._formGen[prefix]
+    local function formLive() return Mux.ui._formGen[prefix] == thisGen end
     local rowH     = opts.rowHeight    or 42
     local textH    = opts.textRowHeight or 64
     local colorH   = opts.colorRowHeight or 64
@@ -1239,6 +1256,7 @@ function Mux.ui.buildForm(parent, specs, opts)
             value = spec.readFn and spec.readFn() or nil,
             onChange = spec.writeFn or function() end,
             -- helpers
+            formLive = formLive,
             closeDropdown = closeDropdown,
             getScreenPos = getContentScreenPos,
             getActive = function() return activeDropdown end,

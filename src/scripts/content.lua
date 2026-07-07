@@ -378,6 +378,15 @@ function Mux._revealContent(target)
     if def and type(def.onReveal) == "function" then pcall(def.onReveal, target) end
 end
 
+-- Run a content's resize() hook and record how long it took. The measured cost
+-- drives the adaptive debounce below: cheap content keeps resizing live during
+-- drags, expensive content (full re-renders, widget rebuilds) is coalesced.
+local function runResizeHook(target, def)
+    local t0 = os.clock()
+    pcall(def.resize, target)
+    target._resizeCostMs = (os.clock() - t0) * 1000
+end
+
 function Mux._relayoutContent(target)
     if not target then return end
 
@@ -397,7 +406,32 @@ function Mux._relayoutContent(target)
     local w, h = C:get_width(), C:get_height()
     if target._lastContentW == w and target._lastContentH == h then return end
     target._lastContentW, target._lastContentH = w, h
-    pcall(def.resize, target)
+
+    -- Adaptive per-frame debounce: during an active drag (Mux._resizing), a
+    -- resize hook whose last run exceeded the live budget is deferred to a
+    -- trailing timer instead of running every frame. The timer re-arms on each
+    -- frame, so it fires once, ~0.15s after the last size change — i.e. with
+    -- the final geometry. Content under the budget keeps resizing live.
+    if Mux._resizing then
+        local budget = (Mux.settings and Mux.settings.get
+            and Mux.settings.get("mux", "resize_live_budget_ms")) or 8
+        if (target._resizeCostMs or 0) > budget then
+            if target._resizeDebounce then killTimer(target._resizeDebounce) end
+            target._resizeDebounce = tempTimer(0.15, function()
+                target._resizeDebounce = nil
+                local d = target._activeContent and Mux._content[target._activeContent]
+                if not (d and type(d.resize) == "function" and target.content) then return end
+                if target.content.get_width then
+                    target._lastContentW = target.content:get_width()
+                    target._lastContentH = target.content:get_height()
+                end
+                runResizeHook(target, d)
+            end)
+            return
+        end
+    end
+
+    runResizeHook(target, def)
 end
 
 -- Systemic conversion reflow.  Called whenever a pane/tab changes its embedding
