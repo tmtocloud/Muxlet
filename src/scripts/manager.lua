@@ -68,8 +68,12 @@ end
 --   Mux.revealUI("all")   — restore across the whole workspace (explicit)
 -- A hidden titlebar means you can't read an id off the screen, so the lister is
 -- the way you learn the id to target. Revealing a rule-hidden target also sets
--- its rules inactive (see _unstrandSubject below) so the condition doesn't just
--- re-hide it the instant it's shown, leaving it reachable for maintenance.
+-- its own rules inactive (see _unstrandSubject below) so the condition doesn't
+-- just re-hide it the instant it's shown, leaving it reachable for maintenance.
+-- Scoped strictly to the id you named — revealing a tab restores its host
+-- pane's chrome (titlebar/tab bar) so the tab is reachable, but does not touch
+-- the host pane's own rules; only the exact target passed to `mux reveal`
+-- gets unstranded.
 
 -- Recursively searches a list of tabs (and each tab's own nested sub-tabs, both
 -- visible and condition-hidden) for a given id.
@@ -146,7 +150,11 @@ local function _unstrandSubject(subject)
     if subject._conditionShow then subject:_conditionShow() end
 end
 
--- Restores titlebar + Properties affordance on a single pane.
+-- Restores titlebar + Properties affordance on a single pane. Chrome only —
+-- does NOT unstrand the pane's own rules. This is also called on a tab's host
+-- pane just to make its titlebar/tab bar reachable, and that incidental touch
+-- shouldn't cascade into deactivating rules the caller never asked to touch;
+-- callers that mean to target the pane itself call _unstrandSubject explicitly.
 local function _revealPane(p)
     p.propertiesButton = true
     if p.titlebarHideable and not p.titlebarVisible then
@@ -154,7 +162,6 @@ local function _revealPane(p)
     end
     if p._applyTitlebarVisibility then p:_applyTitlebarVisibility() end
     if Mux._revealContent then Mux._revealContent(p) end
-    _unstrandSubject(p)
 end
 
 function Mux.listPanespace()
@@ -207,6 +214,7 @@ function Mux.revealUI(id)
         for _, p in pairs(Mux._panes) do
             if not p._dialog then
                 _revealPane(p)
+                _unstrandSubject(p)
                 if p._tabs then
                     for _, t in ipairs(p._tabs) do
                         t.propertiesButton = true
@@ -254,6 +262,7 @@ function Mux.revealUI(id)
             "\n<green>[Muxlet]<reset> Revealed controls on tab '<white>%s<reset>'.\n", id))
     else
         _revealPane(target)
+        _unstrandSubject(target)
         Mux.raiseFloatingPanes()
         Mux._echo(string.format(
             "\n<green>[Muxlet]<reset> Revealed controls on pane '<white>%s<reset>'%s.\n",

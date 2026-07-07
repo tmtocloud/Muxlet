@@ -981,6 +981,13 @@ Mux.registerContent("mux_properties", {
                 -- Hide this tab's empty-content placeholder (its text/background
                 -- would otherwise show through behind the form).
                 if tab.contentBg then tab.contentBg:echo(""); tab.contentBg:hide() end
+                -- Build while shown: only the first tab is active (addTab auto-activates
+                -- it), so every later tab's .content is still hidden here. Geyser's
+                -- auto_hidden bookkeeping can leave widgets built under a hidden ancestor
+                -- permanently blank even after the container is later shown (same class of
+                -- bug noted in tabs.lua's _receiveTab) — showing before building sidesteps
+                -- it. The pass below re-hides every non-active tab once all forms exist.
+                tab.content:show()
                 local tcw = tab.content:get_width(); if tcw < 50 then tcw = cw end
                 -- Scroll the group's form when it's taller than the (capped) tab body.
                 local sb = Geyser.ScrollBox:new({
