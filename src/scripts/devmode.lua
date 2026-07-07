@@ -43,7 +43,7 @@ local function muxDevmodeCheck()
         -- First observation: record stamp but don't reload. Prevents a spurious
         -- reload on every package restart when the stamp file already exists.
         Mux._devLastStamp = stamp
-        Mux._log("[mux] Dev mode active — monitoring for new local builds")
+        Mux._log("[mux] Dev mode active (stamp %s) — monitoring for new local builds", stamp)
         tempTimer(30, muxDevmodeCheck)
         return
     end
@@ -58,10 +58,10 @@ local function muxDevmodeCheck()
     if freshFile then
         freshFile:close()
         os.remove(freshPath)
-        Mux._echo("\n<yellow>[Muxlet]<reset> New local build detected (fresh) — reloading...\n")
+        Mux._echo(string.format("\n<yellow>[Muxlet]<reset> New local build detected (fresh, stamp %s) — reloading...\n", stamp))
         Mux.devmodeReload(true)
     else
-        Mux._echo("\n<yellow>[Muxlet]<reset> New local build detected — reloading...\n")
+        Mux._echo(string.format("\n<yellow>[Muxlet]<reset> New local build detected (stamp %s) — reloading...\n", stamp))
         local pkgPath = getMudletHomeDir() .. "/Muxlet.mpackage"
         muxDevmodeDoReload(pkgPath)
     end
@@ -89,6 +89,12 @@ function Mux.devmodeReload(fresh)
     muxDevmodeDoReload(pkgPath)
 end
 
+-- Anything past a bare "major.minor.patch" (e.g. the "-a3f91cd" muddlet
+-- appends for untagged local builds) marks this as a pre-release build.
+local function isPreRelease()
+    return Mux._version:match("^%d[%d%.]*$") == nil
+end
+
 -- Only start the polling timer if a stamp file already exists in the profile
 -- directory.  Production installs never have this file, so the timer never
 -- runs for end-users.  Developers who have run build.ps1 at least once will
@@ -97,7 +103,13 @@ local function muxDevmodeStart()
     local stampPath = getMudletHomeDir() .. "/Muxlet-rebuild.stamp"
     local probe = io.open(stampPath, "r")
     if not probe then return end
+    local stamp = probe:read("*a"):match("^%s*(.-)%s*$")
     probe:close()
+
+    if isPreRelease() then
+        Mux._echo(string.format("\n<yellow>[Muxlet]<reset> Dev mode active (v%s, stamp %s)\n", Mux._version, stamp))
+    end
+
     tempTimer(30, muxDevmodeCheck)
 end
 

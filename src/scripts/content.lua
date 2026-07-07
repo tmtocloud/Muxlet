@@ -296,6 +296,18 @@ function Mux._applyContent(target, contentName, force)
         target.outer:hide()
     end
 
+    -- Geyser's plain :add always shows a freshly created widget regardless of
+    -- its parent's hidden state, so a slot rebuilt while its target is hidden
+    -- (an inactive settings/properties tab -- see MuxSurface:_activateTabObj --
+    -- or any other pane/tab not currently shown) would otherwise leak visible.
+    -- realContent already carries the target's real hidden/auto_hidden state
+    -- (toggled explicitly by the tab/pane show-hide code, never by this
+    -- function), so re-hide the slot to match rather than trusting the apply
+    -- function's widgets to inherit it correctly.
+    if slot and (realContent.hidden or realContent.auto_hidden) then
+        slot:hide(true)
+    end
+
     -- Auto-fit: if apply set _autoFitHeight and the pane is floating (and the
     -- pane's Auto-Fit to Content permission is on), resize to fit content.
     -- initial=true recenters (dialogs keep exact existing behavior).

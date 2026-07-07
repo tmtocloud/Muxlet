@@ -169,19 +169,19 @@ function MuxPane:init(opts)
     }, self.outer)
 
     local contentY = inset + hdrH
-    -- useAdd2 propagates down the whole content subtree forever (Geyser.add2
-    -- rewrites each child's own :add to add2 too, see GeyserGeyser.lua), so any
-    -- widget a content module creates -- however deep, however long after this
-    -- pane was condition-hidden -- gets hidden on arrival instead of defaulting
-    -- to visible. Without this, freshly (re)built content can leak visible over
-    -- a hidden pane, since Geyser's plain :add always shows a widget on add.
+    -- Not useAdd2: it rewrites .add on every descendant widget type (including
+    -- ScrollBox, which isn't in Geyser's own add2 exclude list), and that
+    -- collided with ScrollBox's internal add2 handling -- freshly built content
+    -- (most settings/properties forms are ScrollBox-based) could get stuck
+    -- auto_hidden until a full pane hide/show cycle. Mux._applyContent handles
+    -- the "don't leak new content over a hidden target" case explicitly instead
+    -- (see content.lua), without touching Geyser's add machinery.
     self.content = Geyser.Container:new({
         name    = self._gid .. "_content",
         x       = tostring(inset) .. "px",
         y       = Mux._toPx(contentY),
         width   = Mux._fromEdgePx(inset),
         height  = Mux._fromEdgePx(inset),
-        useAdd2 = true,
     }, self.outer)
     -- Geyser.Container has no setStyleSheet (no native Qt widget).
     -- Use a background Label as the first child (lowest z-order) for the fill.
