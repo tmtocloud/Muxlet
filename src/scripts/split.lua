@@ -57,6 +57,7 @@ function MuxSplit:init(opts)
     opts = opts or {}
     local theme = Mux.activeTheme()
 
+    if opts.id then Mux._reserveId(opts.id) end
     self.id        = opts.id or Mux._newId("split")
     self.direction = opts.direction or "v"   -- "v" = top/bottom, "h" = left/right
     -- An explicitly supplied ratio (e.g. restored from a saved workspace) is

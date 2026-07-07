@@ -31,6 +31,7 @@ function MuxPane:init(opts)
     local _t0 = Mux.debug and os.clock() or nil
     local theme = Mux.activeTheme()
 
+    if opts.id then Mux._reserveId(opts.id) end
     self.id               = opts.id   or Mux._newId("pane")
     self._gid             = Mux._newInternalId()   -- Geyser widget name prefix; never recycled
     self.name             = opts.name or self.id
@@ -168,12 +169,19 @@ function MuxPane:init(opts)
     }, self.outer)
 
     local contentY = inset + hdrH
+    -- useAdd2 propagates down the whole content subtree forever (Geyser.add2
+    -- rewrites each child's own :add to add2 too, see GeyserGeyser.lua), so any
+    -- widget a content module creates -- however deep, however long after this
+    -- pane was condition-hidden -- gets hidden on arrival instead of defaulting
+    -- to visible. Without this, freshly (re)built content can leak visible over
+    -- a hidden pane, since Geyser's plain :add always shows a widget on add.
     self.content = Geyser.Container:new({
-        name   = self._gid .. "_content",
-        x      = tostring(inset) .. "px",
-        y      = Mux._toPx(contentY),
-        width  = Mux._fromEdgePx(inset),
-        height = Mux._fromEdgePx(inset),
+        name    = self._gid .. "_content",
+        x       = tostring(inset) .. "px",
+        y       = Mux._toPx(contentY),
+        width   = Mux._fromEdgePx(inset),
+        height  = Mux._fromEdgePx(inset),
+        useAdd2 = true,
     }, self.outer)
     -- Geyser.Container has no setStyleSheet (no native Qt widget).
     -- Use a background Label as the first child (lowest z-order) for the fill.

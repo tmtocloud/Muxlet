@@ -102,6 +102,22 @@ function Mux._freeId(id)
     table.insert(Mux._idFree[prefix], n)
 end
 
+-- Bumps the prefix's counter so a future _newId() call can never hand out a
+-- number that collides with an explicit id passed in via opts.id (e.g. a
+-- saved workspace restoring "pane_3"). Without this, explicit ids never
+-- touch Mux._idCounters, so the counter stays behind and the next
+-- auto-generated id can alias — and silently overwrite — an existing pane.
+function Mux._reserveId(id)
+    if not id then return end
+    local prefix, numStr = id:match("^(.-)_(%d+)$")
+    if not prefix or not numStr then return end
+    local n = tonumber(numStr)
+    if not n then return end
+    if n > (Mux._idCounters[prefix] or 0) then
+        Mux._idCounters[prefix] = n
+    end
+end
+
 -- Single-parent inheritance class factory; :new(opts) calls :init(opts) on the instance.
 function Mux._class(parent)
     local cls = {}

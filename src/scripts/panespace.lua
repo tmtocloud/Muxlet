@@ -27,6 +27,7 @@ local minBorderPx = 40   -- prevents the border from collapsing to zero
 function MuxPaneSpace:init(opts)
     opts = opts or {}
 
+    if opts.id then Mux._reserveId(opts.id) end
     self.id      = opts.id   or Mux._newId("ps")
     self.zone    = opts.zone or "float"
     self.size    = opts.size or "20%"
