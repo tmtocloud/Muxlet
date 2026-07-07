@@ -616,8 +616,7 @@ local function restoreTabsOnPane(p, node)
                 -- Restore condition-hidden state (MuxTab:_conditionHide, tabs.lua). If the
                 -- tab also carries rules (restored below), evaluating them immediately
                 -- re-derives this from current live conditions and may override it — this
-                -- is just the correct starting point for a tab hidden with no rule driving
-                -- it.
+                -- is just the correct starting point for a tab hidden with no rule driving it.
                 if tabDef.visible == false and tab._conditionHide then
                     tab:_conditionHide()
                 end
