@@ -57,14 +57,19 @@ end
 -- ── Recovery: inspect & reveal ────────────────────────────────────────────────
 --
 -- Hiding a pane's titlebar or its Properties affordance is done from the UI, but
--- once both are hidden there is no on-screen way back. These three give a power
--- user a way to recover any workspace without editing Lua or resetting, while
--- staying obscure enough that a casual user won't stumble into them:
+-- once both are hidden there is no on-screen way back. A rule-hidden pane/tab
+-- (its Rules condition collapsed it, see conditional.lua) is worse: it's not on
+-- screen at all, so there's no right-click menu to reach its Properties dialog
+-- by any means short of editing Lua. These three give a power user a way to
+-- recover any workspace without editing Lua or resetting, while staying obscure
+-- enough that a casual user won't stumble into them:
 --   Mux.listPanespace()   — enumerate every pane/tab with id + hidden state
 --   Mux.revealUI(id)      — restore titlebar + Properties on one pane/tab
 --   Mux.revealUI("all")   — restore across the whole workspace (explicit)
 -- A hidden titlebar means you can't read an id off the screen, so the lister is
--- the way you learn the id to target.
+-- the way you learn the id to target. Revealing a rule-hidden target also sets
+-- its rules inactive (see _unstrandSubject below) so the condition doesn't just
+-- re-hide it the instant it's shown, leaving it reachable for maintenance.
 
 -- Recursively searches a list of tabs (and each tab's own nested sub-tabs, both
 -- visible and condition-hidden) for a given id.
@@ -124,6 +129,23 @@ local function _findByIdForReveal(id)
     return nil
 end
 
+-- If a rule collapsed this pane/tab (see conditional.lua), showing it again
+-- with the rule still active just gets it re-hidden on the next evaluation —
+-- so deactivate its rules first, mirroring the "disabling a visibility rule
+-- shouldn't strand a hidden pane" behavior in the Properties Rules editor.
+-- Leaves the rules there (just inactive) so the user can flip them back on
+-- from Properties once maintenance is done.
+local function _unstrandSubject(subject)
+    if not (subject and subject._conditionHidden) then return end
+    for _, r in ipairs(subject.rules or {}) do
+        if r.enabled ~= false then
+            r.enabled = false
+            if Mux._reapplyRule then Mux._reapplyRule(subject, r) end
+        end
+    end
+    if subject._conditionShow then subject:_conditionShow() end
+end
+
 -- Restores titlebar + Properties affordance on a single pane.
 local function _revealPane(p)
     p.propertiesButton = true
@@ -132,6 +154,7 @@ local function _revealPane(p)
     end
     if p._applyTitlebarVisibility then p:_applyTitlebarVisibility() end
     if Mux._revealContent then Mux._revealContent(p) end
+    _unstrandSubject(p)
 end
 
 function Mux.listPanespace()
@@ -143,6 +166,7 @@ function Mux.listPanespace()
             local flags = {}
             if not p.titlebarVisible       then flags[#flags+1] = "<red>titlebar hidden<reset>" end
             if p.propertiesButton == false then flags[#flags+1] = "<red>props hidden<reset>"    end
+            if p._conditionHidden          then flags[#flags+1] = "<yellow>condition-hidden<reset>" end
             if p.locked                    then flags[#flags+1] = "locked"   end
             if p.floating                  then flags[#flags+1] = "floating" end
             if p.mainConsoleHost           then flags[#flags+1] = "main console" end
@@ -187,6 +211,18 @@ function Mux.revealUI(id)
                     for _, t in ipairs(p._tabs) do
                         t.propertiesButton = true
                         if Mux._revealContent then Mux._revealContent(t) end
+                        _unstrandSubject(t)
+                    end
+                end
+                if p._hiddenTabs then
+                    -- Snapshot first: _unstrandSubject's _conditionShow() removes the
+                    -- tab from p._hiddenTabs, which would desync an in-place ipairs.
+                    local hidden = {}
+                    for i, t in ipairs(p._hiddenTabs) do hidden[i] = t end
+                    for _, t in ipairs(hidden) do
+                        t.propertiesButton = true
+                        if Mux._revealContent then Mux._revealContent(t) end
+                        _unstrandSubject(t)
                     end
                 end
                 n = n + 1
@@ -211,6 +247,7 @@ function Mux.revealUI(id)
         -- pane's titlebar is reachable so the tab is operable).
         target.propertiesButton = true
         if Mux._revealContent then Mux._revealContent(target) end
+        _unstrandSubject(target)
         _revealPane(host)
         Mux.raiseFloatingPanes()
         Mux._echo(string.format(

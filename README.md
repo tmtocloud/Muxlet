@@ -74,7 +74,7 @@ context menus, drag gestures) rather than through subcommands.
 | `mux stop` | Stop Muxlet, restore the normal Mudlet console |
 | `mux reset` | Re-apply the reset workspace (setting `mux.reset_workspace`, default `default`) |
 | `mux status` | Version, active workspace, pane count |
-| `mux reveal <pane id>` | Undo a "lock/hide editor" on content (e.g. a button grid) |
+| `mux reveal <id>` | Undo a "lock/hide editor" on content (e.g. a button grid), restore a hidden titlebar/Properties button, and force a rule-hidden pane/tab back on screen (deactivating its rules so it stays put for maintenance) |
 | `mux debug [on\|off]` | Toggle diagnostic logging |
 
 ### Workspaces
