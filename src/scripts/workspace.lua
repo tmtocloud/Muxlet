@@ -165,7 +165,16 @@ function Mux.applyWorkspace(name)
                 local p = buildNode(fd, Geyser, paneMap, nil)
                 if p then
                     if fd.id then paneMap[fd.id] = p end
+                    -- Materializing a pane's saved floating=true state is not a user
+                    -- "convert to floating" action -- convertible=false means "don't
+                    -- let drag-to-embed/float interactions touch this pane," not
+                    -- "don't ever let this pane become floating." Bypass the guard
+                    -- for this one restore call, then put the saved value back so
+                    -- interactive behavior (e.g. drag-to-embed) is unaffected.
+                    local savedConvertible = p.convertible
+                    p.convertible = true
                     p:_detachToFloat()
+                    p.convertible = savedConvertible
                     -- Apply restored content HERE: floating panes are rebuilt after
                     -- the embedded content-apply pass below has already run, so their
                     -- _pendingContent would otherwise never be applied.
