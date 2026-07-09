@@ -1685,7 +1685,12 @@ function MuxPane:_detachToFloat()
     if not self.convertible and not self.overlay then return end
     -- Void guard: floating the only embedded pane would empty the panespace. Overlays
     -- (dialogs) are exempt — they are created to float and never hold the layout.
-    if not self.overlay and Mux._isLastEmbeddedPane(self) then
+    -- Also exempt: a pane with no _paneSpace was never embedded in a tiling tree to
+    -- begin with (e.g. a floating pane being rebuilt during workspace restore, which
+    -- is constructed with paneSpace=nil and floating=false until this call flips it).
+    -- Mux._isLastEmbeddedPane counts it as "embedded" purely because floating is still
+    -- false at this instant, which would wrongly block the very call meant to fix that.
+    if not self.overlay and self._paneSpace and Mux._isLastEmbeddedPane(self) then
         Mux._log("MuxPane: refusing to float last embedded pane %s", self.id)
         return
     end

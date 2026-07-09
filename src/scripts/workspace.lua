@@ -199,6 +199,12 @@ function Mux.applyWorkspace(name)
                 end
                 Mux._pendingGhostLinks = nil
             end
+            -- Wire saved anchors for the floating panes just built. Must happen here,
+            -- not in the tempTimer(0,...) below: that timer fires first (0 < 0.2) and
+            -- would run _resolveSavedAnchors before any restored floating pane exists,
+            -- silently orphaning every _pendingAnchor set above with nothing left to
+            -- ever consume it.
+            if Mux._resolveSavedAnchors then Mux._resolveSavedAnchors() end
             Mux.raiseFloatingPanes()
             if Mux._notifyAllReposition then Mux._notifyAllReposition() end
         end)
@@ -225,7 +231,6 @@ function Mux.applyWorkspace(name)
         local sw = Mux._settings_ui
         if sw and sw.window and sw.visible then sw.window:raise() end
         Mux.raiseFloatingPanes()
-        if Mux._resolveSavedAnchors then Mux._resolveSavedAnchors() end
         if Mux._restyleAllTabs then Mux._restyleAllTabs() end
         Mux._scheduleAutoSave()
     end)
@@ -740,6 +745,10 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
     if node.type == "pane" then
         local showTitlebar = node.showTitlebar
         local mainHost     = node.mainConsoleHost
+        local floatX = node.floatX or 100
+        local floatY = node.floatY or 100
+        local floatW = node.floatW or 400
+        local floatH = node.floatH or 300
 
         local p = MuxPane:new({
             id               = node.id,
@@ -747,6 +756,15 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             showTitlebar     = showTitlebar,
             mainConsoleHost  = mainHost,
             parent           = parentContainer,
+            -- A pane restored as floating is parented directly under Geyser and would
+            -- otherwise start at the Container default (100%x100% of its parent, i.e.
+            -- the whole screen) until _detachToFloat() resizes it moments later. Seed
+            -- its real geometry immediately so it's never even transiently full-screen
+            -- if that resize is ever skipped, delayed, or blocked (e.g. by a guard).
+            x                = node.floating and floatX or nil,
+            y                = node.floating and floatY or nil,
+            width            = node.floating and floatW or nil,
+            height           = node.floating and floatH or nil,
             contentable      = node.contentable ~= false,
             resizable        = node.resizable ~= false,
             titlebarHideable = node.titlebarHideable ~= false,
@@ -770,10 +788,10 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             hiddenTbElements = node.hiddenTbElements,
             lockSnapshot     = node.lockSnapshot,
             nameAlign        = node.nameAlign or "left",
-            floatX           = node.floatX or 100,
-            floatY           = node.floatY or 100,
-            floatW           = node.floatW or 400,
-            floatH           = node.floatH or 300,
+            floatX           = floatX,
+            floatY           = floatY,
+            floatW           = floatW,
+            floatH           = floatH,
             splittable       = node.splittable ~= false,
             swappable        = node.swappable ~= false,
             condition        = node.condition,
