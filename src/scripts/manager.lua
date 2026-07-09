@@ -251,12 +251,13 @@ function Mux.revealUI(id)
     end
 
     if host then
-        -- target is a tab; restore its Properties affordance (and ensure the host
-        -- pane's titlebar is reachable so the tab is operable).
+        -- target is a tab; restore its Properties affordance. The tab bar (and
+        -- its right-click menu) lives independently of the host pane's titlebar,
+        -- so reaching a tab's Properties never requires touching the host's own
+        -- titlebar/props setting — leave the host untouched, scoped to the tab only.
         target.propertiesButton = true
         if Mux._revealContent then Mux._revealContent(target) end
         _unstrandSubject(target)
-        _revealPane(host)
         Mux.raiseFloatingPanes()
         Mux._echo(string.format(
             "\n<green>[Muxlet]<reset> Revealed controls on tab '<white>%s<reset>'.\n", id))

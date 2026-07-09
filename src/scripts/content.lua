@@ -296,17 +296,13 @@ function Mux._applyContent(target, contentName, force)
         target.outer:hide()
     end
 
-    -- Geyser's plain :add always shows a freshly created widget regardless of
-    -- its parent's hidden state, so a slot rebuilt while its target is hidden
-    -- (an inactive settings/properties tab -- see MuxSurface:_activateTabObj --
-    -- or any other pane/tab not currently shown) would otherwise leak visible.
-    -- realContent already carries the target's real hidden/auto_hidden state
-    -- (toggled explicitly by the tab/pane show-hide code, never by this
-    -- function), so re-hide the slot to match rather than trusting the apply
-    -- function's widgets to inherit it correctly.
-    if slot and (realContent.hidden or realContent.auto_hidden) then
-        slot:hide(true)
-    end
+    -- A slot rebuilt while its target is hidden (an inactive settings/
+    -- properties tab -- see MuxSurface:_activateTabObj -- or any other pane/
+    -- tab not currently shown) would otherwise leak visible; realContent
+    -- carries the target's real hidden/auto_hidden state (toggled explicitly
+    -- by the tab/pane show-hide code, never by this function), so re-hide the
+    -- slot to match. See Mux.reassertHidden for why this is needed.
+    Mux.reassertHidden(slot, realContent)
 
     -- Auto-fit: if apply set _autoFitHeight and the pane is floating (and the
     -- pane's Auto-Fit to Content permission is on), resize to fit content.
@@ -340,6 +336,34 @@ function Mux.requestAutoFit(target, height, width)
     if not (target.floating and target._autoFitHeight and target.outer) then return end
     local newX, newY, newW, newH = computeAutoFit(target, false)
     applyAutoFit(target, newX, newY, newW, newH)
+end
+
+--- Re-applies a hidden/auto_hidden container's Qt-level hide to `container`,
+--- covering any widgets just added to it. Geyser's plain :add always shows a
+--- freshly created widget regardless of its parent's hidden state (see
+--- GeyserGeyser.lua's Geyser:add) -- new widgets just leak visible instead of
+--- inheriting the ancestor's hidden state. Content that rebuilds its own
+--- widgets live -- independent of Mux._applyContent's own apply-time rebuild,
+--- e.g. reacting to a GMCP event or a game-line trigger -- must call this
+--- right after, or a condition-hidden (or inactive-tab-hidden) pane/tab can
+--- leak newly built content visible until its next full hide/show cycle.
+---
+--- (NOT a candidate for Geyser's useAdd2: that rewrites .add on every
+--- descendant widget type, including ScrollBox, which collides with
+--- ScrollBox's own internal add2 handling and broke dialogs everywhere --
+--- see Muxlet commit 8cd78ed. This re-hides after the fact instead of
+--- changing how widgets get added, so it can't have that blast radius.)
+-- @param container   the container that just received new children
+-- @param reference   optional; carries the real hidden/auto_hidden state to
+--                     check, if different from container (e.g. a freshly
+--                     created slot has its own hidden/auto_hidden reset to
+--                     false, so its long-lived parent must be checked
+--                     instead). Defaults to container.
+function Mux.reassertHidden(container, reference)
+    reference = reference or container
+    if container and reference and (reference.hidden or reference.auto_hidden) then
+        container:hide(true)
+    end
 end
 
 -- Remove whatever content is active on a target, returning it to its empty

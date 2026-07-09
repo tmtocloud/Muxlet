@@ -900,8 +900,15 @@ local function openActionDialog(editId, onDone, readOnly)
 
     local rebuild
     local formHandle
+    -- Same fix as openConditionDialog: step add/move/remove and a step's own
+    -- type dropdown rebuild the form immediately, so pending ID/Name edits
+    -- must be flushed into d first or they get discarded by the rebuild.
+    local function commitAndRebuild()
+        if formHandle and formHandle.commitAll then formHandle.commitAll() end
+        rebuild()
+    end
     rebuild = function()
-        local specs = _buildActionDialogSpecs(d, editId, readOnly, rebuild)
+        local specs = _buildActionDialogSpecs(d, editId, readOnly, commitAndRebuild)
         specs[#specs+1] = { type = "divider", label = "" }
         if readOnly then
             specs[#specs+1] = { type = "button", label = "Close", _noReset = true,
@@ -1121,8 +1128,16 @@ local function openConditionDialog(editId, onDone, readOnly)
 
     local rebuild
     local formHandle
+    -- Base type changes rebuild the whole form immediately (unlike text fields,
+    -- which only commit on blur/Enter or Save). Without flushing first, an
+    -- uncommitted ID/Name edit gets discarded by the rebuild before it ever
+    -- reaches d, which looks like the boxes were blanked out.
+    local function commitAndRebuild()
+        if formHandle and formHandle.commitAll then formHandle.commitAll() end
+        rebuild()
+    end
     rebuild = function()
-        local specs = _buildConditionDialogSpecs(d, editId, rebuild, readOnly)
+        local specs = _buildConditionDialogSpecs(d, editId, commitAndRebuild, readOnly)
         specs[#specs+1] = { type = "divider", label = "" }
         if readOnly then
             specs[#specs+1] = { type = "button", label = "Close", _noReset = true,
