@@ -37,14 +37,31 @@ if sub == "help" then
   mux workspace load <name>    — restore a saved workspace
   mux workspace list           — list all registered workspaces
   mux workspace delete <name>  — remove a saved workspace
-  mux workspace export <name>  — write a workspace as ready-to-paste Lua source
-                                 (for baking a saved layout into a package)
+  mux workspace export <name>  — write a workspace as ready-to-paste Lua source,
+                                 bundling its named theme (if any) and any named
+                                 conditions/actions its rules depend on (for baking
+                                 a saved layout into a package)
   mux workspaces               — alias for: mux workspace list
+
+  <white>Conditions & Actions<reset>
+  mux conditions list          — list named (non-built-in) conditions
+  mux conditions export <id>   — write one condition as ready-to-paste Lua source
+  mux conditions export all    — write every named condition to one file
+  mux actions list             — list named (non-built-in) actions
+  mux actions export <id>      — write one action as ready-to-paste Lua source
+  mux actions export all       — write every named action to one file
+  mux export                   — write EVERY named theme, condition, action, and
+                                 workspace to one file — for a package that
+                                 offers users a full menu of possibilities
+                                 (see fed2-tools' Build Your Own Workspace mode)
 
   <white>Themes<reset>
   mux theme [name]             — show or switch active theme
   mux theme save <name>        — save the current look (theme + global tweaks)
                                  as a named theme you can switch to or package
+                                 (also writes a ready-to-paste Lua export)
+  mux theme export <name>      — re-export an already-saved theme on demand
+  mux theme export all         — write every named theme to one file
   mux themes                   — list all registered themes
 
   <white>Settings<reset>
@@ -83,6 +100,8 @@ elseif sub == "theme" then
         local ok, msg = Mux.saveThemeFromGlobals(name)
         Mux._echo(string.format("\n%s[Muxlet]<reset> %s\n",
             ok and "<cyan>" or "<red>", msg or ""))
+    elseif action == "export" then
+        if words[3] == "all" then Mux.exportAllThemes() else Mux.exportTheme(words[3]) end
     elseif not words[2] then
         Mux._echo(string.format("\n<cyan>[Muxlet]<reset> Current theme: %s\n",
             Mux.currentTheme()))
@@ -126,6 +145,55 @@ elseif sub == "workspace" then
 
 elseif sub == "workspaces" then
     Mux.listWorkspaces()
+
+-- ── mux conditions / mux actions ────────────────────────────────────────────
+-- Named (declarative) conditions/actions, created from Settings → Conditions/
+-- Actions. list/export only ever look at Mux._declConditions/_declActions —
+-- built-ins (Always, Connected, mux.showSelf, ...) are code, not data, so
+-- there's nothing to export for them; `mux workspace export`/`mux export`
+-- already skip them for the same reason.
+elseif sub == "conditions" then
+    local action = words[2] and words[2]:lower() or ""
+    if action == "list" or action == "" then
+        Mux._echo("\n<cyan>[mux]<reset> Named conditions:\n")
+        local ids = {}
+        for id in pairs(Mux._declConditions) do ids[#ids + 1] = id end
+        table.sort(ids)
+        if #ids == 0 then Mux._echo("  — none yet —\n") end
+        for _, id in ipairs(ids) do
+            local c = Mux._declConditions[id]
+            Mux._echo(string.format("  %s   ·   %s\n", id, c.label or id))
+        end
+    elseif action == "export" then
+        if words[3] == "all" then Mux.exportAllConditions() else Mux.exportCondition(words[3]) end
+    else
+        Mux._echo("\n<red>[Muxlet]<reset> Usage: mux conditions list|export <id>|export all\n")
+    end
+
+elseif sub == "actions" then
+    local action = words[2] and words[2]:lower() or ""
+    if action == "list" or action == "" then
+        Mux._echo("\n<cyan>[mux]<reset> Named actions:\n")
+        local ids = {}
+        for id in pairs(Mux._declActions) do ids[#ids + 1] = id end
+        table.sort(ids)
+        if #ids == 0 then Mux._echo("  — none yet —\n") end
+        for _, id in ipairs(ids) do
+            local a = Mux._declActions[id]
+            Mux._echo(string.format("  %s   ·   %s\n", id, a.label or id))
+        end
+    elseif action == "export" then
+        if words[3] == "all" then Mux.exportAllActions() else Mux.exportAction(words[3]) end
+    else
+        Mux._echo("\n<red>[Muxlet]<reset> Usage: mux actions list|export <id>|export all\n")
+    end
+
+-- ── mux export ───────────────────────────────────────────────────────────────
+-- Everything non-built-in at once: every named condition, action, and
+-- workspace, in one file. Unlike `mux workspace export`, no dependency
+-- filtering — for shipping a full library a package's users pick from.
+elseif sub == "export" then
+    Mux.exportAll()
 
 -- ── mux settings ─────────────────────────────────────────────────────────────
 elseif sub == "settings" then

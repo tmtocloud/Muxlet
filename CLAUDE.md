@@ -197,7 +197,7 @@ local d = Mux.createDialog({
 
 `Mux.createDialog` calls `_detachToFloat()` immediately, so `d.content:get_width()` is correct synchronously after the call — no timer needed to query geometry.
 
-For dialogs that show dynamic content (settings, properties) use `Mux._applyContent(d, "my_content_id")` so `contentBg` is hidden and the content lifecycle is tracked.
+For dialogs that show dynamic content (settings, properties) use `Mux._applyContent(d, "my_content_id")` so `contentBg` is hidden and the content lifecycle is tracked — EXCEPT dialogs built with `MuxDialog:mountForm` (a scrolling/auto-fit form), which must build directly on `d.content` instead; see the `mountForm` exception in What NOT to do.
 
 ---
 
@@ -315,11 +315,11 @@ The returned `formHandle` exposes `.totalHeight`, `.closeDropdown()`, `.refresh(
 ## Key files
 
 ```
-src/scripts/globals.lua            — Mux table, ID generators, class factory, context menu renderer
+src/scripts/globals.lua            — Mux table, ID generators, class factory, context menu renderer, Mux._serializeLua (shared table→Lua-source serializer for all export commands)
 src/scripts/settings.lua           — settings registry, settings dialog, row builders
 src/scripts/content.lua            — registerContent, _applyContent, singleton tracking
 src/scripts/update.lua             — version check and auto-update logic
-src/scripts/theme.lua              — registerTheme, applyTheme, activeTheme()
+src/scripts/style.lua               — token engine (Mux.tok, setGlobalToken/setLocalToken) + theme registry (registerTheme, applyTheme, activeTheme(), merged from the former theme.lua), saveThemeFromGlobals/exportTheme/exportAllThemes
 src/scripts/pane.lua               — MuxPane class: construction, titlebar, lock/unlock, close, resize
 src/scripts/tabs.lua               — Tab infrastructure: buildTabInfrastructure, addTab, activateTabObj
 src/scripts/connection.lua         — connectionAware pane/tab integration
@@ -329,7 +329,8 @@ src/scripts/manager.lua            — pane lookup (getPane), z-order (raisePane
 src/scripts/dialog.lua             — Mux.createDialog(opts), Mux.dialogCss palette
 src/scripts/widgets.lua            — Mux.ui declarative, theme-aware form builder (buildForm/specHeight/formHeight)
 src/scripts/welcome.lua            — first-run welcome dialog (registered internal content)
-src/scripts/workspace.lua          — registerWorkspace, applyWorkspace, saveWorkspace, auto-save
+src/scripts/workspace.lua          — registerWorkspace, applyWorkspace, saveWorkspace, auto-save, exportWorkspace (dependency-aware — bundles referenced conditions/actions), exportAll
+src/scripts/conditional.lua        — condition engine (Mux._conditionValue, rule evaluation), declarative condition/action store (createDeclarativeCondition/Action, rules.json), exportCondition/exportAction (+ "all" variants)
 src/scripts/content_builtins.lua   — registerGmcpViewer + gmcp_inspector content
 src/scripts/properties.lua         — Mux.showPaneProperties, Mux.showTabProperties, mux_properties content
 src/scripts/devmode.lua            — local-build auto-reload and `mux reload` helpers
@@ -402,7 +403,9 @@ External API names (Geyser, Mudlet built-ins) are not ours to rename.
 
 ## What NOT to do
 
-- Do not build UI directly into `pane.content` without going through `Mux._applyContent` — doing so leaves `contentBg` visible (placeholder on top), bypasses the content lifecycle, and causes `activeContent` to not be saved in workspaces.
+- Do not build UI directly into `pane.content` without going through `Mux._applyContent` — doing so leaves `contentBg` visible (placeholder on top), bypasses the content lifecycle, and causes `activeContent` to not be saved in workspaces. **Exception:** dialogs built with `MuxDialog:mountForm` (dialog.lua) must go the OTHER way — build directly on `dlg.content` (hide `dlg.contentBg` manually, then call `dlg:mountForm(...)`), matching `contentLibrary/buttons.lua`'s `openGridSettings` / `contentLibrary/capture.lua`'s `openCaptureSettings`. Routing a `mountForm` dialog through `_applyContent` swaps `target.content` for a temporary slot sized to the dialog's PRE-`fitContent` geometry; the ScrollBox `mountForm` builds never catches up when `fitContent` grows the frame afterward, leaving most of the dialog showing Qt's bare white background.
+- Do not append hand-rendered widgets to a `buildForm` panel/dialog OUTSIDE the `specs` array it was built from. `buildForm`'s own `relayout()` (collapse/expand, and any external caller of `formHandle.relayout`/`target._muxRelayout`) only resizes the content label to fit the specs IT knows about — extra content appended afterward gets silently clobbered on the next relayout. If a panel needs a custom look a plain field spec can't produce (e.g. a clickable list row with a delete icon), add a new block-layout entry to `Mux.ui._builtins` (see `listRow` in widgets.lua) and put it in the specs array like any other row, rather than hand-building it alongside the form.
+- Any code that resizes a pane/dialog's `.outer` directly (`d.outer:resize(...)`) must follow with `Mux._reflowContent(d)` (or call a helper that already does), or nested `.content` several levels deep (tab → sub-tab → ScrollBox) keeps reporting its PRE-resize size even though the visible frame changed. `MuxPane:_detachToFloat` already does this; `MuxDialog:fitContent` and `Mux._fitDialogToActiveTab` needed it added.
 - Do not register Muxlet system UI content without `internal = true` — it will appear in the user-facing "Add Content" menu and be written to the content catalog file.
 - Do not use `tempTimer(0, fn)` to defer widget construction — geometry is synchronous after `createDialog` / `_detachToFloat`.
 - Do not set `pane._activeContent` manually — use `Mux._applyContent` which handles cleanup of previous content.

@@ -1002,6 +1002,8 @@ local function w_segmented(row, c)
 end
 
 -- ── Action button (block) — a full-width clickable button that fires onClick ──
+-- spec.style picks a colour variant ("primary" green / "danger" red) from the
+-- shared dialog palette (dialog.lua); default is the neutral blue-grey pill.
 local function w_button(row, c)
     local spec, css, uid = c.spec, c.css, c.uid
     local h = 24
@@ -1009,7 +1011,12 @@ local function w_button(row, c)
         name = uid.."_btn", x = c.padL, y = math.floor((c.rowH - h)/2),
         width = c.formW - c.padL - c.padR, height = h,
     }, row)
-    btn:setStyleSheet(css.actionBtn or
+    local dcss = Mux.dialogCss
+    local styleCss
+    if     spec.style == "primary" then styleCss = dcss and dcss.buttonPrimary
+    elseif spec.style == "danger"  then styleCss = dcss and dcss.buttonDanger
+    end
+    btn:setStyleSheet(styleCss or css.actionBtn or
         "QLabel{background:rgba(120,160,255,0.14);color:#cfe0ff;border:1px solid rgba(120,160,255,0.40);"
         .. "border-radius:4px;qproperty-alignment:'AlignCenter';font-size:11px;}"
         .. "QLabel::hover{background:rgba(120,160,255,0.24);}")
@@ -1017,6 +1024,65 @@ local function w_button(row, c)
     btn:setCursor("PointingHand")
     if spec.desc then btn:setToolTip(spec.desc) end
     btn:setClickCallback(function() c.closeDropdown(); if spec.onClick then spec.onClick() end end)
+    return {}
+end
+
+-- ── List row (block) — a clickable row for "pick one of these named things"
+-- lists (title + optional subtitle + optional accent stripe + optional delete
+-- icon), as an alternative to rendering a stack of identical buttons. Set
+-- spec.rowHeight explicitly (>=40 shows the subtitle line, shorter omits it).
+--   spec.title     string   bold row label (required)
+--   spec.subtitle  string?  small muted line under the title
+--   spec.accent    string?  CSS colour for the 3px left-edge stripe
+--   spec.dim       bool?    read-only/inactive visual treatment
+--   spec.onClick   fn?      whole row (except the delete icon) opens/edits
+--   spec.onDelete  fn?      shows a small delete icon on the right
+local function w_listRow(row, c)
+    local spec, uid = c.spec, c.uid
+    local formW, thisH = c.formW, c.thisH
+
+    if spec.dim then row:setStyleSheet("background:rgba(255,255,255,5);border:none;") end
+
+    if spec.accent then
+        local bar = Geyser.Label:new({ name = uid.."_bar", x = 0, y = 0, width = 3, height = thisH }, row)
+        bar:setStyleSheet(string.format("background:%s;border:none;", spec.accent))
+    end
+
+    local delW  = spec.onDelete and 26 or 8
+    local nameW = formW - 14 - delW
+    local hasSub = thisH >= 40 and spec.subtitle
+    local nameY  = hasSub and 6 or math.floor((thisH - 16) / 2)
+
+    local nl = Geyser.Label:new({ name = uid.."_n", x = 12, y = nameY, width = nameW, height = 16 }, row)
+    nl:setStyleSheet(string.format("background:transparent;color:%s;font-size:11px;font-weight:bold;",
+        spec.dim and "rgba(190,195,215,153)" or "rgba(218,222,240,242)"))
+    nl:rawEcho(spec.title or "")
+
+    if hasSub then
+        local sl = Geyser.Label:new({ name = uid.."_s", x = 12, y = 24, width = nameW, height = 14 }, row)
+        sl:setStyleSheet("background:transparent;color:rgba(120,130,170,204);font-size:9px;")
+        sl:rawEcho(spec.subtitle)
+    end
+
+    if spec.onClick then
+        row:setCursor("PointingHand")
+        local click = function() c.closeDropdown(); spec.onClick() end
+        row:setClickCallback(click)
+        nl:setClickCallback(click)
+    end
+
+    if spec.onDelete then
+        local del = Geyser.Label:new({
+            name = uid.."_del", x = formW - 26, y = math.floor((thisH - 20) / 2), width = 20, height = 20,
+        }, row)
+        del:setStyleSheet(
+            "QLabel{background:rgba(70,30,30,89);color:rgba(220,150,150,191);border:1px solid rgba(180,90,90,89);"
+            .. "border-radius:3px;qproperty-alignment:AlignCenter;font-size:10px;}"
+            .. "QLabel::hover{background:rgba(110,40,40,217);color:#ffffff;border-color:rgba(220,100,100,179);}")
+        del:echo("<center>✖</center>")
+        if spec.deleteTooltip then del:setToolTip(spec.deleteTooltip) end
+        del:setClickCallback(function() c.closeDropdown(); spec.onDelete() end)
+    end
     return {}
 end
 
@@ -1028,6 +1094,7 @@ Mux.ui._builtins = {
     wideText  = { build = w_wideText,  layout = "block" },
     readOnly  = { build = w_readOnly,  layout = "block" },
     button    = { build = w_button,    layout = "block" },
+    listRow   = { build = w_listRow,   layout = "block" },
     checkbox  = { build = w_checkbox },
     cycler    = { build = w_cycler },
     dropdown  = { build = w_dropdown },
@@ -1208,6 +1275,7 @@ function Mux.ui.buildForm(parent, specs, opts)
             elseif specType == "array"  then specDisplay = "cycler"
             elseif specType == "number" then specDisplay = "stepper"
             elseif specType == "button" then specDisplay = "button"
+            elseif specType == "listRow" then specDisplay = "listRow"
             else                             specDisplay = "text"
             end
         end

@@ -822,45 +822,27 @@ local function _aeFieldRow(step, field)
     end
 end
 
-local function buildActionEditor(target, bg)
-  local ok, err = pcall(function()
-    if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
-    if not target._aeDraft then target._aeDraft = { id = "", label = "", steps = {} }; target._aeId = nil end
-    local d = target._aeDraft
-    local function refresh() customRefresh(target) end
-    local function loadDraft(id)
-        local s = Mux.getDeclarativeAction and Mux.getDeclarativeAction(id)
-        if not s then return end
-        local steps = {}
-        for _, st in ipairs(Mux._actionSteps(s)) do
-            local c = {}; for k, v in pairs(st) do c[k] = v end; steps[#steps+1] = c
-        end
-        target._aeDraft = { id = s.id, label = s.label or s.id, steps = steps }
-        target._aeId = id
-    end
-
+-- readOnly=true (built-ins) shows ID/Name/Group/Description — built-in actions
+-- are code (an arbitrary `run` function), not a step list, so there's nothing
+-- to show/edit as steps. A single Close button, no Save/Cancel/Delete.
+local function _buildActionDialogSpecs(d, editId, readOnly, rebuild)
     local specs = {}
-    if target._aeViewId then
-        -- Read-only view of a built-in action (Muxlet-provided; not editable). Shown
-        -- so people can see what exists and use them as starting examples.
-        local v = Mux.getAction and Mux.getAction(target._aeViewId)
-        specs[#specs+1] = { type = "divider", label = "Built-in action (read-only)" }
-        specs[#specs+1] = { label = "ID",    type = "readOnly", readFn = function() return target._aeViewId end }
-        specs[#specs+1] = { label = "Name",  type = "readOnly", readFn = function() return (v and v.name) or target._aeViewId end }
-        specs[#specs+1] = { label = "Group", type = "readOnly", readFn = function() return (v and v.group) or "" end }
-        if v and v.desc and v.desc ~= "" then
-            specs[#specs+1] = { label = "What it does", type = "readOnly", readFn = function() return v.desc end }
-        end
-        specs[#specs+1] = { type = "divider", label = "Built-ins can't be edited — pick them directly in a rule's Do/Else, or build your own below." }
-        specs[#specs+1] = { type = "button", label = "+ New action", _noReset = true,
-            onClick = function() target._aeViewId = nil; target._aeDraft = { id = "", label = "", steps = {} }; target._aeId = nil; refresh() end }
-    else
-    if target._aeId then
-        specs[#specs+1] = { label = "ID", type = "readOnly", readFn = function() return d.id or target._aeId end }
+    if editId then
+        specs[#specs+1] = { label = "ID", type = "readOnly", readFn = function() return d.id end }
     else
         specs[#specs+1] = { label = "ID", type = "text", desc = "short unique id, e.g. open_map",
             readFn = function() return d.id or "" end, writeFn = function(v) d.id = (v or ""):gsub("%s+", "") end }
     end
+
+    if readOnly then
+        specs[#specs+1] = { label = "Name", type = "readOnly", readFn = function() return d.label end }
+        specs[#specs+1] = { label = "Group", type = "readOnly", readFn = function() return d.group or "" end }
+        if d.desc and d.desc ~= "" then
+            specs[#specs+1] = { label = "What it does", type = "readOnly", readFn = function() return d.desc end }
+        end
+        return specs
+    end
+
     specs[#specs+1] = { label = "Name", type = "text", desc = "shown in pickers",
         readFn = function() return d.label or "" end, writeFn = function(v) d.label = v end }
 
@@ -873,62 +855,142 @@ local function buildActionEditor(target, bg)
         local idx = i
         if i > 1 then
             specs[#specs+1] = { type = "button", label = "↑ Move up", _noReset = true,
-                onClick = function() d.steps[idx], d.steps[idx-1] = d.steps[idx-1], d.steps[idx]; refresh() end }
+                onClick = function() d.steps[idx], d.steps[idx-1] = d.steps[idx-1], d.steps[idx]; rebuild() end }
         end
-        specs[#specs+1] = { type = "button", label = "✖ Remove step " .. i, _noReset = true,
-            onClick = function() table.remove(d.steps, idx); refresh() end }
+        specs[#specs+1] = { type = "button", style = "danger", label = "✖ Remove step " .. i, _noReset = true,
+            onClick = function() table.remove(d.steps, idx); rebuild() end }
     end
     specs[#specs+1] = { label = "Add step", type = "array", display = "dropdown",
         desc = "pick an operation to append", options = _aeOpPickerOpts(),
         readFn = function() return "" end,
-        writeFn = function(opId) if opId and opId ~= "" then d.steps[#d.steps+1] = { op = opId }; refresh() end end }
+        writeFn = function(opId) if opId and opId ~= "" then d.steps[#d.steps+1] = { op = opId }; rebuild() end end }
 
-    specs[#specs+1] = { type = "divider", label = "" }
-    specs[#specs+1] = { type = "button", label = (target._aeId and "Save changes" or "Create action"), _noReset = true,
-        onClick = function()
-            local id = (target._aeId or d.id or ""):gsub("%s+", "")
-            if id == "" then cecho("\n<red>[mux]<reset> Give the action an ID first.\n"); return end
-            if not target._aeId and Mux.getDeclarativeAction and Mux.getDeclarativeAction(id) then
-                cecho("\n<red>[mux]<reset> An action with that ID already exists.\n"); return
-            end
-            Mux.createDeclarativeAction({ id = id, label = (d.label ~= "" and d.label or id), steps = d.steps })
-            target._aeId = id
-            cecho(string.format("\n<green>[mux]<reset> Action '<cyan>%s<reset>' saved.\n", id)); refresh()
-        end }
-    if target._aeId then
-        specs[#specs+1] = { type = "button", label = "Delete this action", _noReset = true,
-            onClick = function()
-                if Mux.deleteDeclarativeAction then Mux.deleteDeclarativeAction(target._aeId) end
-                target._aeDraft, target._aeId = nil, nil; refresh()
-            end }
-    end
-    specs[#specs+1] = { type = "button", label = "+ New action", _noReset = true,
-        onClick = function() target._aeDraft = { id = "", label = "", steps = {} }; target._aeId = nil; refresh() end }
-    end
+    return specs
+end
 
-    specs[#specs+1] = { type = "divider", label = "Saved actions (click to edit)" }
-    local anyUser, builtins = false, {}
-    if Mux.listActions then
-        for _, a in ipairs(Mux.listActions()) do
-            if Mux._declActions and Mux._declActions[a.id] then
-                anyUser = true
-                local aid = a.id
-                specs[#specs+1] = { type = "button", label = (a.name or aid) .. "   ·   " .. aid, _noReset = true,
-                    onClick = function() target._aeViewId = nil; loadDraft(aid); refresh() end }
-            elseif not a.hidden then
-                builtins[#builtins+1] = a
+-- New/Edit Action dialog — mirrors openConditionDialog (settings.lua): a
+-- focused popup instead of the old inline "add" form mixed into the endless
+-- settings scroll, no per-field Apply/Enter (hideApply + commitAll() on
+-- Save), and built-ins open the same dialog read-only rather than a separate
+-- view mode bolted onto the panel.
+local function openActionDialog(editId, onDone, readOnly)
+    local dlg = Mux.createDialog({
+        title = readOnly and "Action (built-in)" or (editId and "Edit Action" or "New Action"),
+        width = 460, height = 320, resizable = true, contextMenu = false,
+    })
+    if not dlg then return end
+    if dlg.contentBg then dlg.contentBg:echo(""); dlg.contentBg:hide() end
+
+    local d
+    if readOnly then
+        local v = Mux.getAction and Mux.getAction(editId)
+        d = { id = editId, label = (v and v.name) or editId, group = v and v.group, desc = v and v.desc }
+    elseif editId then
+        local s = Mux.getDeclarativeAction and Mux.getDeclarativeAction(editId)
+        local steps = {}
+        if s then
+            for _, st in ipairs(Mux._actionSteps(s)) do
+                local c = {}; for k, v in pairs(st) do c[k] = v end; steps[#steps+1] = c
             end
         end
+        d = { id = editId, label = (s and s.label) or editId, steps = steps }
+    else
+        d = { id = "", label = "", steps = {} }
     end
-    if not anyUser then specs[#specs+1] = { type = "divider", label = "— none yet —" } end
 
-    -- Built-in actions, read-only, as a starting reference.
-    if #builtins > 0 then
-        specs[#specs+1] = { type = "divider", label = "Built-in actions (read-only)" }
-        for _, a in ipairs(builtins) do
+    local rebuild
+    local formHandle
+    rebuild = function()
+        local specs = _buildActionDialogSpecs(d, editId, readOnly, rebuild)
+        specs[#specs+1] = { type = "divider", label = "" }
+        if readOnly then
+            specs[#specs+1] = { type = "button", label = "Close", _noReset = true,
+                onClick = function() dlg:close() end }
+        else
+            specs[#specs+1] = { type = "button", style = "primary", _noReset = true,
+                label = editId and "Save changes" or "Create action",
+                onClick = function()
+                    -- Force any not-yet-committed field edits into the draft first —
+                    -- Save/Create is the only commit point this dialog needs.
+                    if formHandle and formHandle.commitAll then formHandle.commitAll() end
+                    local id = (editId or d.id or ""):gsub("%s+", "")
+                    if id == "" then cecho("\n<red>[mux]<reset> Give the action an ID first.\n"); return end
+                    if not editId and Mux.getAction and Mux.getAction(id) then
+                        cecho("\n<red>[mux]<reset> An action with that ID already exists (including built-ins).\n"); return
+                    end
+                    Mux.createDeclarativeAction({ id = id, label = (d.label ~= "" and d.label or id), steps = d.steps })
+                    dlg:close()
+                    if onDone then onDone() end
+                end }
+            specs[#specs+1] = { type = "button", label = "Cancel", _noReset = true,
+                onClick = function() dlg:close() end }
+            if editId then
+                specs[#specs+1] = { type = "divider", label = "" }
+                specs[#specs+1] = { type = "button", style = "danger", label = "Delete this action", _noReset = true,
+                    onClick = function()
+                        if Mux.deleteDeclarativeAction then Mux.deleteDeclarativeAction(editId) end
+                        dlg:close()
+                        if onDone then onDone() end
+                    end }
+            end
+        end
+        formHandle = dlg:mountForm(specs, { prefix = dlg._gid .. "_aed", showReset = false, hideApply = true })
+    end
+    rebuild()
+end
+
+-- ── Actions panel (the Settings tab body) ──────────────────────────────────
+-- A header action plus one unified list — user-created actions (clickable to
+-- edit, with a delete icon) and built-ins (dimmed, no delete icon) together.
+-- Clicking any row opens the same New/Edit dialog; built-ins open it
+-- read-only. Mirrors buildConditionEditor's structure exactly.
+local function buildActionEditor(target, bg)
+  local ok, err = pcall(function()
+    if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
+    local function refresh() customRefresh(target) end
+
+    -- User actions first (most actionable), built-ins after, in one list.
+    local userActions, builtinActions = {}, {}
+    if Mux.listActions then
+        for _, a in ipairs(Mux.listActions()) do
+            if Mux._declActions and Mux._declActions[a.id] then userActions[#userActions+1] = a
+            elseif not a.hidden then builtinActions[#builtinActions+1] = a end
+        end
+    end
+    local allActions = {}
+    for _, a in ipairs(userActions)    do allActions[#allActions+1] = a end
+    for _, a in ipairs(builtinActions) do allActions[#allActions+1] = a end
+
+    local specs = {
+        { type = "divider", label = "Actions run a sequence of steps — pick one in a rule's \"Do\"/\"Else\" dropdown." },
+        { type = "button", style = "primary", label = "+ New Action", _noReset = true,
+          onClick = function() openActionDialog(nil, refresh) end },
+        { type = "divider", label = "Actions" },
+    }
+    if #allActions == 0 then
+        specs[#specs+1] = { type = "divider", label = "— none yet — click \"+ New Action\" to add one —" }
+    else
+        for _, a in ipairs(allActions) do
             local aid = a.id
-            specs[#specs+1] = { type = "button", label = (a.name or aid) .. "   ·   " .. aid, _noReset = true,
-                onClick = function() target._aeViewId = aid; refresh() end }
+            local isBuiltin = not (Mux._declActions and Mux._declActions[aid])
+            local subtitle
+            if isBuiltin then
+                subtitle = string.format("%s   ·   %s   ·   built-in", aid, a.group or "")
+            else
+                local n = #Mux._actionSteps(Mux._declActions[aid])
+                subtitle = string.format("%s   ·   %d step%s", aid, n, n == 1 and "" or "s")
+            end
+            specs[#specs+1] = { type = "listRow", rowHeight = 44, dim = isBuiltin,
+                title    = a.name or aid,
+                subtitle = subtitle,
+                accent   = isBuiltin and "rgba(140,145,165,140)" or "rgba(100,160,255,191)",
+                onClick  = function() openActionDialog(aid, refresh, isBuiltin) end,
+                onDelete = (not isBuiltin) and function()
+                    if Mux.deleteDeclarativeAction then Mux.deleteDeclarativeAction(aid) end
+                    refresh()
+                end or nil,
+                deleteTooltip = (not isBuiltin) and "Delete this action" or nil,
+            }
         end
     end
 
@@ -955,99 +1017,201 @@ local function buildActionEditor(target, bg)
 end
 
 -- ── Condition editor (Settings → Muxlet → Conditions) ─────────────────────────
--- Define named conditions from a base type (the primitives in Mux.conditionTypes)
--- plus its parameters. Named conditions populate the rule "When" dropdown. Mirrors
--- the action editor: identity, base type + params, save/delete, and a list of saved
--- + built-in (read-only) conditions.
+-- Named conditions wrap a base type (the primitives in Mux.conditionTypes) plus
+-- its parameters, and populate the rule "When" dropdown. The panel (below) shows
+-- a compact, recognizable list of saved + built-in conditions; creating or
+-- editing one happens in a focused popup (openConditionDialog) that only
+-- persists when Save is clicked — Cancel discards the draft with no side effects.
 -- Parameter rows come from each condition type's `fields` spec (conditional.lua),
 -- so new types need no editor changes here.
-local function _ceParamRows(cond)
-    return Mux._conditionParamRows(cond)
+
+-- Per-type accent colour for the list's left edge stripe — a quick visual cue
+-- for what kind of signal a condition watches, at a glance. Alpha is 0-255
+-- (Qt stylesheet rgba(), NOT CSS3's 0.0-1.0 — a fractional alpha fails to parse
+-- and the widget falls back to Qt's default white background).
+local _condTypeAccent = {
+    always        = "rgba(140,145,165,140)",
+    gmcp_exists   = "rgba(100,160,255,191)",
+    gmcp_equals   = "rgba(100,160,255,191)",
+    gmcp_contains = "rgba(100,160,255,191)",
+    event_fired   = "rgba(210,180,70,191)",
+    connected     = "rgba(80,180,80,191)",
+    connecting    = "rgba(220,190,80,191)",
+    disconnected  = "rgba(210,90,90,191)",
+    line_match    = "rgba(90,200,190,191)",
+}
+
+local function _condTypeLabel(t)
+    for _, entry in ipairs(Mux.conditionTypes) do
+        if entry.value == t then return entry.label end
+    end
+    return t or "?"
 end
 
-local function buildConditionEditor(target, bg)
-  local ok, err = pcall(function()
-    if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
-    if not target._ceDraft then target._ceDraft = { id = "", label = "", cond = { type = "gmcp_exists" } }; target._ceId = nil end
-    local d = target._ceDraft
-    local function refresh() customRefresh(target) end
-    local function loadDraft(id)
-        local s = Mux.getDeclarativeCondition and Mux.getDeclarativeCondition(id)
-        if not s then return end
-        local cond = {}; for k, v in pairs(s.cond or {}) do cond[k] = v end
-        target._ceDraft = { id = s.id, label = s.label or s.id, cond = cond }
-        target._ceId = id
-    end
 
+-- ── New/Edit Condition dialog ──────────────────────────────────────────────────
+-- A focused popup: identity + base type + type-specific parameters, with Save
+-- (persists), Cancel (discards the draft), and — when editing — Delete. Nothing
+-- is written to Mux._declConditions until Save is clicked.
+--
+-- Built directly on d:mountForm (no Mux.registerContent/_applyContent) — matching
+-- contentLibrary/buttons.lua and contentLibrary/capture.lua, the two existing
+-- mountForm-based dialogs. _applyContent briefly swaps target.content for a slot
+-- container sized to the dialog's PRE-fitContent geometry; mountForm's internal
+-- ScrollBox is built against that stale small size and never catches up when
+-- fitContent grows the outer frame afterward, leaving most of the dialog blank
+-- (Qt's bare white showing through past the undersized content widget).
+-- readOnly=true renders every field (including a built-in's fixed base type)
+-- as plain text via the "readOnly" display, so a built-in condition can be
+-- inspected in the exact same dialog without exposing any editable control.
+local function _buildConditionDialogSpecs(d, editId, rebuild, readOnly)
     local specs = {}
-    if target._ceViewId then
-        local v = Mux.getCondition and Mux.getCondition(target._ceViewId)
-        specs[#specs+1] = { type = "divider", label = "Built-in condition (read-only)" }
-        specs[#specs+1] = { label = "ID",   type = "readOnly", readFn = function() return target._ceViewId end }
-        specs[#specs+1] = { label = "Name", type = "readOnly", readFn = function() return (v and v.label) or target._ceViewId end }
-        specs[#specs+1] = { label = "Type", type = "readOnly", readFn = function() return (v and v.cond and v.cond.type) or "" end }
-        specs[#specs+1] = { type = "divider", label = "Built-ins can't be edited — pick them in a rule's When, or build your own below." }
-        specs[#specs+1] = { type = "button", label = "+ New condition", _noReset = true,
-            onClick = function() target._ceViewId = nil; target._ceDraft = { id = "", label = "", cond = { type = "gmcp_exists" } }; target._ceId = nil; refresh() end }
+    if editId then
+        specs[#specs+1] = { label = "ID", type = "readOnly", readFn = function() return d.id end }
     else
-        if target._ceId then
-            specs[#specs+1] = { label = "ID", type = "readOnly", readFn = function() return d.id or target._ceId end }
-        else
-            specs[#specs+1] = { label = "ID", type = "text", desc = "short unique id, e.g. in_combat",
-                readFn = function() return d.id or "" end, writeFn = function(v) d.id = (v or ""):gsub("%s+", "") end }
-        end
+        specs[#specs+1] = { label = "ID", type = "text", desc = "short unique id, e.g. in_combat",
+            readFn = function() return d.id or "" end, writeFn = function(v) d.id = (v or ""):gsub("%s+", "") end }
+    end
+    if readOnly then
+        specs[#specs+1] = { label = "Name", type = "readOnly", readFn = function() return d.label end }
+        specs[#specs+1] = { label = "Base type", type = "readOnly", readFn = function() return _condTypeLabel(d.cond.type) end }
+    else
         specs[#specs+1] = { label = "Name", type = "text", desc = "shown in the When dropdown",
             readFn = function() return d.label or "" end, writeFn = function(v) d.label = v end }
         specs[#specs+1] = { label = "Base type", type = "array", display = "dropdown",
             desc = "what kind of signal this watches", options = Mux.conditionTypes,
             readFn = function() return d.cond.type or "gmcp_exists" end,
-            writeFn = function(t) d.cond = { type = t }; refresh() end }
+            writeFn = function(t) d.cond = { type = t }; rebuild() end }
+    end
+    local prs = Mux._conditionParamRows(d.cond)
+    if #prs > 0 then
         specs[#specs+1] = { type = "divider", label = "Parameters" }
-        local prs = _ceParamRows(d.cond)
-        if #prs == 0 then specs[#specs+1] = { type = "divider", label = "— no parameters —" } end
-        for _, r in ipairs(prs) do specs[#specs+1] = r end
+        for _, r in ipairs(prs) do
+            if readOnly then r.readOnly = true end
+            specs[#specs+1] = r
+        end
+    end
+    return specs
+end
 
+-- readOnly=true (built-ins) shows the same layout with a single Close button —
+-- no Save/Cancel/Delete, since nothing here is editable.
+local function openConditionDialog(editId, onDone, readOnly)
+    local dlg = Mux.createDialog({
+        title = readOnly and "Condition (built-in)" or (editId and "Edit Condition" or "New Condition"),
+        width = 420, height = 260, resizable = true, contextMenu = false,
+    })
+    if not dlg then return end
+    if dlg.contentBg then dlg.contentBg:echo(""); dlg.contentBg:hide() end
+
+    local d
+    if editId then
+        -- Mux.getDeclarativeCondition only checks user-created conditions; a
+        -- built-in (e.g. "Always", "Connected") isn't in that table, so it
+        -- always resolved to nil here and silently fell back to the "gmcp_exists"
+        -- default below — showing every built-in as "GMCP has value" with a
+        -- blank path. Mux.getCondition checks both declared AND built-in tables.
+        local s = Mux.getCondition and Mux.getCondition(editId)
+        local cond = {}
+        if s then for k, v in pairs(s.cond or {}) do cond[k] = v end end
+        d = { id = editId, label = (s and s.label) or editId, cond = next(cond) and cond or { type = "gmcp_exists" } }
+    else
+        d = { id = "", label = "", cond = { type = "gmcp_exists" } }
+    end
+
+    local rebuild
+    local formHandle
+    rebuild = function()
+        local specs = _buildConditionDialogSpecs(d, editId, rebuild, readOnly)
         specs[#specs+1] = { type = "divider", label = "" }
-        specs[#specs+1] = { type = "button", label = (target._ceId and "Save changes" or "Create condition"), _noReset = true,
-            onClick = function()
-                local id = (target._ceId or d.id or ""):gsub("%s+", "")
-                if id == "" then cecho("\n<red>[mux]<reset> Give the condition an ID first.\n"); return end
-                if not target._ceId and Mux.getDeclarativeCondition and Mux.getDeclarativeCondition(id) then
-                    cecho("\n<red>[mux]<reset> A condition with that ID already exists.\n"); return
-                end
-                Mux.createDeclarativeCondition({ id = id, label = (d.label ~= "" and d.label or id), cond = d.cond })
-                target._ceId = id
-                cecho(string.format("\n<green>[mux]<reset> Condition '<cyan>%s<reset>' saved.\n", id)); refresh()
-            end }
-        if target._ceId then
-            specs[#specs+1] = { type = "button", label = "Delete this condition", _noReset = true,
-                onClick = function()
-                    if Mux.deleteDeclarativeCondition then Mux.deleteDeclarativeCondition(target._ceId) end
-                    target._ceDraft, target._ceId = nil, nil; refresh()
-                end }
-        end
-        specs[#specs+1] = { type = "button", label = "+ New condition", _noReset = true,
-            onClick = function() target._ceDraft = { id = "", label = "", cond = { type = "gmcp_exists" } }; target._ceId = nil; refresh() end }
-    end
-
-    specs[#specs+1] = { type = "divider", label = "Saved conditions (click to edit)" }
-    local anyUser, builtins = false, {}
-    for _, c in ipairs(Mux.listConditions and Mux.listConditions() or {}) do
-        if c.builtin then builtins[#builtins+1] = c
+        if readOnly then
+            specs[#specs+1] = { type = "button", label = "Close", _noReset = true,
+                onClick = function() dlg:close() end }
         else
-            anyUser = true
-            local cid = c.id
-            specs[#specs+1] = { type = "button", label = c.label .. "   ·   " .. cid, _noReset = true,
-                onClick = function() target._ceViewId = nil; loadDraft(cid); refresh() end }
+            specs[#specs+1] = { type = "button", style = "primary", _noReset = true,
+                label = editId and "Save changes" or "Create condition",
+                onClick = function()
+                    -- Force any not-yet-committed field edits (typed but not Enter'd/
+                    -- Applied) into the draft before validating — Save/Create is the
+                    -- only commit point users should need in a one-shot create/edit
+                    -- dialog like this one.
+                    if formHandle and formHandle.commitAll then formHandle.commitAll() end
+                    local id = (editId or d.id or ""):gsub("%s+", "")
+                    if id == "" then cecho("\n<red>[mux]<reset> Give the condition an ID first.\n"); return end
+                    if not editId and Mux.getCondition and Mux.getCondition(id) then
+                        cecho("\n<red>[mux]<reset> A condition with that ID already exists (including built-ins).\n"); return
+                    end
+                    Mux.createDeclarativeCondition({ id = id, label = (d.label ~= "" and d.label or id), cond = d.cond })
+                    dlg:close()
+                    if onDone then onDone() end
+                end }
+            specs[#specs+1] = { type = "button", label = "Cancel", _noReset = true,
+                onClick = function() dlg:close() end }
+            if editId then
+                specs[#specs+1] = { type = "divider", label = "" }
+                specs[#specs+1] = { type = "button", style = "danger", label = "Delete this condition", _noReset = true,
+                    onClick = function()
+                        if Mux.deleteDeclarativeCondition then Mux.deleteDeclarativeCondition(editId) end
+                        dlg:close()
+                        if onDone then onDone() end
+                    end }
+            end
         end
+        -- hideApply: no per-field Apply button — typing plus Save/Create is the
+        -- only commit path (commitAll() above forces the current text in on click).
+        formHandle = dlg:mountForm(specs, { prefix = dlg._gid .. "_ced", showReset = false, hideApply = true })
     end
-    if not anyUser then specs[#specs+1] = { type = "divider", label = "— none yet —" } end
-    if #builtins > 0 then
-        specs[#specs+1] = { type = "divider", label = "Built-in conditions (read-only)" }
-        for _, c in ipairs(builtins) do
-            local cid = c.id
-            specs[#specs+1] = { type = "button", label = c.label .. "   ·   " .. cid, _noReset = true,
-                onClick = function() target._ceViewId = cid; refresh() end }
+    rebuild()
+end
+
+-- ── Conditions panel (the Settings tab body) ───────────────────────────────────
+-- A header action plus one unified list — user-created conditions (clickable to
+-- edit, with a delete icon) and built-ins (dimmed, no delete icon) side by side.
+-- Clicking any row opens the same New/Edit dialog; built-ins open it read-only.
+local function buildConditionEditor(target, bg)
+  local ok, err = pcall(function()
+    if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
+    local function refresh() customRefresh(target) end
+
+    -- User conditions first (most actionable), built-ins after, in one list.
+    local userConds, builtinConds = {}, {}
+    for _, c in ipairs(Mux.listConditions and Mux.listConditions() or {}) do
+        if c.builtin then builtinConds[#builtinConds+1] = c else userConds[#userConds+1] = c end
+    end
+    local allConds = {}
+    for _, c in ipairs(userConds)    do allConds[#allConds+1] = c end
+    for _, c in ipairs(builtinConds) do allConds[#allConds+1] = c end
+
+    -- Every row — header controls AND condition rows — is a real spec in this
+    -- one list, so Mux.ui.buildForm's own relayout (collapse/expand, dialog
+    -- auto-fit) accounts for all of it automatically, exactly like every other
+    -- Settings tab. A previous version hand-rendered the list rows outside the
+    -- spec system for a custom look; buildForm's relayout only ever knew about
+    -- the header specs, so every resize/collapse silently clobbered it back
+    -- down. listRow (widgets.lua) gives the same visual result as a normal spec.
+    local specs = {
+        { type = "divider", label = "Named conditions are reusable signals — pick one in a rule's \"When\" dropdown." },
+        { type = "button", style = "primary", label = "+ New Condition", _noReset = true,
+          onClick = function() openConditionDialog(nil, refresh) end },
+        { type = "divider", label = "Conditions" },
+    }
+    if #allConds == 0 then
+        specs[#specs+1] = { type = "divider", label = "— none yet — click \"+ New Condition\" to add one —" }
+    else
+        for _, c in ipairs(allConds) do
+            local cid, isBuiltin = c.id, c.builtin
+            specs[#specs+1] = { type = "listRow", rowHeight = 44, dim = isBuiltin,
+                title    = c.label,
+                subtitle = string.format("%s   ·   %s%s", c.id, _condTypeLabel(c.cond and c.cond.type),
+                    isBuiltin and "   ·   built-in" or ""),
+                accent   = _condTypeAccent[c.cond and c.cond.type] or "rgba(140,145,165,128)",
+                onClick  = function() openConditionDialog(cid, refresh, isBuiltin) end,
+                onDelete = (not isBuiltin) and function()
+                    if Mux.deleteDeclarativeCondition then Mux.deleteDeclarativeCondition(cid) end
+                    refresh()
+                end or nil,
+                deleteTooltip = (not isBuiltin) and "Delete this condition" or nil,
+            }
         end
     end
 
@@ -1057,8 +1221,7 @@ local function buildConditionEditor(target, bg)
     local contentLbl = Geyser.Label:new({ name = "mux_ce_cl", x = 0, y = 0, width = cw - 8, height = math.max(totalH, 10) }, scrollBox)
     contentLbl:setStyleSheet(string.format("background:%s; border:none;", bg))
     target._muxContentH = totalH
-    local formHandle
-    formHandle = Mux.ui.buildForm(contentLbl, specs, {
+    local formHandle = Mux.ui.buildForm(contentLbl, specs, {
         width = cw - 8, prefix = "mxce",
         rowHeight = settingsFormOpts.rowHeight,
         widgetWidth = settingsFormOpts.widgetWidth, widgetHeight = settingsFormOpts.widgetHeight,

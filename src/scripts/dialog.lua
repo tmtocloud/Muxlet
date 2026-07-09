@@ -358,6 +358,14 @@ function MuxDialog:fitContent(contentH)
         local y = self.floatY or 0
         if y + h > (sh or 0) then self.floatY = math.max(0, (sh or 0) - h) end
         if self.outer and self.outer.reposition then self.outer:reposition() end
+        -- Resizing self.outer does not, by itself, push the new pixel size down
+        -- through self.frame/self.content — Geyser only recomputes percentage-based
+        -- child geometry on an explicit pass (see Mux._reflowContent's own comment).
+        -- Without this, mountForm's ScrollBox (100% of self.content) keeps the
+        -- dialog's PRE-resize content-area size, so growing/shrinking a dialog via
+        -- fitContent leaves most of the new frame showing bare Qt background
+        -- instead of the scroll body.
+        if Mux._reflowContent then pcall(Mux._reflowContent, self) end
     end
 end
 

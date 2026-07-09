@@ -1319,3 +1319,72 @@ function Mux._showTitlebarIconStack(x, y, w, h, items)
         items = mapped, scrim = true, dismissOnClick = true,
     })
 end
+
+-- ── Lua source serializer ───────────────────────────────────────────────────
+-- Turns a plain data value (nested tables/strings/numbers/booleans) into
+-- ready-to-paste Lua source. Shared by every "export as static Lua" feature
+-- (workspaces, declarative conditions/actions) so package developers get one
+-- consistent, round-trippable output format wherever they export from.
+local function isIdentifier(key)
+    return type(key) == "string" and key:match("^[A-Za-z_][A-Za-z0-9_]*$") ~= nil
+end
+
+local function luaKey(key)
+    if isIdentifier(key) then return key end
+    return string.format("[%q]", key)
+end
+
+local function isArrayTable(t)
+    local count = 0
+    for k in pairs(t) do
+        if type(k) ~= "number" then return false end
+        count = count + 1
+    end
+    return count == #t
+end
+
+function Mux._serializeLua(value, indent)
+    local valueType = type(value)
+    if value == nil then return "nil" end
+    if valueType == "boolean" or valueType == "number" then return tostring(value) end
+    if valueType == "string" then return string.format("%q", value) end
+    if valueType ~= "table" then
+        error("Mux._serializeLua: cannot serialize value of type " .. valueType)
+    end
+
+    if next(value) == nil then return "{}" end
+
+    local pad   = string.rep("    ", indent)
+    local padIn = string.rep("    ", indent + 1)
+    local lines = {}
+
+    if isArrayTable(value) then
+        for _, v in ipairs(value) do
+            lines[#lines + 1] = padIn .. Mux._serializeLua(v, indent + 1)
+        end
+    else
+        local keys = {}
+        for k in pairs(value) do keys[#keys + 1] = k end
+        table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+        for _, k in ipairs(keys) do
+            lines[#lines + 1] = padIn .. luaKey(k) .. " = " .. Mux._serializeLua(value[k], indent + 1)
+        end
+    end
+
+    return "{\n" .. table.concat(lines, ",\n") .. "\n" .. pad .. "}"
+end
+
+-- Shared "write a generated Lua export file + echo the result" tail, used by
+-- every export command (workspaces, conditions, actions) so output location,
+-- error handling, and the success message all stay consistent.
+function Mux._writeExportFile(filename, lua)
+    local outPath = Mux._persistentDir .. "/" .. filename
+    local f, err = io.open(outPath, "w")
+    if not f then
+        Mux._echo(string.format("\n<red>[Muxlet]<reset> Could not write export file: %s\n", tostring(err)))
+        return nil
+    end
+    f:write(lua)
+    f:close()
+    return outPath
+end

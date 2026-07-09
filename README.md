@@ -88,13 +88,32 @@ change, so your layout survives Mudlet restarts.
 | `mux workspace load <name>` | Restore a saved workspace |
 | `mux workspace list` / `mux workspaces` | List saved workspaces |
 | `mux workspace delete <name>` | Remove a saved workspace |
+| `mux workspace export <name>` | Write the workspace as ready-to-paste Lua, bundling any named conditions/actions its rules depend on — see [Exporting your work](#exporting-your-work-for-a-package) |
+
+### Conditions & Actions
+
+Named conditions and actions created from Settings → Conditions/Actions are
+profile-local data (`rules.json`) until exported — see
+[Exporting your work](#exporting-your-work-for-a-package).
+
+| Command | Description |
+|---------|-------------|
+| `mux conditions list` | List named (non-built-in) conditions |
+| `mux conditions export <id>` | Write one condition as ready-to-paste Lua |
+| `mux conditions export all` | Write every named condition to one file |
+| `mux actions list` | List named (non-built-in) actions |
+| `mux actions export <id>` | Write one action as ready-to-paste Lua |
+| `mux actions export all` | Write every named action to one file |
+| `mux export` | Write every named theme, condition, action, and workspace to one file — for a package offering a full menu of possibilities |
 
 ### Themes
 
 | Command | Description |
 |---------|-------------|
 | `mux theme [name]` | Show the active theme, or switch to a named one |
-| `mux theme save <name>` | Save the current look (theme + your global tweaks) as a new named theme |
+| `mux theme save <name>` | Save the current look (theme + your global tweaks) as a new named theme — also writes a ready-to-paste Lua export |
+| `mux theme export <name>` | Re-export an already-saved theme on demand |
+| `mux theme export all` | Write every named theme to one file |
 | `mux themes` | List all registered themes |
 
 Built-in themes: **dark** (default) and **light**.
@@ -518,6 +537,10 @@ Mux.createDeclarativeAction({ id = "flee", label = "Flee",
 Mux.listConditions() ; Mux.listActions()      -- for building your own UI
 ```
 
+`Mux.createDeclarativeCondition`/`Mux.createDeclarativeAction` calls like these are
+exactly what `mux conditions export`/`mux actions export` generate from ones you
+built interactively — see [Exporting your work](#exporting-your-work-for-a-package).
+
 ## Theming
 
 Styling resolves through a four-level **token** cascade. For any token key, the value
@@ -617,13 +640,59 @@ Mux.deleteWorkspace(name)
 Muxlet auto-saves the live layout to `current` shortly after any structural change,
 including each pane/tab's content (via your `serialize`/`restore`).
 
+## Exporting your work for a package
+
+Design live — build a workspace, create named conditions/actions from Settings →
+Conditions/Actions, save a look with `mux theme save`, wire up rules referencing them
+— then export what you built as ready-to-paste Lua and drop it into your package's own
+source (after your `onMuxletReady` bootstrap block,
+[above](#bootstrapping-from-your-own-package), so `Mux` already exists). Everything
+below writes to Muxlet's persistent directory and echoes the path; nothing installs
+itself into your package automatically — that step stays manual, since it depends on
+your own package's build layout.
+
+Named conditions/actions/themes only round-trip through profile-local storage
+(`rules.json`, `user_themes.json`) until exported — a workspace referencing one (a rule's
+`{ ref = "id" }`/action id, or `def.theme`) that was never exported ships broken: the
+reference silently resolves to an "always" condition (or a theme-switch error) on a
+profile that never created that id, with no error surfaced to the person who shipped it.
+
+```
+mux workspace export <name>   -- the workspace, PLUS its theme (if user-created) and
+                               -- the Mux.createDeclarativeCondition/createDeclarativeAction
+                               -- calls its rules actually reference — self-contained
+
+mux conditions export <id>    -- one named condition, standalone
+mux conditions export all     -- every named condition in this profile
+mux actions export <id>       -- one named action, standalone
+mux actions export all        -- every named action in this profile
+mux theme export <name>       -- one named theme, standalone (mux theme save already
+                               -- does this automatically too)
+mux theme export all          -- every named theme in this profile
+
+mux export                    -- EVERYTHING non-built-in at once (all named themes +
+                               -- conditions + actions + workspaces), no dependency
+                               -- filtering — for a package that ships a whole
+                               -- library and lets the end user pick, the way
+                               -- fed2-tools' Build Your Own Workspace mode does
+```
+
+`mux workspace export` is the common case: one self-contained file for one workspace.
+`mux export` is for the opposite case — you don't want a minimal bundle, you want to
+hand users the whole menu.
+
 ## Persistence
 
 - **Rules, named conditions, named actions** → `rules.json`.
+- **Named themes** (`mux theme save`) → `user_themes.json`.
 - **Workspaces** → the workspaces file (auto-saved `current` plus any you name).
 - **Settings** → Mudlet's per-profile setting store, under namespaces (`mux.*`).
 
 Content persists via its own `serialize`/`restore`, embedded in the workspace snapshot.
+
+All of the above is profile-local — it doesn't ship with a package on its own. See
+[Exporting your work](#exporting-your-work-for-a-package) for turning it into static
+Lua a package can carry.
 
 ---
 
