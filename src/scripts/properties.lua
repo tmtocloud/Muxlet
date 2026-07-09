@@ -958,6 +958,11 @@ Mux.registerContent("mux_properties", {
 
         local prefix   = _pendingPrefix or ("mux_prop_" .. target.id)
         _pendingPrefix = nil
+        -- Every apply() builds a fresh batch of Geyser.CommandLine field widgets
+        -- (one per text/number/code row); collected here so remove() can delete()
+        -- them instead of leaving them as live native widgets after the dialog
+        -- pane's own close() only hides its outer container.
+        target._propsCleanup = {}
         local theme    = Mux.activeTheme() or {}
         local uiTheme  = theme.ui or theme.settingsUi or {}
         local bg       = uiTheme.bg or "rgb(18,18,26)"
@@ -993,6 +998,7 @@ Mux.registerContent("mux_properties", {
                 local sb = Geyser.ScrollBox:new({
                     name = prefix .. "_sb" .. gi, x = 0, y = 0, width = "100%", height = "100%",
                 }, tab.content)
+                target._propsCleanup[#target._propsCleanup + 1] = sb
                 local fh2 = Mux.ui.formHeight(grp.rows)
                 local lbl = Geyser.Label:new({
                     name = prefix .. "_g" .. gi, x = 0, y = 0, width = tcw - 8, height = math.max(fh2, 10),
@@ -1057,6 +1063,7 @@ Mux.registerContent("mux_properties", {
             name=prefix.."_cl", x=0, y=0, width=cw, height=contentH,
         }, target.content)
         contentLbl:setStyleSheet("background:" .. bg .. "; border:none;")
+        target._propsCleanup[#target._propsCleanup + 1] = contentLbl
 
         local fh = Mux.ui.buildForm(contentLbl, rows, { width = cw, prefix = prefix })
         target._propsFormHandle = fh
@@ -1066,9 +1073,22 @@ Mux.registerContent("mux_properties", {
             if target.outer then target.outer:reposition() end
         end)
     end,
-    remove = function(_target)
-        -- Widgets are children of the dialog pane's content container and are
-        -- torn down when that pane closes; nothing to clean up here.
+    remove = function(target)
+        -- The dialog pane's own close() only hides its outer container (see
+        -- MuxPane:close); it never deletes descendants. That's fine for plain
+        -- Labels, but every form row here is backed by a real native
+        -- Geyser.CommandLine (createCommandLine + a per-instance history file),
+        -- and a live properties dialog rebuilds this content on every polled
+        -- state change. Left hidden-not-deleted, those pile up fast enough to
+        -- exhaust native widget resources and crash Mudlet outright, not just
+        -- leak memory. Container:delete() is recursive, so deleting each
+        -- top-level root here also deletes every CommandLine/Label built inside it.
+        if target._propsCleanup then
+            for _, root in ipairs(target._propsCleanup) do
+                pcall(function() root:delete() end)
+            end
+            target._propsCleanup = nil
+        end
     end,
 })
 
