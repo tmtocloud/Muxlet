@@ -175,6 +175,18 @@ function Mux.applyWorkspace(name)
                     p.convertible = true
                     p:_detachToFloat()
                     p.convertible = savedConvertible
+                    -- Resolve this pane's rules (e.g. a "hide when condition unmet" rule)
+                    -- BEFORE content is applied below. MuxPane:init already deferred its
+                    -- own first evaluation by a tick (tempTimer(0,...), so the pane is
+                    -- fully placed first) -- but content restoration here runs earlier,
+                    -- in this same tick, and would otherwise render+show its content one
+                    -- full tick before the hide takes effect. Evaluating now (rule wiring
+                    -- from init already happened synchronously) lets _conditionHidden be
+                    -- set before Mux._applyContent ever shows anything, so a pane whose
+                    -- rule says "start hidden" never flashes/sticks visible first.
+                    if p.rules and #p.rules > 0 and Mux._evaluateRules then
+                        Mux._evaluateRules(p, true)
+                    end
                     -- Apply restored content HERE: floating panes are rebuilt after
                     -- the embedded content-apply pass below has already run, so their
                     -- _pendingContent would otherwise never be applied.
