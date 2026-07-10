@@ -95,34 +95,86 @@ end
 local ANCHOR_STACK_GAP = 6
 
 -- Key identifying the shared line an edge-anchored pane sits on, plus which
--- axis it's free to slide along that line (its "along" offset). Corner
--- anchors (both v and h set) pin both axes to a fixed point already and have
--- no free axis to stack along, so they're excluded (returns nil).
+-- axis it's free to slide along that line (its "along" offset). nil for a
+-- corner anchor (both v and h set) — those pin both axes to a fixed point and
+-- are handled separately below.
 local function _anchorStackKey(A)
     if A.v and not A.h then return "v|" .. tostring(A.v.ref) .. "|" .. A.v.targetEdge .. "|" .. A.v.myEdge end
     if A.h and not A.v then return "h|" .. tostring(A.h.ref) .. "|" .. A.h.targetEdge .. "|" .. A.h.myEdge end
     return nil
 end
 
+-- Resolve 1D overlap among `entries` ({pos=, size=, priority=, fixed=}) along one
+-- axis, writing each entry's resolved coordinate to `.finalPos`. Entries are
+-- placed in priority order (highest first; ties broken by natural position in
+-- the given direction), each keeping its own preferred `pos` unless that would
+-- overlap an already-placed entry, in which case it's nudged just far enough
+-- to clear every entry it collides with. `fixed` entries (an already-resolved
+-- corner anchor lending its footprint to an edge line — see below) are never
+-- moved here; they're placed verbatim but still block later, lower-priority
+-- entries. `dir` is 1 to push toward increasing pos (down/right), -1 to push
+-- toward decreasing pos (up/left, e.g. away from a bottom/right corner).
+local function _placePriorityOrdered(entries, dir, gap)
+    table.sort(entries, function(a, b)
+        if a.priority ~= b.priority then return a.priority > b.priority end
+        return (dir * a.pos) < (dir * b.pos)
+    end)
+    local placed = {}   -- already-finalized {lo, hi} boxes, in placement order
+    for _, e in ipairs(entries) do
+        local pos = e.pos
+        if not e.fixed then
+            -- Bounded rescan: clearing one overlap can newly overlap a box placed
+            -- earlier at a different position; #placed passes is enough to settle
+            -- with the handful of anchored panes this ever deals with.
+            for _ = 1, #placed do
+                local moved = false
+                local lo, hi = pos, pos + dir * e.size
+                if dir < 0 then lo, hi = hi, lo end
+                for _, box in ipairs(placed) do
+                    if lo < box.hi and hi > box.lo then
+                        pos = (dir > 0) and (box.hi + gap) or (box.lo - gap - e.size)
+                        moved = true
+                    end
+                end
+                if not moved then break end
+            end
+        end
+        local lo, hi = pos, pos + dir * e.size
+        if dir < 0 then lo, hi = hi, lo end
+        placed[#placed + 1] = { lo = lo, hi = hi }
+        e.finalPos = pos
+    end
+end
+
 -- Re-derive every pane currently sitting at its anchor. Cheap for the common
 -- (unanchored) case; called from the reposition cascade so anchored panes track
 -- split drags, resizes, and window changes.
 --
--- Panes that share an anchor line (same ref/edge/myEdge) are otherwise free to
--- overlap along it, so before moving them each stacking group is swept in
--- preferred-position order: a pane keeps its own saved alongV/alongH unless
--- the sibling ahead of it in that order would overlap it, in which case it's
--- nudged just far enough to clear — respecting the user's placement except
--- where a currently-visible sibling forces a change. Condition-hidden panes
--- are skipped entirely (they occupy no space); becoming visible re-enters this
--- sweep via _reflowConditionLayout.
+-- Panes that share an anchor line (same ref/edge/myEdge) — or, for corner
+-- anchors, the exact same corner — are otherwise free to overlap, so before
+-- moving them each such group is resolved in anchor.priority order (default 0,
+-- higher wins): a pane keeps its own saved alongV/alongH/corner spot unless a
+-- higher-or-equal-priority sibling ahead of it in that order already occupies
+-- it, in which case it's nudged just far enough to clear — respecting the
+-- user's placement except where a currently-visible sibling forces a change.
+--
+-- Corner anchors (both v and h set) always outrank edge anchors sharing one of
+-- their two lines: a corner pane's line-of-conflict is resolved first (against
+-- any other pane pinned to that exact corner, stacked along Y — away from
+-- whichever vertical side it hugs), then it's handed to the matching v-line
+-- and/or h-line edge groups as a fixed, unmovable occupant those groups must
+-- build around.
+--
+-- Condition-hidden panes are skipped entirely (they occupy no space); becoming
+-- visible re-enters this sweep via _reflowConditionLayout.
 --
 -- A light move() only (no reposition) to stay fast; no recursion since move()
 -- doesn't re-enter the cascade.
 function Mux._reanchorAll()
     if not Mux._panes then return end
     local sw, sh = getMainWindowSize()
-    local groups = {}   -- stackKey → { axis=.., {pane=,x=,y=,w=,h=,pref=}, ... }
+    local corners    = {}   -- cornerKey → { {pane=,x=,y=,w=,h=,priority=,towardBottom=}, ... }
+    local edgeGroups = {}   -- lineKey   → { axis=, entries={ {pane=,pos=,size=,priority=,fixed=}, ... } }
 
     local function applyIfMoved(p, X, Y)
         if X ~= p.floatX or Y ~= p.floatY then
@@ -131,16 +183,36 @@ function Mux._reanchorAll()
         end
     end
 
+    local function edgeGroup(key, axis)
+        local g = edgeGroups[key]
+        if not g then g = { axis = axis, entries = {} }; edgeGroups[key] = g end
+        return g
+    end
+
     for _, p in pairs(Mux._panes) do
         if p.anchor and p._atAnchor and p.floating and not p._conditionHidden then
             local X, Y, W, H = Mux._anchorGeom(p)
             if X then
-                local key = _anchorStackKey(p.anchor)
-                if key then
+                local A = p.anchor
+                local priority = A.priority or 0
+                if A.v and A.h then
+                    local cornerKey = "c|" .. tostring(A.v.ref) .. "|" .. A.v.targetEdge .. "|" .. A.v.myEdge
+                        .. "|" .. tostring(A.h.ref) .. "|" .. A.h.targetEdge .. "|" .. A.h.myEdge
+                    local grp = corners[cornerKey]
+                    if not grp then grp = {}; corners[cornerKey] = grp end
+                    grp[#grp + 1] = {
+                        pane = p, x = X, y = Y, w = W, h = H, priority = priority,
+                        towardBottom = (A.h.targetEdge == "bottom"),
+                        vKey = "v|" .. tostring(A.v.ref) .. "|" .. A.v.targetEdge .. "|" .. A.v.myEdge,
+                        hKey = "h|" .. tostring(A.h.ref) .. "|" .. A.h.targetEdge .. "|" .. A.h.myEdge,
+                    }
+                elseif A.v or A.h then
+                    local key  = _anchorStackKey(A)
                     local axis = key:sub(1, 1)
-                    local g = groups[key]
-                    if not g then g = { axis = axis }; groups[key] = g end
-                    g[#g + 1] = { pane = p, x = X, y = Y, w = W, h = H, pref = (axis == "v" and Y or X) }
+                    local g    = edgeGroup(key, axis)
+                    g.entries[#g.entries + 1] = { pane = p, x = X, y = Y, w = W, h = H,
+                        pos = (axis == "v" and Y or X), size = (axis == "v" and H or W),
+                        priority = priority, fixed = false }
                 else
                     applyIfMoved(p, X, Y)
                 end
@@ -148,27 +220,48 @@ function Mux._reanchorAll()
         end
     end
 
-    for key, g in pairs(groups) do
-        table.sort(g, function(a, b) return a.pref < b.pref end)
-        if #g > 1 then
+    -- Resolve same-corner conflicts first, then lend each corner pane's
+    -- resolved footprint to its matching edge line(s) as a fixed occupant.
+    for cornerKey, grp in pairs(corners) do
+        local dir = grp[1].towardBottom and -1 or 1
+        local placeEntries = {}
+        for _, e in ipairs(grp) do
+            placeEntries[#placeEntries+1] = { pos = e.y, size = e.h, priority = e.priority, src = e }
+        end
+        _placePriorityOrdered(placeEntries, dir, ANCHOR_STACK_GAP)
+        if #grp > 1 then Mux._log("reanchor corner %s: %d panes", cornerKey, #grp) end
+        for _, pe in ipairs(placeEntries) do
+            local e = pe.src
+            local Y = math.max(0, math.min(pe.finalPos, math.max(0, sh - e.h)))
+            applyIfMoved(e.pane, e.x, Y)
+            local vg, hg = edgeGroup(e.vKey, "v"), edgeGroup(e.hKey, "h")
+            vg.entries[#vg.entries + 1] = { pane = e.pane, pos = Y,   size = e.h, priority = math.huge, fixed = true }
+            hg.entries[#hg.entries + 1] = { pane = e.pane, pos = e.x, size = e.w, priority = math.huge, fixed = true }
+        end
+    end
+
+    for key, g in pairs(edgeGroups) do
+        if #g.entries > 1 then
             local ids = {}
-            for _, e in ipairs(g) do ids[#ids+1] = tostring(e.pane.id) .. "@" .. tostring(e.pref) end
+            for _, e in ipairs(g.entries) do
+                ids[#ids+1] = tostring(e.pane.id) .. "@" .. tostring(e.pos) .. (e.fixed and "(fixed)" or "")
+            end
             Mux._log("reanchor group %s: %s", key, table.concat(ids, ", "))
         end
-        local cursor = nil
-        for _, e in ipairs(g) do
-            local X, Y = e.x, e.y
-            if g.axis == "v" then
-                Y = cursor and math.max(Y, cursor) or Y
-                Y = math.min(Y, math.max(0, sh - e.h))
-                cursor = Y + e.h + ANCHOR_STACK_GAP
-            else
-                X = cursor and math.max(X, cursor) or X
-                X = math.min(X, math.max(0, sw - e.w))
-                cursor = X + e.w + ANCHOR_STACK_GAP
+        _placePriorityOrdered(g.entries, 1, ANCHOR_STACK_GAP)
+        for _, e in ipairs(g.entries) do
+            -- A fixed (corner-derived) entry already has its final on-screen
+            -- position applied above; only edge-only entries move here.
+            if not e.fixed then
+                local X, Y = e.x, e.y
+                if g.axis == "v" then
+                    Y = math.max(0, math.min(e.finalPos, math.max(0, sh - e.h)))
+                else
+                    X = math.max(0, math.min(e.finalPos, math.max(0, sw - e.w)))
+                end
+                if #g.entries > 1 then Mux._log("  %s -> (%d, %d)", tostring(e.pane.id), X, Y) end
+                applyIfMoved(e.pane, X, Y)
             end
-            if #g > 1 then Mux._log("  %s -> (%d, %d)", tostring(e.pane.id), X, Y) end
-            applyIfMoved(e.pane, X, Y)
         end
     end
 end
@@ -255,10 +348,12 @@ function Mux._anchorHitTest(targets, ghostTargets, gx, gy, W, H)
             }
         elseif nearL or nearR then
             local along = Mux._clamp(gy - t.y - H / 2, 0, math.max(0, t.h - H))
-            A = { v = { ref = ref, targetEdge = nearL and "left" or "right", myEdge = nearL and "left" or "right" }, alongV = along }
+            A = { v = { ref = ref, targetEdge = nearL and "left" or "right", myEdge = nearL and "left" or "right" },
+                  alongV = along }
         elseif nearT or nearB then
             local along = Mux._clamp(gx - t.x - W / 2, 0, math.max(0, t.w - W))
-            A = { h = { ref = ref, targetEdge = nearT and "top" or "bottom", myEdge = nearT and "top" or "bottom" }, alongH = along }
+            A = { h = { ref = ref, targetEdge = nearT and "top" or "bottom", myEdge = nearT and "top" or "bottom" },
+                  alongH = along }
         end
         if A then
             local X, Y, w2, h2 = Mux._anchorGeom({ anchor = A, floatW = W, floatH = H, floating = true })

@@ -46,7 +46,13 @@ function Mux.raiseFloatingPanes()
     -- show() implicitly raises itself in Qt's stacking, which would otherwise
     -- bury an open dropdown even though the two never visually overlap.
     if Mux.ui and Mux.ui._activeDropdownOverlay then
-        pcall(function() Mux.ui._activeDropdownOverlay:raise() end)
+        -- raise() only restacks the overlay label itself; its option rows are
+        -- separate child widgets (Geyser.Label:new({...}, overlay)) that need
+        -- raiseAll() to come along too. Plain raise() left them blank until
+        -- the dropdown was closed and reopened (MuxPane:raise() hits this
+        -- same gotcha, which is why it uses self.outer:raiseAll() instead).
+        local ov = Mux.ui._activeDropdownOverlay
+        pcall(function() (ov.raiseAll or ov.raise)(ov) end)
     end
 end
 
@@ -344,7 +350,8 @@ function Mux.resizePaneToWidth(pane, pct)
     end
     local split, side = Mux._ancestorSplitOfDirection(pane, "h")
     if not split then
-        Mux._echo("\n<yellow>[Muxlet]<reset> This pane spans the full width — nothing to its left or right to resize against.\n")
+        Mux._echo("\n<yellow>[Muxlet]<reset> This pane spans the full width — "
+            .. "nothing to its left or right to resize against.\n")
         return
     end
     if not _setSplitForPx(split, side, targetPx, "width") then
@@ -378,7 +385,8 @@ function Mux.resizePaneToHeight(pane, pct)
     end
     local split, side = Mux._ancestorSplitOfDirection(pane, "v")
     if not split then
-        Mux._echo("\n<yellow>[Muxlet]<reset> This pane spans the full height — nothing above or below to resize against.\n")
+        Mux._echo("\n<yellow>[Muxlet]<reset> This pane spans the full height — "
+            .. "nothing above or below to resize against.\n")
         return
     end
     if not _setSplitForPx(split, side, targetPx, "height") then

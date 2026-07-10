@@ -767,6 +767,9 @@ function MuxTab:_conditionHide()
     host._tabBarBox:remove(self.label)
     self.label:hide()
     table.remove(host._tabs, idx)
+    -- Remembered so _conditionShow can restore the tab to its original slot
+    -- instead of appending it to the end of the bar.
+    self._hiddenIdx = idx
     host._hiddenTabs = host._hiddenTabs or {}
     table.insert(host._hiddenTabs, self)
     host:_relayoutTabLabels()
@@ -785,8 +788,13 @@ function MuxTab:_conditionShow()
         end
     end
     host._tabs = host._tabs or {}
-    table.insert(host._tabs, self)
+    -- Restore to the slot it was hidden from (clamped in case other tabs were
+    -- closed/added meanwhile) instead of always appending to the end.
+    local insertIdx = math.min(self._hiddenIdx or (#host._tabs + 1), #host._tabs + 1)
+    table.insert(host._tabs, insertIdx, self)
+    self._hiddenIdx = nil
     host._tabBarBox:add(self.label)
+    if insertIdx < #host._tabs then host:_syncHBoxOrder() end
     self.label:show()
     self._conditionHidden = false
     host:_relayoutTabLabels()

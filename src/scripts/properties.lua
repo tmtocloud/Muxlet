@@ -446,6 +446,27 @@ local function paneRows(pane)
             end,
         }
     end
+    if pane.anchor then
+        -- Only meaningful once actually anchored: this only matters when this
+        -- pane's line (or exact corner) is shared with another anchored pane
+        -- whose preferred spot collides with this one's — see Mux._reanchorAll.
+        rows[#rows+1] = {
+            label   = "Anchor Priority",
+            desc    = "When this pane's anchor line (or exact corner) collides with another anchored "
+                .. "pane's, the higher-priority one keeps its spot and the other is pushed aside. A corner "
+                .. "anchor always outranks a plain edge anchor sharing one of its two sides, regardless of "
+                .. "this value. Default 0.",
+            type    = "text",
+            readFn  = function() return tostring(pane.anchor.priority or 0) end,
+            writeFn = function(v)
+                local n = tonumber(v)
+                if not n then return end
+                pane.anchor.priority = (n ~= 0) and n or nil
+                if Mux._reanchorAll then Mux._reanchorAll() end
+                Mux._scheduleAutoSave()
+            end,
+        }
+    end
     rows[#rows+1] = {
         label      = "Movable",
         desc       = "Floating: drag titlebar to reposition. Embedded: required together with Convertible to drag-float",

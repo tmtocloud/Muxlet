@@ -185,6 +185,18 @@ function Mux.applyWorkspace(name)
                     -- set before Mux._applyContent ever shows anything, so a pane whose
                     -- rule says "start hidden" never flashes/sticks visible first.
                     if p.rules and #p.rules > 0 and Mux._evaluateRules then
+                        -- TEMP DIAGNOSTIC: remove once the session-start hide bug is
+                        -- pinned down. Dumps each rule's resolved condition + computed
+                        -- value right before evaluation, so we can see whether this call
+                        -- runs at all and what it actually computes on a fresh restore.
+                        for _, r in ipairs(p.rules) do
+                            local rc = Mux._resolveCond and Mux._resolveCond(r.cond) or r.cond
+                            local v  = Mux._conditionValue and Mux._conditionValue(r.cond, p)
+                            Mux._echo(string.format(
+                                "\n<yellow>[mux diag] pane %s rule %s type=%s path=%s value=%s\n",
+                                tostring(p.id), tostring(r.id), tostring(rc and rc.type),
+                                tostring(rc and rc.path), tostring(v)))
+                        end
                         Mux._evaluateRules(p, true)
                     end
                     -- Apply restored content HERE: floating panes are rebuilt after

@@ -336,6 +336,11 @@ function Mux.requestAutoFit(target, height, width)
     if not (target.floating and target._autoFitHeight and target.outer) then return end
     local newX, newY, newW, newH = computeAutoFit(target, false)
     applyAutoFit(target, newX, newY, newW, newH)
+    -- A live content resize (e.g. Local Players growing/shrinking with the room's
+    -- player count) changes floatH/floatW out from under any anchor -- including
+    -- the stacking sweep that keeps it from overlapping siblings on the same
+    -- anchor line. Re-run it so those siblings re-accommodate the new size.
+    if target.anchor and Mux._reanchorAll then Mux._reanchorAll() end
 end
 
 --- Re-applies a hidden/auto_hidden container's Qt-level hide to `container`,
