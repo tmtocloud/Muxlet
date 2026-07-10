@@ -354,6 +354,12 @@ function MuxPane:_conditionShow()
     end
     self._conditionHidden = false
     self:show()
+    -- A pane popping up on its own (e.g. Local Players on a room-entry rule)
+    -- implicitly raises itself in Qt's stacking via show(), which can bury an
+    -- open dialog/dropdown it doesn't even visually overlap — Mudlet's
+    -- z-order is one flat stack, not scoped to screen position. Re-assert the
+    -- floats-then-dialogs convention so any open dialog stays on top.
+    if self.floating and Mux.raiseFloatingPanes then Mux.raiseFloatingPanes() end
     self:_reflowConditionLayout()
 end
 
@@ -367,20 +373,24 @@ end
 
 -- Re-weight every ancestor split from this pane to the tree root so collapsed
 -- (condition-hidden) slots take zero space, then lay out the sub-tree once.
+-- Always finishes with the full reposition cascade (even for a floating/root pane
+-- with no split) so anchored siblings get a chance to re-stack around this
+-- pane's new visibility — see Mux._reanchorAll's overlap resolution.
 function MuxPane:_reflowConditionLayout()
     local s = self._split
-    if not s then return end           -- floating / root pane: hide/show is enough
-    local top = s
-    while s do
-        if s._applyConditionWeights then s:_applyConditionWeights() end
-        top = s
-        s = s._parentSplit
-    end
-    if top and top.box then
-        if Mux._suppressReposition then
-            Mux._suppressReposition(function() top.box:organize() end)
-        else
-            top.box:organize()
+    if s then
+        local top = s
+        while s do
+            if s._applyConditionWeights then s:_applyConditionWeights() end
+            top = s
+            s = s._parentSplit
+        end
+        if top and top.box then
+            if Mux._suppressReposition then
+                Mux._suppressReposition(function() top.box:organize() end)
+            else
+                top.box:organize()
+            end
         end
     end
     if Mux._notifyAllReposition then Mux._notifyAllReposition() end

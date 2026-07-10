@@ -38,6 +38,16 @@ function Mux.raiseFloatingPanes()
     table.sort(dialogs, bySeq)
     for _, p in ipairs(floats)  do p:raise() end
     for _, p in ipairs(dialogs) do p:raise() end
+    -- The inline dropdown/colour-picker overlay (widgets.lua) is a raw
+    -- Geyser widget parented at the Geyser root, not a MuxPane, so the loops
+    -- above never touch it. It must stay above whatever dialog it's open in,
+    -- so re-raise it last whenever floats get reshuffled — e.g. a
+    -- condition-driven pane (Local Players popping in on room entry) calling
+    -- show() implicitly raises itself in Qt's stacking, which would otherwise
+    -- bury an open dropdown even though the two never visually overlap.
+    if Mux.ui and Mux.ui._activeDropdownOverlay then
+        pcall(function() Mux.ui._activeDropdownOverlay:raise() end)
+    end
 end
 
 -- Called after a zoom so that popup dialogs remain above the zoomed pane.
@@ -164,6 +174,31 @@ local function _revealPane(p)
     if Mux._revealContent then Mux._revealContent(p) end
 end
 
+-- Any tab can itself become a sub-tab host (a tab group nested inside a tab,
+-- e.g. fed2-tools' Company tab hosting Overview/Factories/Financials as its
+-- own tabs) — Mux._tabHosts is keyed by _gid and holds every such host,
+-- top-level pane or nested tab alike. Recurse through it so nested tabs show
+-- up (and can be targeted with `mux reveal <id>`) instead of stopping at the
+-- first level.
+local function _printTabs(host, indent)
+    for _, t in ipairs(host._tabs or {}) do
+        local tf = {}
+        if t.propertiesButton == false then tf[#tf+1] = "<red>props hidden<reset>" end
+        if t.locked                    then tf[#tf+1] = "locked" end
+        local ttag = (#tf > 0) and ("  [" .. table.concat(tf, ", ") .. "]") or ""
+        Mux._echo(string.format("%s<grey>tab<reset> <white>%s<reset>  \"%s\"%s\n",
+            indent, t.id, t.name or "", ttag))
+        local nested = Mux._tabHosts[t._gid]
+        if nested then _printTabs(nested, indent .. "    ") end
+    end
+    for _, t in ipairs(host._hiddenTabs or {}) do
+        Mux._echo(string.format("%s<grey>tab<reset> <white>%s<reset>  \"%s\"  [<yellow>condition-hidden<reset>]\n",
+            indent, t.id, t.name or ""))
+        local nested = Mux._tabHosts[t._gid]
+        if nested then _printTabs(nested, indent .. "    ") end
+    end
+end
+
 function Mux.listPanespace()
     Mux._echo("\n<cyan>[Muxlet]<reset> Panespace:\n")
     local any = false
@@ -179,22 +214,7 @@ function Mux.listPanespace()
             if p.mainConsoleHost           then flags[#flags+1] = "main console" end
             local tag = (#flags > 0) and ("  [" .. table.concat(flags, ", ") .. "]") or ""
             Mux._echo(string.format("  <white>%s<reset>  \"%s\"%s\n", p.id, p.name or "", tag))
-            if p._tabs then
-                for _, t in ipairs(p._tabs) do
-                    local tf = {}
-                    if t.propertiesButton == false then tf[#tf+1] = "<red>props hidden<reset>" end
-                    if t.locked                    then tf[#tf+1] = "locked" end
-                    local ttag = (#tf > 0) and ("  [" .. table.concat(tf, ", ") .. "]") or ""
-                    Mux._echo(string.format("      <grey>tab<reset> <white>%s<reset>  \"%s\"%s\n",
-                        t.id, t.name or "", ttag))
-                end
-            end
-            if p._hiddenTabs then
-                for _, t in ipairs(p._hiddenTabs) do
-                    Mux._echo(string.format("      <grey>tab<reset> <white>%s<reset>  \"%s\"  [<yellow>condition-hidden<reset>]\n",
-                        t.id, t.name or ""))
-                end
-            end
+            _printTabs(p, "      ")
         end
     end
     if not any then Mux._echo("  (no panes)\n") end

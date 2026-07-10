@@ -678,12 +678,34 @@ function Mux.listConditions()
     return out
 end
 
+-- Editing a named condition changes what any rule referencing it ({ref=id})
+-- should react to — but a rule's event wiring and cached met/value state were
+-- captured when the rule was added, and don't auto-update just because the
+-- condition definition changed underneath them. Re-apply every rule that
+-- references this id (across every registered pane/tab) so they pick up the
+-- new logic immediately instead of needing an inactive/active toggle or a
+-- reload to re-sync.
+function Mux._reapplyNamedCondition(id)
+    if not (id and Mux._ruleSubjects and Mux._reapplyRule) then return end
+    for _, subject in pairs(Mux._ruleSubjects) do
+        if subject.rules then
+            for _, rule in ipairs(subject.rules) do
+                local c = rule.cond
+                if type(c) == "table" and c.ref == id then
+                    Mux._reapplyRule(subject, rule)
+                end
+            end
+        end
+    end
+end
+
 function Mux.createDeclarativeCondition(def, noSave)
     assert(type(def) == "table" and def.id and def.id ~= "", "condition needs an id")
     Mux._declConditions[def.id] = {
         id = def.id, label = def.label or def.id, cond = def.cond or { type = "always" },
     }
     if not noSave then saveRules() end
+    Mux._reapplyNamedCondition(def.id)
 end
 function Mux.deleteDeclarativeCondition(id) Mux._declConditions[id] = nil; saveRules() end
 function Mux.getDeclarativeCondition(id) return Mux._declConditions[id] end

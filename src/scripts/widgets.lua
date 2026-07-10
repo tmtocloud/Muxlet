@@ -784,7 +784,8 @@ local function w_dropdown(row, c)
             if c.getActive() == overlay then c.setActive(nil) end
             overlay = nil
             if Mux.ui._activeDropdownClose == destroyOverlay then
-                Mux.ui._activeDropdownClose = nil
+                Mux.ui._activeDropdownClose   = nil
+                Mux.ui._activeDropdownOverlay = nil
             end
         end
     end
@@ -849,7 +850,8 @@ local function w_dropdown(row, c)
             end)
         end
         c.setActive(overlay)
-        Mux.ui._activeDropdownClose = destroyOverlay
+        Mux.ui._activeDropdownClose   = destroyOverlay
+        Mux.ui._activeDropdownOverlay = overlay
     end
 
     btn:setClickCallback(function()

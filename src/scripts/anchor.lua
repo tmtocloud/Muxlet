@@ -90,19 +90,79 @@ function Mux._applyAnchor(pane)
     return true
 end
 
+-- Small gap kept between siblings stacked on the same anchor line, so they
+-- don't sit flush edge-to-edge.
+local ANCHOR_STACK_GAP = 6
+
+-- Key identifying the shared line an edge-anchored pane sits on, plus which
+-- axis it's free to slide along that line (its "along" offset). Corner
+-- anchors (both v and h set) pin both axes to a fixed point already and have
+-- no free axis to stack along, so they're excluded (returns nil).
+local function _anchorStackKey(A)
+    if A.v and not A.h then return "v|" .. tostring(A.v.ref) .. "|" .. A.v.targetEdge .. "|" .. A.v.myEdge end
+    if A.h and not A.v then return "h|" .. tostring(A.h.ref) .. "|" .. A.h.targetEdge .. "|" .. A.h.myEdge end
+    return nil
+end
+
 -- Re-derive every pane currently sitting at its anchor. Cheap for the common
 -- (unanchored) case; called from the reposition cascade so anchored panes track
--- split drags, resizes, and window changes. A light move() only (no reposition)
--- to stay fast; no recursion since move() doesn't re-enter the cascade.
+-- split drags, resizes, and window changes.
+--
+-- Panes that share an anchor line (same ref/edge/myEdge) are otherwise free to
+-- overlap along it, so before moving them each stacking group is swept in
+-- preferred-position order: a pane keeps its own saved alongV/alongH unless
+-- the sibling ahead of it in that order would overlap it, in which case it's
+-- nudged just far enough to clear — respecting the user's placement except
+-- where a currently-visible sibling forces a change. Condition-hidden panes
+-- are skipped entirely (they occupy no space); becoming visible re-enters this
+-- sweep via _reflowConditionLayout.
+--
+-- A light move() only (no reposition) to stay fast; no recursion since move()
+-- doesn't re-enter the cascade.
 function Mux._reanchorAll()
     if not Mux._panes then return end
+    local sw, sh = getMainWindowSize()
+    local groups = {}   -- stackKey → { axis=.., {pane=,x=,y=,w=,h=,pref=}, ... }
+
+    local function applyIfMoved(p, X, Y)
+        if X ~= p.floatX or Y ~= p.floatY then
+            p.floatX, p.floatY = X, Y
+            if p.outer then p.outer:move(X, Y) end
+        end
+    end
+
     for _, p in pairs(Mux._panes) do
-        if p.anchor and p._atAnchor and p.floating then
-            local X, Y = Mux._anchorGeom(p)
-            if X and (X ~= p.floatX or Y ~= p.floatY) then
-                p.floatX, p.floatY = X, Y
-                if p.outer then p.outer:move(X, Y) end
+        if p.anchor and p._atAnchor and p.floating and not p._conditionHidden then
+            local X, Y, W, H = Mux._anchorGeom(p)
+            if X then
+                local key = _anchorStackKey(p.anchor)
+                if key then
+                    local axis = key:sub(1, 1)
+                    local g = groups[key]
+                    if not g then g = { axis = axis }; groups[key] = g end
+                    g[#g + 1] = { pane = p, x = X, y = Y, w = W, h = H, pref = (axis == "v" and Y or X) }
+                else
+                    applyIfMoved(p, X, Y)
+                end
             end
+        end
+    end
+
+    for _, g in pairs(groups) do
+        table.sort(g, function(a, b) return a.pref < b.pref end)
+        local cursor = nil
+        for _, e in ipairs(g) do
+            local X, Y = e.x, e.y
+            if g.axis == "v" then
+                Y = cursor and math.max(Y, cursor) or Y
+                Y = math.min(Y, math.max(0, sh - e.h))
+                cursor = Y + e.h + ANCHOR_STACK_GAP
+            else
+                X = cursor and math.max(X, cursor) or X
+                X = math.min(X, math.max(0, sw - e.w))
+                cursor = X + e.w + ANCHOR_STACK_GAP
+            end
+            applyIfMoved(e.pane, X, Y)
         end
     end
 end
