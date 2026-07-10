@@ -148,8 +148,13 @@ function Mux._reanchorAll()
         end
     end
 
-    for _, g in pairs(groups) do
+    for key, g in pairs(groups) do
         table.sort(g, function(a, b) return a.pref < b.pref end)
+        if #g > 1 then
+            local ids = {}
+            for _, e in ipairs(g) do ids[#ids+1] = tostring(e.pane.id) .. "@" .. tostring(e.pref) end
+            Mux._log("reanchor group %s: %s", key, table.concat(ids, ", "))
+        end
         local cursor = nil
         for _, e in ipairs(g) do
             local X, Y = e.x, e.y
@@ -162,6 +167,7 @@ function Mux._reanchorAll()
                 X = math.min(X, math.max(0, sw - e.w))
                 cursor = X + e.w + ANCHOR_STACK_GAP
             end
+            if #g > 1 then Mux._log("  %s -> (%d, %d)", tostring(e.pane.id), X, Y) end
             applyIfMoved(e.pane, X, Y)
         end
     end

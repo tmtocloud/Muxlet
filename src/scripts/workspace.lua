@@ -328,7 +328,13 @@ local function serializeNode(obj)
         if any then node.tokens = tk end
     end
     if obj.showSettingsInMenu    then node.showSettingsInMenu = true  end
-    if obj.mainConsoleHost and not obj.addable then node.addable = false end
+    -- addable defaults to true for the main console host, false otherwise; only
+    -- persist it when the user has flipped it away from that default (in either
+    -- direction -- e.g. exposing the + button on a non-host pane).
+    local addableDefault = obj.mainConsoleHost and true or false
+    if (obj.addable and true or false) ~= addableDefault then
+        node.addable = obj.addable and true or false
+    end
     if obj.nameAlign and obj.nameAlign ~= "left" then node.nameAlign = obj.nameAlign end
     if obj._connectionAware then node.connectionAware  = true end
     -- Persist non-preset rules; the connection preset round-trips via the flag above.
@@ -822,7 +828,7 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             connectionAware  = node.connectionAware,
         })
         p._paneSpace = paneSpace
-        if node.addable == false then p.addable = false end
+        if node.addable ~= nil then p.addable = node.addable end
         if node.id then paneMap[node.id] = p end
         if node.anchor then
             p._pendingAnchor   = node.anchor

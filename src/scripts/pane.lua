@@ -352,6 +352,7 @@ function MuxPane:_conditionShow()
     if not self._conditionHidden and self.outer and self.outer.get_x then
         -- already visible; still ensure layout is consistent
     end
+    Mux._log("_conditionShow %s (was hidden=%s)", tostring(self.id), tostring(self._conditionHidden))
     self._conditionHidden = false
     self:show()
     -- A pane popping up on its own (e.g. Local Players on a room-entry rule)
@@ -366,6 +367,7 @@ end
 -- "Hide self" reactive action: hide the pane; if embedded, collapse its slot so the
 -- sibling reclaims the space (as if closed); if floating, just hide.
 function MuxPane:_conditionHide()
+    Mux._log("_conditionHide %s (was hidden=%s)", tostring(self.id), tostring(self._conditionHidden))
     self._conditionHidden = true
     self:hide()
     self:_reflowConditionLayout()
@@ -793,8 +795,9 @@ function MuxPane:_buildTitlebar(theme)
         end,
     })
 
-    -- addPaneBtn: far-right slot (same offset as close; addable panes are not closeable).
-    -- Spawns a new floating pane. Only ever visible on the main console host pane.
+    -- addPaneBtn: lives in the left info cluster, just right of the content library
+    -- icon (BUILTIN_TB places it there; this initial x is overwritten on first
+    -- sync). Spawns a new floating pane.
     self.addPaneBtn, self._addPaneBtnEcho = makeTitlebarButton({
         suffix  = "_addpane",
         x       = "-20",
@@ -1051,9 +1054,9 @@ local BUILTIN_TB = {
       get=function(p) return p.closeBtn end,    visible=function(c) return c.pane.closeable and not Mux._isLastEmbeddedPane(c.pane) end,
       menuText="✕  Close Pane", danger=true, menuGroup="window", menuOrder=10,
       run=function(c) c.pane:_confirmClose() end },
-    { id="add",    side="right", group="window", order=1, priority=100,
+    { id="add",    side="left", group="info", order=4, priority=100,
       get=function(p) return p.addPaneBtn end,  visible=function(c) return c.pane.addable end,
-      menuText="+  Add Floating Pane", menuGroup="window", menuOrder=15,
+      menuText="+  Add Floating Pane", menuGroup="info", menuOrder=95,
       run=function(c) Mux._addFloatingPane() end },
     { id="min",    side="right", group="window", order=2, priority=90,
       get=function(p) return p.minBtn end,       visible=function(c) return c.pane:_minBtnVisible() end,

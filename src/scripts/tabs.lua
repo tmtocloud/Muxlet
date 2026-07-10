@@ -577,6 +577,15 @@ local function buildTabInfrastructure(host)
     host.contentBg:hide()
 
     getOrCreateOverlay(host)
+
+    -- host.content may itself sit inside a hidden ancestor (e.g. host is a
+    -- sub-tab-hosting tab that isn't the currently active top-level tab).
+    -- Geyser doesn't propagate an already-hidden parent's state to freshly
+    -- created children (see Mux.reassertHidden), so the tab bar/viewport just
+    -- built here would otherwise leak visible on top of whatever tab actually
+    -- is showing.
+    Mux.reassertHidden(host._tabBar, host.content)
+    Mux.reassertHidden(host._tabViewport, host.content)
 end
 
 -- True when the surface hosts content whose def forbids tabs (e.g. the console).
@@ -843,6 +852,12 @@ function MuxSurface:_activateTabObj(tab)
     end
     self:_echoTabLabel(tab.label, tab.name, true, false, theme, tab.nameAlign, false, tab)
     tab.content:show()
+    -- self (the host) may itself be a sub-tab-hosting tab that isn't the
+    -- currently active top-level tab. Showing the newly-activated tab's
+    -- content above doesn't know that -- re-hide it to match self.content's
+    -- real (possibly hidden) state so it doesn't leak visible over whatever
+    -- tab actually is showing.
+    Mux.reassertHidden(tab.content, self.content)
     if Mux._relayoutContent then Mux._relayoutContent(tab) end
     -- Auto-fit an open tabbed dialog (Settings / Properties) to the now-active
     -- leaf. No-op when this surface isn't part of that dialog or height is unchanged.

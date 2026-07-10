@@ -282,6 +282,8 @@ local function evalRule(subject, rule, force)
     local changed = force or (not rule._evaledOnce)
         or (rule._lastMet ~= met) or (met and rule._lastVal ~= v)
     if not changed then return end
+    Mux._log("rule %s on %s: met %s -> %s (force=%s)", tostring(rule.id),
+        tostring(subject.id or subject.name or subject), tostring(rule._lastMet), tostring(met), tostring(force))
     rule._lastMet, rule._lastVal, rule._evaledOnce = met, v, true
     if met then
         if rule.act and Mux.runAction then Mux.runAction(rule.act, ctxFor(subject, v, true)) end
