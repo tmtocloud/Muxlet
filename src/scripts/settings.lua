@@ -38,6 +38,9 @@ Mux.settings._onChange  = {}
 -- Drives UI tab hierarchy only; has no effect on get/set/clear.
 Mux.settings._tabPaths  = {}
 Mux.settings._tabOrder  = {}
+-- Extra, non-setting form rows appended to a namespace's tab (e.g. an action
+-- button). ns → array of buildForm spec tables. Populated via registerRow().
+Mux.settings._extraRows = {}
 Mux._persistentDir      = getMudletHomeDir() .. "/Muxlet_persistent"
 lfs.mkdir(Mux._persistentDir)
 Mux.settings._file      = Mux._persistentDir .. "/settings.json"
@@ -130,6 +133,19 @@ function Mux.settings.register(ns, key, cfg)
     if not found then table.insert(Mux.settings._order[ns], key) end
 
     Mux._log("settings.register: %s.%s (default=%s)", ns, key, tostring(cfg.default))
+end
+
+-- Append a non-setting form row to a namespace's settings tab. `spec` is a raw
+-- buildForm spec (e.g. { type="button", label=..., style=..., onClick=fn }). Rows
+-- render after the namespace's registered settings, in call order. Used by other
+-- modules to add actions to a tab (e.g. the updater's "Check now" button) without
+-- pretending the action is a stored preference.
+function Mux.settings.registerRow(ns, spec)
+    assert(type(ns)   == "string", "settings.registerRow: ns must be a string")
+    assert(type(spec) == "table",  "settings.registerRow: spec must be a table")
+    spec._noReset = true   -- action rows are not resettable settings
+    Mux.settings._extraRows[ns] = Mux.settings._extraRows[ns] or {}
+    Mux.settings._extraRows[ns][#Mux.settings._extraRows[ns] + 1] = spec
 end
 
 function Mux.settings.get(ns, key)
@@ -495,6 +511,11 @@ local function buildNsSpecs(ns)
 
             specs[#specs+1] = spec
         end
+    end
+
+    -- Non-setting action rows registered for this namespace (e.g. buttons).
+    for _, extra in ipairs(Mux.settings._extraRows[ns] or {}) do
+        specs[#specs+1] = extra
     end
     return specs
 end

@@ -128,14 +128,30 @@ local function installedIsPre()
 end
 
 -- A GitHub release object → a normalized candidate table.
+-- Pull the built commit sha out of a pre-release body. build.yml writes a line
+-- like "**Commit:** <github.sha>" into the notes, and that sha is exactly the
+-- commit muddler stamped into the package version ("2.1.0-<shortsha>"). This is
+-- the authoritative build identity — more reliable than target_commitish, which
+-- for a branch-built pre-release is usually the branch name ("main"), not a sha.
+local function extractCommitSha(body)
+    if type(body) ~= "string" then return nil end
+    return body:match("[Cc]ommit%**:%**%s*(%x%x%x%x%x%x%x+)")
+        or body:match("[Cc]ommit[^%x]-(%x%x%x%x%x%x%x+)")
+end
+
 local function parseRelease(r)
     local tag   = r.tag_name or ""
     -- Pre-release convention here is a bare tag (no leading "v"); honour the API's
     -- own prerelease flag too, in case a release is flagged but oddly tagged.
     local isPre = (r.prerelease == true) or (tag:match("^v") == nil)
-    local sha
-    local tc = r.target_commitish
-    if type(tc) == "string" and tc:match("^%x%x%x%x%x%x%x+$") then sha = tc end   -- a real sha, not "main"
+    -- Commit identity: prefer the sha recorded in the body; fall back to
+    -- target_commitish only when it is a real sha (ignore "main" and other
+    -- branch names, which don't identify the built commit).
+    local sha = extractCommitSha(r.body)
+    if not sha then
+        local tc = r.target_commitish
+        if type(tc) == "string" and tc:match("^%x%x%x%x%x%x%x+$") then sha = tc end
+    end
     return {
         kind        = isPre and "prerelease" or "release",
         tag         = tag,
@@ -505,11 +521,15 @@ function Mux.checkForUpdates(silent)
         return
     end
 
+    local includePre = Mux.settings.get("muxupdate", "update_include_prereleases") and true or false
+    local modeText   = includePre and "stable + pre-releases" or "stable releases only"
+
     if not silent then
-        Mux._echo("\n<cyan>[Muxlet]<reset> Checking releases for updates...\n")
+        Mux._echo(string.format(
+            "\n<cyan>[Muxlet]<reset> Checking releases for updates <dim_grey>(%s)<reset>...\n",
+            modeText))
     end
 
-    local includePre = Mux.settings.get("muxupdate", "update_include_prereleases") and true or false
     local tmp = getMudletHomeDir() .. "/mux_releases.json"
 
     local function cleanup()
@@ -539,7 +559,10 @@ function Mux.checkForUpdates(silent)
 
         local chosen = chooseUpdate(cands, includePre)
         if not chosen then
-            if not silent then Mux._echo("<cyan> You are up to date.\n") end
+            if not silent then
+                Mux._echo(string.format(
+                    "<cyan> You are up to date <dim_grey>(%s)<reset>.\n", modeText))
+            end
             return
         end
 
@@ -652,5 +675,21 @@ local function muxStartupUpdateCheck()
 end
 
 muxStartupUpdateCheck()
+
+-- ── Graphical "Check now" button on the Update settings tab ───────────────────
+-- Appended after the two toggles via settings.registerRow (settings.lua loads
+-- first, so the hook exists). Runs a visible (non-silent) check so the user gets
+-- "up to date" feedback in the console and the update dialog if one is found.
+if Mux.settings and Mux.settings.registerRow then
+    Mux.settings.registerRow("muxupdate", {
+        type    = "button",
+        label   = "Check for updates now",
+        style   = "primary",
+        desc    = "Check this repo's releases immediately, honouring the pre-release setting above.",
+        onClick = function()
+            if Mux.checkForUpdates then Mux.checkForUpdates(false) end
+        end,
+    })
+end
 
 Mux._log("update loaded")
