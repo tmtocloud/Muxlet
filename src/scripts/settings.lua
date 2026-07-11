@@ -1686,6 +1686,29 @@ Mux.settings.register("muxtheme", "active", {
     choices     = {"dark", "light"},
 })
 
+-- Update tab. Like muxtheme (Design), these live in their own namespace so they
+-- render under a dedicated sub-tab rather than Muxlet/General — the mux namespace
+-- is pinned to General, so a separate namespace is the only way onto another tab.
+-- order=5 places Update after Actions (General=1/Design=2/Conditions=3/Actions=4).
+-- The updater's *logic* lives in update.lua (loads later); it reads these via
+-- Mux.settings.get("muxupdate", ...). Both default off so Muxlet stays inert for
+-- downstream packages that pin a version.
+Mux.settings.register("muxupdate", "update_check_enabled", {
+    tab         = "Muxlet/Update",
+    order       = 5,
+    label       = "Check for updates on startup",
+    description = "When Mudlet opens, quietly check this repo's releases and offer any newer build.",
+    default     = false,
+})
+
+Mux.settings.register("muxupdate", "update_include_prereleases", {
+    tab         = "Muxlet/Update",
+    label       = "Include pre-releases",
+    description = "Also offer rolling pre-release builds (tagged without a leading 'v'). "
+               .. "Pre-releases can update in place even when the version number is unchanged.",
+    default     = false,
+})
+
 Mux.settings.register("mux", "debug", {
     tab         = "Muxlet/General",   -- anchors the mux namespace to the General tab
     description = "Verbose debug logging to the console",
@@ -1804,9 +1827,8 @@ Mux.settings.register("mux", "quietStart", {
 })
 
 -- Explicit display order for the Muxlet/General tab.  Registration order would
--- otherwise decide this; listing it here keeps the tab curated.  update_* are
--- registered later (update.lua) — pre-listing them positions them without
--- duplicating (register() skips keys already present in the order list).
+-- otherwise decide this; listing it here keeps the tab curated.  (Update settings
+-- live in the muxupdate namespace / Muxlet/Update tab, not here.)
 Mux.settings._order["mux"] = {
     "welcome_shown",
     "auto_start",
@@ -1818,8 +1840,6 @@ Mux.settings._order["mux"] = {
     "live_resize_max_panes",
     "resize_live_budget_ms",
     "reset_workspace",
-    "update_check_enabled",
-    "update_check_remind_skip",
     "theme",
     "debug",
 }

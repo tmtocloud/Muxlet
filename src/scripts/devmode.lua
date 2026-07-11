@@ -80,8 +80,8 @@ function Mux.devmodeReload(fresh)
     f:close()
 
     if fresh then
-        -- Reset the remind-skip counter so the update dialog fires on next load.
-        Mux.settings.set("mux", "update_check_remind_skip", 0)
+        -- Reset the update-reminder skip so the update dialog fires on next load.
+        if Mux.clearUpdateSnooze then Mux.clearUpdateSnooze() end
         Mux._echo("\n<yellow>[Muxlet]<reset> Settings reset — fresh-install path on next load.\n")
     end
 
