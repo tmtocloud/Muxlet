@@ -1,75 +1,88 @@
 -- Muxlet — Dev Mode: local build auto-reload and manual reload helpers
 --
--- Auto-reload: muddlet --profile <name> writes a stamp file to the profile
--- directory after running muddler. A recursive 30-second timer watches for
--- stamp changes and performs uninstallPackage + installPackage for a clean reload.
--- When --fresh is passed to muddlet it also writes a fresh flag file; the
--- watcher detects it and reloads with fresh=true instead of false.
+-- Auto-reload: `muddlet --profile <name>` deploys the freshly built package into
+-- the profile directory and writes a SINGLE stamp file:
+--     Muxlet-rebuild.stamp   contents: "<unix-ts>"   or   "<unix-ts> wipe"
+-- A recursive 30-second timer watches the stamp. When it changes, Muxlet
+-- reinstalls itself from the deployed package. A trailing "wipe" marker (written
+-- by `muddlet --wipe`) additionally deletes all persisted Muxlet state first, so
+-- the reload comes up exactly like a brand-new profile.
 --
 -- Manual reload:
---   mux reload        — upgrade path (preserves settings)
---   mux reload fresh  — resets update-skip counter, simulating a fresh install
+--   mux reload         — reinstall from the deployed local build (keeps state)
+--   mux reload wipe    — reinstall AND wipe all persisted state (fresh profile)
+--
+-- The actual reinstall runs through Mux._reinstallPackage (update.lua), which
+-- defers the uninstall+install out of the current call stack. That is what stops
+-- "mux reload" from crashing Mudlet: uninstalling the package while the "mux"
+-- alias that triggered it is still on the Lua stack frees the running script
+-- mid-execution.
+
+local STAMP_FILE = "/Muxlet-rebuild.stamp"
 
 -- Stamp value seen at last check. nil = not yet observed this session.
 Mux._devLastStamp = Mux._devLastStamp or nil
 
-local function muxDevmodeDoReload(pkgPath)
-    if table.contains(getPackages(), "Muxlet") then
-        uninstallPackage("Muxlet")
-    end
-    installPackage(pkgPath)
+-- Read the stamp file → (token, wipeFlag). The first whitespace-delimited token
+-- is the change-detection value; a trailing "wipe" marker requests a full wipe.
+local function readStamp()
+    local f = io.open(getMudletHomeDir() .. STAMP_FILE, "r")
+    if not f then return nil, false end
+    local raw = f:read("*a") or ""
+    f:close()
+    local token = raw:match("^%s*(%S+)")
+    local wipe  = raw:lower():find("wipe") ~= nil
+    return token, wipe
 end
 
--- Recursive 30-second timer. Does nothing when the stamp file is absent
--- (standard production installs have no stamp file).
-local function muxDevmodeCheck()
-    local stampPath = getMudletHomeDir() .. "/Muxlet-rebuild.stamp"
-    local file = io.open(stampPath, "r")
-
-    if not file then
-        tempTimer(30, muxDevmodeCheck)
-        return
+local function doReload(wipe)
+    local pkgPath = getMudletHomeDir() .. "/Muxlet.mpackage"
+    if Mux._reinstallPackage then
+        Mux._reinstallPackage(pkgPath, { wipe = wipe })
+    else
+        -- Fallback if update.lua's primitive is somehow unavailable: still defer
+        -- out of the current stack so we don't crash on self-uninstall.
+        tempTimer(0, function()
+            if table.contains(getPackages(), "Muxlet") then pcall(uninstallPackage, "Muxlet") end
+            installPackage(pkgPath)
+        end)
     end
+end
 
-    local stamp = file:read("*a"):match("^%s*(.-)%s*$")
-    file:close()
+-- Recursive 30-second watcher. No-op when the stamp file is absent (production
+-- installs never have it). Stops when Mux._devStopped is set (uninstall teardown).
+local function muxDevmodeCheck()
+    if Mux._devStopped then return end
 
-    if stamp == Mux._devLastStamp then
-        tempTimer(30, muxDevmodeCheck)
+    local stamp, wipe = readStamp()
+
+    if not stamp or stamp == Mux._devLastStamp then
+        Mux._devTimer = tempTimer(30, muxDevmodeCheck)
         return
     end
 
     if Mux._devLastStamp == nil then
-        -- First observation: record stamp but don't reload. Prevents a spurious
-        -- reload on every package restart when the stamp file already exists.
+        -- First observation: record but don't reload (prevents a spurious reload
+        -- on every restart when the stamp file already exists).
         Mux._devLastStamp = stamp
         Mux._log("[mux] Dev mode active (stamp %s) — monitoring for new local builds", stamp)
-        tempTimer(30, muxDevmodeCheck)
+        Mux._devTimer = tempTimer(30, muxDevmodeCheck)
         return
     end
 
-    -- Stamp changed: a new build was deployed; check for the fresh flag.
-    -- Update stamp before reload so the newly loaded package sees the same stamp
-    -- on its first check and skips its own spurious-reload guard correctly.
+    -- Stamp changed: a new build was deployed. Record before reloading so the
+    -- freshly loaded package's first check sees the same stamp and doesn't
+    -- immediately reload again.
     Mux._devLastStamp = stamp
-    local freshPath = getMudletHomeDir() .. "/Muxlet-fresh.stamp"
-    local freshFile = io.open(freshPath, "r")
-
-    if freshFile then
-        freshFile:close()
-        os.remove(freshPath)
-        Mux._echo(string.format("\n<yellow>[Muxlet]<reset> New local build detected (fresh, stamp %s) — reloading...\n", stamp))
-        Mux.devmodeReload(true)
-    else
-        Mux._echo(string.format("\n<yellow>[Muxlet]<reset> New local build detected (stamp %s) — reloading...\n", stamp))
-        local pkgPath = getMudletHomeDir() .. "/Muxlet.mpackage"
-        muxDevmodeDoReload(pkgPath)
-    end
+    Mux._echo(string.format(
+        "\n<yellow>[Muxlet]<reset> New local build detected (stamp %s%s) — reloading...\n",
+        stamp, wipe and ", wipe" or ""))
+    doReload(wipe)
     -- No reschedule: the freshly installed package starts its own timer on load.
 end
 
--- Called by "mux reload [fresh]".
-function Mux.devmodeReload(fresh)
+-- Called by "mux reload [wipe]".
+function Mux.devmodeReload(wipe)
     local pkgPath = getMudletHomeDir() .. "/Muxlet.mpackage"
     local f = io.open(pkgPath, "r")
     if not f then
@@ -79,38 +92,39 @@ function Mux.devmodeReload(fresh)
     end
     f:close()
 
-    if fresh then
-        -- Reset the update-reminder skip so the update dialog fires on next load.
-        if Mux.clearUpdateSnooze then Mux.clearUpdateSnooze() end
-        Mux._echo("\n<yellow>[Muxlet]<reset> Settings reset — fresh-install path on next load.\n")
+    if wipe then
+        Mux._echo("\n<yellow>[Muxlet]<reset> Wiping all Muxlet state — reloading as a fresh profile...\n")
+    else
+        Mux._echo("\n<yellow>[Muxlet]<reset> Reloading Muxlet...\n")
     end
-
-    Mux._echo("\n<yellow>[Muxlet]<reset> Reloading Muxlet...\n")
-    muxDevmodeDoReload(pkgPath)
+    doReload(wipe)
 end
 
--- Anything past a bare "major.minor.patch" (e.g. the "-a3f91cd" muddlet
--- appends for untagged local builds) marks this as a pre-release build.
+-- Stop the watcher. Called from the uninstall teardown so the old timer can't keep
+-- firing against the reinstalled package.
+function Mux._stopDevmode()
+    Mux._devStopped = true
+    if Mux._devTimer then pcall(killTimer, Mux._devTimer); Mux._devTimer = nil end
+end
+
+-- Anything past a bare "major.minor.patch" (e.g. the "-a3f91cd" muddlet appends
+-- for untagged local builds) marks this as a pre-release/dev build.
 local function isPreRelease()
-    return Mux._version:match("^%d[%d%.]*$") == nil
+    return tostring(Mux._version or ""):match("^%d[%d%.]*$") == nil
 end
 
--- Only start the polling timer if a stamp file already exists in the profile
--- directory.  Production installs never have this file, so the timer never
--- runs for end-users.  Developers who have run build.ps1 at least once will
--- have the file and get the auto-reload behaviour as normal.
+-- Only start polling if a stamp file already exists in the profile directory.
+-- Production installs never have this file, so the timer never runs for end-users.
 local function muxDevmodeStart()
-    local stampPath = getMudletHomeDir() .. "/Muxlet-rebuild.stamp"
-    local probe = io.open(stampPath, "r")
-    if not probe then return end
-    local stamp = probe:read("*a"):match("^%s*(.-)%s*$")
-    probe:close()
+    Mux._devStopped = false   -- clear any stop flag left by a prior teardown
+    local stamp = readStamp()
+    if not stamp then return end
 
     if isPreRelease() then
         Mux._echo(string.format("\n<yellow>[Muxlet]<reset> Dev mode active (v%s, stamp %s)\n", Mux._version, stamp))
     end
 
-    tempTimer(30, muxDevmodeCheck)
+    Mux._devTimer = tempTimer(30, muxDevmodeCheck)
 end
 
 muxDevmodeStart()

@@ -1616,8 +1616,14 @@ local function buildWindow()
     local x    = math.floor((sw - w) / 2)
     local y    = math.floor((sh - h) / 2)
 
+    -- Production builds carry a bare "major.minor.patch" version (tagged v2.1.0);
+    -- pre-release/dev builds carry a "-<sha>" suffix (bare tag, no leading v). Only
+    -- the former gets the "v" prefix so the titlebar matches the actual release kind.
+    local ver      = tostring(Mux._version or "?")
+    local verLabel = ver:match("^%d[%d%.]*$") and ("v" .. ver) or ver
+
     local pane = Mux.createDialog({
-        title    = string.format("⚙  Settings  v%s", Mux._version),
+        title    = string.format("⚙  Settings  %s", verLabel),
         x=x, y=y, width=w, height=h,
         minimizable = true,
     })

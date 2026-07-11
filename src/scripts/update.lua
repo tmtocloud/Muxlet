@@ -82,11 +82,50 @@ end
 
 loadUpdateState()
 
--- Reset the startup-reminder skip counter (used by devmode's fresh reload path to
--- simulate a first-time install so the dialog fires again on next load).
+-- Reset the startup-reminder skip counter (used by the wipe reload path).
 function Mux.clearUpdateSnooze()
     Mux._updateState.remindSkip = 0
     saveUpdateState()
+end
+
+-- ── Reinstall primitive (shared by the updater and devmode) ───────────────────
+--
+-- Delete every file Muxlet persists (the whole Muxlet_persistent directory) so the
+-- next load behaves like a brand-new profile: default settings, no saved
+-- workspaces/themes/rules, welcome dialog shown again. Best-effort; missing dir is
+-- fine. Kept flat (no recursion) because Muxlet only writes files there.
+function Mux._wipePersistentDir()
+    local dir = Mux._persistentDir
+    if not dir then return end
+    pcall(function()
+        if not lfs or not lfs.dir then return end
+        for entry in lfs.dir(dir) do
+            if entry ~= "." and entry ~= ".." then
+                os.remove(dir .. "/" .. entry)
+            end
+        end
+        if lfs.rmdir then lfs.rmdir(dir) end
+    end)
+end
+
+-- Reinstall Muxlet from a local .mpackage. CRITICAL: this is deferred to a
+-- runtime tempTimer(0) so the uninstall does NOT run while a package-owned
+-- alias/script (e.g. the "mux" alias that called us) is still on the Lua stack.
+-- Uninstalling the very script that is executing frees it mid-run and crashes
+-- Mudlet — that is the long-standing "mux reload crashes" bug. From a runtime
+-- timer the triggering alias has already returned, so the teardown is safe.
+--   opts.wipe  delete persisted state between uninstall and install (fresh profile)
+function Mux._reinstallPackage(path, opts)
+    opts = opts or {}
+    local doWipe = opts.wipe and true or false
+    local wipeFn = Mux._wipePersistentDir   -- capture before teardown
+    tempTimer(0, function()
+        if table.contains(getPackages(), "Muxlet") then
+            pcall(uninstallPackage, "Muxlet")   -- fires the sysUninstallPackage teardown
+        end
+        if doWipe and wipeFn then pcall(wipeFn) end
+        installPackage(path)
+    end)
 end
 
 -- ── Version / ref helpers ─────────────────────────────────────────────────────
@@ -390,8 +429,7 @@ local function installFromRelease(cand)
         saveUpdateState()
 
         Mux._echo("\n<yellow>[Muxlet]<reset> Installing update...\n")
-        if table.contains(getPackages(), "Muxlet") then uninstallPackage("Muxlet") end
-        installPackage(pkg)
+        Mux._reinstallPackage(pkg)
     end)
 
     Mux._updateInstallErr = registerAnonymousEventHandler("sysDownloadError", function(_, filename)

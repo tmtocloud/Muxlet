@@ -534,7 +534,7 @@ end
 -- fullStart — re-registers the resize handler, applies saved theme, restores
 --             the session workspace ("current") or "default" on first run.
 
-function Mux.fullStop()
+function Mux.fullStop(quiet)
     if Mux._resizeHandler then
         killAnonymousEventHandler(Mux._resizeHandler)
         Mux._resizeHandler = nil
@@ -557,7 +557,9 @@ function Mux.fullStop()
     Mux.settings.load()
 
     Mux._running = false
-    Mux._echo("\n<yellow>[Muxlet]<reset> Stopped. Run <cyan>mux start<reset> to reinitialize.\n")
+    if not quiet then
+        Mux._echo("\n<yellow>[Muxlet]<reset> Stopped. Run <cyan>mux start<reset> to reinitialize.\n")
+    end
 end
 
 function Mux.fullStart()
@@ -601,13 +603,30 @@ function Mux.fullStart()
 end
 
 
--- Resets borders when the package is uninstalled so the main console is fully visible.
+-- Fires when Muxlet is uninstalled — including the uninstall half of every
+-- reload / self-update. Runtime-created Geyser widgets, timers, triggers and
+-- anonymous event handlers are NOT owned by the package, so they survive an
+-- uninstall and would otherwise leak (or fire against destroyed state) once the
+-- new copy loads. Tear them down here. All steps are best-effort.
 if not Mux._unloadHandler then
     Mux._unloadHandler = registerAnonymousEventHandler(
         "sysUninstallPackage",
         function(_, pkg)
             if pkg ~= "Muxlet" then return end
             setBorderSizes(0, 0, 0, 0)
+            -- Stop the dev-mode watcher so its recursive timer can't outlive us.
+            pcall(function() if Mux._stopDevmode then Mux._stopDevmode() end end)
+            -- Destroy the live UI + kill the resize handler, auto-save timer and
+            -- output-capture trigger. quiet=true suppresses the "Stopped" banner,
+            -- which would be noise in the middle of a reload.
+            pcall(function() if Mux.fullStop then Mux.fullStop(true) end end)
+            -- Release the updater's runtime download/install handlers.
+            for _, h in ipairs({ "_updateDlHandler", "_updateDlErrHandler",
+                                 "_updateInstallDone", "_updateInstallErr" }) do
+                pcall(function()
+                    if Mux[h] then killAnonymousEventHandler(Mux[h]); Mux[h] = nil end
+                end)
+            end
         end
     )
 end

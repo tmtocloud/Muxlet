@@ -17,22 +17,24 @@
 # Mudlet's binary connection files so the profile connects automatically.
 # Pass --username to pre-fill the login field.
 #
-# --fresh writes a fresh flag file alongside the stamp file. The in-session
-#   stamp watcher picks up both files and reloads with fresh=true, which resets
-#   Muxlet's update-skip counter to simulate a first-time install. Mudlet does
-#   not need to be closed, and no other profile content is touched.
+# --wipe deletes all persisted Muxlet state so the reload comes up like a
+#   brand-new profile (default settings, no saved workspaces/themes/rules, the
+#   first-run welcome dialog again). It clears the profile's Muxlet_persistent
+#   directory on disk AND writes a "wipe" marker into the single stamp file so a
+#   running session re-wipes in the right order (after teardown, before reload).
+#   Mudlet need not be closed, and no other profile content is touched.
 #
 # Works in WSL, native Linux, and macOS.
 #
 # Usage:
 #   ./muddlet [--profile PROFILE] [--host HOST] [--port PORT]
-#             [--username NAME] [--mudlet-config PATH] [--fresh]
+#             [--username NAME] [--mudlet-config PATH] [--wipe]
 #
 # Examples:
 #   ./muddlet
 #   ./muddlet --profile mux-dev
 #   ./muddlet --profile mux-dev --host play.example.com --port 4000 --username alice
-#   ./muddlet --profile mux-dev --host play.example.com --port 4000 --fresh
+#   ./muddlet --profile mux-dev --host play.example.com --port 4000 --wipe
 
 set -euo pipefail
 
@@ -45,7 +47,7 @@ GAME_HOST=""
 GAME_PORT=""
 USERNAME=""
 MUDLET_CONFIG=""
-FRESH=0
+WIPE=0
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 
@@ -56,7 +58,7 @@ while [[ $# -gt 0 ]]; do
         --port)          GAME_PORT="$2";     shift 2 ;;
         --username)      USERNAME="$2";      shift 2 ;;
         --mudlet-config) MUDLET_CONFIG="$2"; shift 2 ;;
-        --fresh)         FRESH=1;            shift   ;;
+        --wipe)          WIPE=1;             shift   ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -184,13 +186,18 @@ echo "Deployed      : $DEST_PACKAGE"
 
 STAMP_PATH="$PROFILE_DIR/Muxlet-rebuild.stamp"
 STAMP="$(date +%s)"
-echo "$STAMP" > "$STAMP_PATH"
-echo "Stamp written : $STAMP  ($STAMP_PATH)"
 
-if [[ $FRESH -eq 1 ]]; then
-    FRESH_PATH="$PROFILE_DIR/Muxlet-fresh.stamp"
-    date +%s > "$FRESH_PATH"
-    echo "Fresh flag    : $FRESH_PATH"
+if [[ $WIPE -eq 1 ]]; then
+    # Clear persisted state on disk (covers the Mudlet-closed case) and mark the
+    # stamp so a running session re-wipes after its own teardown (covers the
+    # Mudlet-open case, race-free).
+    rm -rf "$PROFILE_DIR/Muxlet_persistent"
+    echo "$STAMP wipe" > "$STAMP_PATH"
+    echo "Wipe          : cleared $PROFILE_DIR/Muxlet_persistent"
+    echo "Stamp written : $STAMP wipe  ($STAMP_PATH)"
+else
+    echo "$STAMP" > "$STAMP_PATH"
+    echo "Stamp written : $STAMP  ($STAMP_PATH)"
 fi
 
 echo ""
