@@ -1,278 +1,241 @@
 -- Muxlet — First-run welcome dialog
 --
--- Mux._checkWelcome() is called from a tempTimer(0.3) in settings.lua, after
--- all muxletReady consumers have run.  Downstream packages suppress the popup
--- by calling Mux.settings.set("mux", "welcome_shown", true) in their own
--- muxletReady handler — no separate disable flag needed.
+-- Mux._checkWelcome() is called from a tempTimer(0.3) in settings.lua, after all
+-- muxletReady consumers have run. Downstream packages suppress the popup by
+-- calling Mux.settings.set("mux", "welcome_shown", true) in their own muxletReady
+-- handler — no separate disable flag needed.
 --
--- Built as registered internal content so the pane placeholder is properly
--- cleared (same mechanism as all other content types).
+-- Built as a first-class MuxDialog whose body is a widget form mounted with
+-- :mountForm (ScrollBox + buildForm). That gives clean text wrapping, a real
+-- titlebar close button, and automatic sizing/scrolling for free — the dialog
+-- grows to fit its content up to a fraction of the screen height, then scrolls.
+-- welcome.lua loads after dialog.lua and widgets.lua, so createDialog / buildForm
+-- / registerWidget are all available at load time.
 
--- ── Shared constants ──────────────────────────────────────────────────────────
+-- ── Palette (matches Muxlet's dark UI) ────────────────────────────────────────
 
-local _INTRO_HTML =
-    "<font color='#c6d2ee'>" ..
-    "Muxlet is a workspace manager for Mudlet.<br>" ..
-    "Divide your screen into panels, load game content into each, and save<br>" ..
-    "the arrangement as a workspace. Changes persist between sessions<br>" ..
-    "unless you load a different workspace. Everything is opt-in &mdash;<br>" ..
-    "skip the panels entirely and work from the command line at any time." ..
-    "</font>"
+local C_BODY  = "#c6d2ee"   -- body text
+local C_MUTED = "#7e93c4"   -- secondary / captions
+local C_TERM  = "#8fb8ff"   -- concept name / accent
+local C_CODE  = "#7ab4ff"   -- command text
 
-local _BASICS = {
-    { name = "Panes",      desc = "Panels that hold game content; float freely or dock to the background" },
-    { name = "Tabs",       desc = "Stack multiple views in one panel and switch between them"              },
-    { name = "Splits",     desc = "Divide any pane into two, side by side or stacked"                     },
-    { name = "Workspaces", desc = "Named arrangements; changes persist until you load a different one"     },
-    { name = "Content",    desc = "Pre-loaded views you add to any pane via right-click"                   },
+-- ── Copy ──────────────────────────────────────────────────────────────────────
+
+local _INTRO =
+    "Muxlet turns Mudlet into a tiling workspace. Divide the screen into panes, "
+ .. "load game content into each, and arrange them however you like. Save an "
+ .. "arrangement as a <i>workspace</i> and it comes back exactly as you left it "
+ .. "next session. Everything is opt-in — skip the panels entirely and drive it "
+ .. "all from the command line whenever you prefer."
+
+-- Each entry becomes one "<b>Term</b> — description" line. Descriptions wrap.
+local _CONCEPTS = {
+    { "Panes",      "Resizable panels that hold content. Dock them to the background or let them float freely." },
+    { "Tabs",       "Stack several views inside one pane and switch between them, just like a browser." },
+    { "Splits",     "Divide any pane in two — side by side or stacked — to build the layout you want." },
+    { "Content",    "Ready-made views you drop into a pane by right-click: the command console, GMCP readouts, and anything downstream packages provide." },
+    { "Workspaces", "Named layouts you can save and reload. Your live arrangement is remembered automatically between sessions." },
 }
+
+local _REACT = {
+    { "Conditions", "Named tests against live game state — GMCP fields, variables, and more." },
+    { "Actions",    "Sequences of steps that fire when a condition is met: show or hide a pane, swap its content, send a command. Together they let your layout react to what happens in-game." },
+}
+
+local _CUSTOM = {
+    { "Themes",   "Switch the entire look between dark, light, and your own saved palettes. Fine-tune panes and tabs under Settings \226\134\146 Design." },
+    { "Settings", "Every option lives in the Settings window — open it any time with <span style='color:" .. C_CODE .. "'>mux settings</span>. Automatic update checks live on its Update tab." },
+}
+
+local _DRIVE =
+    "Panes and tabs are edited straight from the UI — titlebar buttons, right-click "
+ .. "menus, and the Properties panel. Session control, themes, workspaces, and "
+ .. "conditions/actions are managed from the command line (or baked into a package). "
+ .. "Conditions and Actions each have their own editor under the Settings window."
 
 local _COMMANDS = {
-    { cmd = "mux  /  mux start", desc = "Start Muxlet; your workspace picks up where it left off" },
-    { cmd = "mux workspaces",    desc = "Browse and load saved workspaces"                         },
-    { cmd = "mux help",          desc = "List all available commands"                              },
+    { "mux",             "Start Muxlet — restores your last session" },
+    { "mux help",        "The full command reference" },
+    { "mux settings",    "Open the Settings window" },
+    { "mux workspaces",  "Browse and load saved layouts" },
+    { "mux theme [name]","Show or switch the active theme" },
+    { "mux version",     "Show the version and check for updates" },
 }
 
-local _OPTIONS = {
-    {
-        id    = "auto",
-        label = "Start automatically",
-        badge = "recommended",
-        desc  = "Muxlet opens with each session. You can also type  mux  at any time.",
-    },
-    {
-        id    = "manual",
-        label = "Start manually",
-        badge = nil,
-        desc  = "Type  mux  or  mux start  when you want to begin. Nothing opens on its own.",
-    },
-}
+-- ── Rich-text form widget (block, word-wrapping) ──────────────────────────────
+--
+-- A self-contained wrapping paragraph widget so the welcome body never depends on
+-- another file having registered one. Distinct name ("welcomeText") so it can't
+-- collide with or perturb the updater's own rich-text widget.
 
--- Card CSS — full border on unselected; left accent + highlight on selected.
-local _CSS_CARD_OFF = [[
-    background-color: rgba(16,20,36,85);
-    border: 1px solid rgba(52,64,96,80);
-    border-radius: 5px;
-]]
-local _CSS_CARD_ON = [[
-    background-color: rgba(28,44,78,145);
-    border-top: 1px solid rgba(85,132,212,120);
-    border-right: 1px solid rgba(85,132,212,120);
-    border-bottom: 1px solid rgba(85,132,212,120);
-    border-left: 4px solid rgba(100,158,255,215);
-    border-radius: 5px;
-]]
+local _APPROX_W = 520
 
-local _CSS_LABEL_OFF = "background: transparent; font-size: 10px; color: rgba(95,115,165,215);"
-local _CSS_LABEL_ON  = "background: transparent; font-size: 10px; font-weight: bold; color: rgba(215,228,255,255);"
-
--- ── Content apply function ────────────────────────────────────────────────────
-
-local function applyWelcomeToPane(target)
-    target.contentBg:echo("")
-    target.contentBg:setStyleSheet("background-color:rgba(6,9,20,255);border:none;")
-
-    local c   = target.content
-    local pfx = target._gid .. "_wlc_"
-
-    local INNER_X = "3%"
-    local INNER_W = "94%"
-    local y = 8
-
-    -- ── Introduction ──────────────────────────────────────────────────────────
-
-    local intro = Geyser.Label:new({
-        name = pfx .. "intro", x = INNER_X, y = y, width = INNER_W, height = 100,
-    }, c)
-    intro:setStyleSheet([[
-        background: transparent;
-        color: rgba(198,210,238,255);
-        font-size: 10px;
-        padding: 4px 14px;
-    ]])
-    intro:rawEcho(_INTRO_HTML)
-    y = y + 106
-
-    local div1 = Geyser.Label:new({ name = pfx.."div1", x=0, y=y, width="100%", height=1 }, c)
-    div1:setStyleSheet(Mux.dialogCss.divider)
-    y = y + 8
-
-    -- ── Basics ────────────────────────────────────────────────────────────────
-
-    local basicsTitle = Geyser.Label:new({
-        name = pfx.."basicsTitle", x=INNER_X, y=y, width=INNER_W, height=15,
-    }, c)
-    basicsTitle:setStyleSheet("background:transparent; color:rgba(115,222,148,255); font-size:9px; font-weight:bold; padding:0 14px;")
-    basicsTitle:rawEcho("BASICS")
-    y = y + 18
-
-    for _, e in ipairs(_BASICS) do
-        local row = Geyser.Label:new({ name=pfx.."b_"..e.name, x=INNER_X, y=y, width=INNER_W, height=17 }, c)
-        row:setStyleSheet("background:transparent; font-size:9px; padding:0 14px;")
-        row:echo(string.format(
-            "<font color='#7ab4ff'>%-12s</font><font color='#c6d2ee'> &mdash; %s</font>",
-            e.name, e.desc
-        ))
-        y = y + 17
+local function estimateHeight(html, width, fontPx)
+    width = width or _APPROX_W
+    local perPx      = (fontPx or 13) * 0.52          -- rough average glyph advance
+    local charsPerLn = math.max(20, math.floor(width / perPx))
+    local lines = 0
+    for seg in (html .. "<br>"):gmatch("(.-)<br>") do
+        local plain = seg:gsub("<[^>]->", "")
+        plain = plain:gsub("&nbsp;", " "):gsub("&amp;", "&"):gsub("&lt;", "<")
+                     :gsub("&gt;", ">"):gsub("&mdash;", "-"):gsub("\226\134\146", ">")
+        lines = lines + math.max(1, math.ceil(math.max(1, #plain) / charsPerLn))
     end
-
-    local div2 = Geyser.Label:new({ name=pfx.."div2", x=0, y=y+2, width="100%", height=1 }, c)
-    div2:setStyleSheet(Mux.dialogCss.divider)
-    y = y + 11
-
-    -- ── Commands ──────────────────────────────────────────────────────────────
-
-    local cmdTitle = Geyser.Label:new({
-        name=pfx.."cmdTitle", x=INNER_X, y=y, width=INNER_W, height=15,
-    }, c)
-    cmdTitle:setStyleSheet("background:transparent; color:rgba(115,222,148,255); font-size:9px; font-weight:bold; padding:0 14px;")
-    cmdTitle:rawEcho("COMMANDS")
-    y = y + 18
-
-    for _, e in ipairs(_COMMANDS) do
-        local row = Geyser.Label:new({ name=pfx.."c_"..e.cmd:gsub("[%s/]+","_"), x=INNER_X, y=y, width=INNER_W, height=17 }, c)
-        row:setStyleSheet("background:transparent; font-size:9px; padding:0 14px;")
-        row:echo(string.format(
-            "<font color='#7ab4ff'>%-22s</font><font color='#c6d2ee'>%s</font>",
-            e.cmd, e.desc
-        ))
-        y = y + 17
-    end
-
-    local div3 = Geyser.Label:new({ name=pfx.."div3", x=0, y=y+2, width="100%", height=1 }, c)
-    div3:setStyleSheet(Mux.dialogCss.divider)
-    y = y + 11
-
-    -- ── Startup mode (card-style selection) ───────────────────────────────────
-
-    local prompt = Geyser.Label:new({
-        name=pfx.."prompt", x=INNER_X, y=y, width=INNER_W, height=18,
-    }, c)
-    prompt:setStyleSheet("background:transparent; color:rgba(198,210,238,200); font-size:10px; padding:0 14px;")
-    prompt:rawEcho("How would you like to start?")
-    y = y + 26
-
-    local ROW_H   = 64
-    local ROW_GAP = 6
-    local ROW_Y0  = y
-
-    local selectedMode = "auto"
-    local cards        = {}   -- [id] = bg label
-    local titleLabels  = {}   -- [id] = title label
-    local checkLabels  = {}   -- [id] = check label
-
-    local function updateSelection(chosenId)
-        selectedMode = chosenId
-        for _, opt in ipairs(_OPTIONS) do
-            local sel = (opt.id == chosenId)
-            cards[opt.id]:setStyleSheet(sel and _CSS_CARD_ON or _CSS_CARD_OFF)
-            titleLabels[opt.id]:setStyleSheet(sel and _CSS_LABEL_ON or _CSS_LABEL_OFF)
-            checkLabels[opt.id]:rawEcho(sel and "<center>✓</center>" or "")
-        end
-    end
-
-    for i, opt in ipairs(_OPTIONS) do
-        local ry = ROW_Y0 + (i - 1) * (ROW_H + ROW_GAP)
-
-        -- Card background
-        local card = Geyser.Label:new({
-            name=pfx.."card_"..opt.id, x=INNER_X, y=ry, width=INNER_W, height=ROW_H,
-        }, c)
-        card:echo("")
-        cards[opt.id] = card
-
-        -- Title (with optional badge)
-        local titleHtml = opt.label
-        if opt.badge then
-            titleHtml = titleHtml
-                .. "  <span style='font-size:8px;font-weight:normal;"
-                .. "color:rgba(130,165,230,180);font-style:italic;'>"
-                .. opt.badge .. "</span>"
-        end
-        local title = Geyser.Label:new({
-            name=pfx.."title_"..opt.id, x="8%", y=ry+10, width="78%", height=22,
-        }, c)
-        title:rawEcho(titleHtml)
-        titleLabels[opt.id] = title
-
-        -- Checkmark (right-aligned inside the card)
-        local chk = Geyser.Label:new({
-            name=pfx.."chk_"..opt.id, x="87%", y=ry+10, width=28, height=22,
-        }, c)
-        chk:setStyleSheet("background:transparent; color:rgba(110,168,255,240); font-size:14px; font-weight:bold;")
-        checkLabels[opt.id] = chk
-
-        -- Description
-        local desc = Geyser.Label:new({
-            name=pfx.."desc_"..opt.id, x="8%", y=ry+34, width="88%", height=26,
-        }, c)
-        desc:setStyleSheet("background:transparent; color:rgba(110,132,185,210); font-size:9px;")
-        desc:rawEcho(opt.desc)
-
-        -- Click on any part of the row selects this option
-        local capturedId = opt.id
-        local clickFn    = function() updateSelection(capturedId) end
-        card:setClickCallback(clickFn)
-        title:setClickCallback(clickFn)
-        chk:setClickCallback(clickFn)
-        desc:setClickCallback(clickFn)
-    end
-
-    updateSelection("auto")
-
-    -- ── Confirm button ────────────────────────────────────────────────────────
-
-    local btnY = ROW_Y0 + #_OPTIONS * (ROW_H + ROW_GAP) + 10
-    local btn  = Geyser.Label:new({
-        name=pfx.."btn", x="30%", y=btnY, width="40%", height=36,
-    }, c)
-    btn:setStyleSheet(Mux.dialogCss.buttonPrimary)
-    btn:rawEcho("<center>Get Started</center>")
-    btn:setClickCallback(function()
-        local autoStart = (selectedMode == "auto")
-        Mux.settings.set("mux", "welcome_shown", true)
-        Mux.settings.set("mux", "auto_start",    autoStart)
-        target:close()
-        if autoStart and Mux.fullStart then
-            Mux.fullStart()
-        end
-    end)
+    return lines * (fontPx and (fontPx + 7) or 20)
 end
 
--- ── Dialog builder ────────────────────────────────────────────────────────────
--- Running Y budget (content area = DIALOG_H - titlebar(22) - 2*border(2) = DIALOG_H-26):
---   intro(100) +gap+ div +gap
---   basicsTitle(15) + 5×17(85) +gap+ div +gap
---   cmdTitle(15)    + 3×17(51) +gap+ div +gap
---   prompt(18) +gap
---   2 cards × (64+6)(140) + gap(10) + button(36)
---   ≈ 530px → DIALOG_H 560
+local function ensureWelcomeWidget()
+    if not (Mux.ui and Mux.ui.registerWidget) then return end
+    if Mux.ui._widgets and Mux.ui._widgets["welcomeText"] then return end
+    Mux.ui.registerWidget("welcomeText", function(row, c)
+        local spec = c.spec
+        local fg   = spec.color or C_BODY
+        local fs   = spec.fontSize or 13
+        local w    = c.formW - c.padL - c.padR
+        local lbl  = Geyser.Label:new({
+            name = c.uid .. "_wt", x = c.padL, y = 6,
+            width = w, height = math.max(16, (c.thisH or 30) - 12),
+        }, row)
+        lbl:setStyleSheet(string.format(
+            "background:transparent; border:none; color:%s; font-size:%dpx;", fg, fs))
+        lbl:echo(spec.html or "")
+        return {}
+    end, { layout = "block", rowHeight = 30 })
+end
+
+-- Render a { term, desc } list into one HTML block with hanging lines.
+local function defList(items, fontPx)
+    local parts = {}
+    for _, e in ipairs(items) do
+        parts[#parts + 1] = string.format(
+            "<b><span style='color:%s'>%s</span></b>"
+         .. "<span style='color:%s'> &mdash; %s</span>",
+            C_TERM, e[1], C_BODY, e[2])
+    end
+    return table.concat(parts, "<br><br>")
+end
+
+-- Render the command list as aligned, monospaced-looking rows.
+local function cmdList()
+    local parts = {}
+    for _, e in ipairs(_COMMANDS) do
+        parts[#parts + 1] = string.format(
+            "<span style='color:%s'><b>%s</b></span>"
+         .. "<span style='color:%s'>&nbsp;&nbsp;&mdash;&nbsp;%s</span>",
+            C_CODE, e[1], C_MUTED, e[2])
+    end
+    return table.concat(parts, "<br>")
+end
+
+-- ── Spec builder ──────────────────────────────────────────────────────────────
+
+local function buildSpecs(getMode, setMode, onStart)
+    local specs = {}
+
+    local function para(html, opts)
+        opts = opts or {}
+        specs[#specs + 1] = {
+            type = "welcomeText", html = html,
+            color = opts.color, fontSize = opts.fontSize,
+            rowHeight = estimateHeight(html, _APPROX_W, opts.fontSize or 13) + (opts.pad or 8),
+        }
+    end
+    local function section(label) specs[#specs + 1] = { type = "divider", label = label } end
+
+    para(_INTRO)
+
+    section("The building blocks")
+    para(defList(_CONCEPTS))
+
+    section("Make it react")
+    para(defList(_REACT))
+
+    section("Make it yours")
+    para(defList(_CUSTOM))
+
+    section("Two ways to drive it")
+    para(_DRIVE)
+
+    section("Handy commands")
+    para(cmdList())
+
+    section("Getting started")
+    para("Muxlet can open automatically each session, or stay out of the way until "
+      .. "you ask for it. You can change this any time in Settings.",
+      { color = C_MUTED })
+
+    specs[#specs + 1] = {
+        type       = "segmentedControl",
+        label      = "When Mudlet opens",
+        widgetWidth = 230,
+        options    = {
+            { label = "Open Muxlet", value = "auto"   },
+            { label = "Wait for me", value = "manual" },
+        },
+        readFn  = function() return getMode() end,
+        writeFn = function(v) setMode(v) end,
+        _noReset = true,
+    }
+
+    specs[#specs + 1] = {
+        type = "button", label = "Get Started", style = "primary", _noReset = true,
+        onClick = onStart,
+    }
+
+    return specs
+end
+
+-- ── Dialog ──────────────────────────────────────────────────────────────────
 
 local function buildWelcomeDialog()
+    ensureWelcomeWidget()
+
+    local selectedMode = "auto"
+    local committed    = false   -- true once the user has made an explicit choice
+
+    -- Mark the welcome as shown on ANY close (button or titlebar ×) so it never
+    -- nags again; only apply the auto-start preference when the user actually
+    -- confirmed a choice via Get Started.
+    local function markShown()
+        if Mux.settings and Mux.settings.get and not Mux.settings.get("mux", "welcome_shown") then
+            Mux.settings.set("mux", "welcome_shown", true)
+        end
+    end
+
     local dialog = Mux.createDialog({
-        title  = "Welcome to Muxlet",
-        width  = 540,
-        height = 560,
+        title     = "Welcome to Muxlet",
+        width     = 560,
+        singleton = "mux_welcome",
+        onClose   = markShown,
     })
-    Mux._applyContent(dialog, "mux_welcome")
+
+    local function getMode() return selectedMode end
+    local function setMode(v) selectedMode = v end
+
+    local function onStart()
+        committed = true
+        local autoStart = (selectedMode == "auto")
+        markShown()
+        Mux.settings.set("mux", "auto_start", autoStart)
+        pcall(function() dialog:close() end)
+        if autoStart and Mux.fullStart then Mux.fullStart() end
+    end
+
+    if dialog.contentBg then
+        pcall(function() dialog.contentBg:hide() end)
+    end
+
+    dialog:mountForm(buildSpecs(getMode, setMode, onStart), { prefix = "mux_welcome_f" })
     dialog:show()
     dialog:raise()
+    return dialog
 end
 
 -- ── Public entry point ────────────────────────────────────────────────────────
 
 function Mux._checkWelcome()
-    if Mux.settings.get("mux", "welcome_shown") then return end
-    if not (Mux.createDialog and Mux.registerContent) then return end
-
-    if not Mux._content["mux_welcome"] then
-        Mux.registerContent("mux_welcome", {
-            internal = true,
-            name     = "Welcome",
-            apply    = applyWelcomeToPane,
-        })
-    end
-
+    if Mux.settings and Mux.settings.get and Mux.settings.get("mux", "welcome_shown") then return end
+    if not (Mux.createDialog and Mux.ui and Mux.ui.buildForm) then return end
     buildWelcomeDialog()
 end
 
