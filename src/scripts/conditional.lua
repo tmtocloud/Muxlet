@@ -1,13 +1,10 @@
--- conditional.lua — Condition engine for reactive panes (#4, inline model).
+-- conditional.lua — Rule engine for reactive panes/tabs.
 --
--- A pane may carry an inline CONDITION SPEC plus two action ids:
---   pane.condition   = { type=..., path=..., value=..., event=..., seconds=... } | nil
---   pane.actionTrue  = action id run when the condition becomes true  (default mux.showSelf)
---   pane.actionFalse = action id run when the condition becomes false (default mux.hideSelf)
---
--- The condition lives ON THE PANE, defined where it is used — there is no named
--- condition registry and no separate "conditions" management screen. nil (or type
--- "always") means always visible. Condition types:
+-- A pane or tab carries subject.rules = { {id, cond, act, actElse, enabled}, … }.
+-- A rule runs its action `act` when `cond` becomes met, and `actElse` (optional)
+-- when it becomes not-met. `cond` is either an inline spec or a { ref = id }
+-- pointing at a named condition (Mux.registerCondition — see below). Condition
+-- types (the `type` field of an inline/named spec):
 --   always        — always true
 --   gmcp_exists   — gmcp value at `path` is non-nil and non-empty
 --   gmcp_equals   — gmcp value at `path` equals `value`
@@ -15,12 +12,14 @@
 --   event_fired   — true for `seconds` after the Mudlet event `event` fires
 --   connected     — session is connected
 --   disconnected  — session is not (fully) connected
+--   line_match    — a managed Mudlet trigger pulses the rule's action on match
 --
--- ACTIONS, by contrast, are reusable named objects in the normal action registry
--- (Mux.registerAction / runAction). Built-ins (mux.showSelf / mux.hideSelf, etc.)
--- are code-defined; user actions (send / raise / lua) are DATA, created from
--- Settings → Actions and persisted to rules.json. This file owns the user-action
--- store and the built-in reactive actions; the registry itself lives in actions.lua.
+-- ACTIONS are reusable named objects in the action registry (Mux.registerAction /
+-- runAction, action.lua). Built-ins (mux.showSelf/hideSelf, etc.) and named
+-- conditions' built-ins (always/connected/…) both live in library/ (one file per
+-- item, registered the same way a package registers its own); this file owns the
+-- registry MECHANICS only — Mux.registerCondition, Mux.registerActionOp, and the
+-- user/declarative CRUD (createDeclarativeCondition/Action, rules.json).
 --
 -- Embedded panes hide via the zero-weight split layout (split.lua
 -- _applyConditionWeights). Floating panes simply hide/show.
@@ -208,7 +207,9 @@ local function conditionValue(cond, subject)
         if isConnected then return not isConnected() end
         return Mux._connState ~= "connected"
     elseif Mux._customConditionValue then
-        -- Phase 2 hook: line_match and any future condition kinds.
+        -- Extension point for a condition kind evaluated by custom logic instead of
+        -- an inline branch here; unset by default. Pulse conditions (line_match)
+        -- never reach this - they skip conditionValue entirely (see evalRule).
         return Mux._customConditionValue(cond, subject)
     end
     return true
@@ -473,109 +474,37 @@ Mux._condUninstallers.line_match = function(subject, rule)
     rule._triggerId = nil
 end
 
--- ── Built-in reactive actions ─────────────────────────────────────────────────
--- Dispatch to whichever subject the rule actually lives on: a tab (ctx.tab) if
+-- ── Rule-subject lookup ────────────────────────────────────────────────────────
+-- Dispatch to whichever subject a rule actually lives on: a tab (ctx.tab) if
 -- the rule was added to a tab, else its host pane (ctx.pane). ctxFor (above)
 -- always sets ctx.pane = the tab's host, so ctx.tab must be checked first or a
 -- tab's own rule would show/hide its host pane instead of the tab itself.
-local function ruleSubject(ctx) return ctx and (ctx.tab or ctx.pane) end
-
-if Mux.registerAction then
-    Mux.registerAction("mux.showSelf", {
-        name = "Show", group = "muxlet", icon = "👁",
-        desc = "Show the pane or tab. The default action when a condition becomes true.",
-        run  = function(ctx) local s = ruleSubject(ctx); if s and s._conditionShow then s:_conditionShow() end end,
-    })
-    Mux.registerAction("mux.hideSelf", {
-        name = "Hide", group = "muxlet", icon = "🚫",
-        desc = "Hide the pane or tab. The default action when a condition becomes false.",
-        run  = function(ctx) local s = ruleSubject(ctx); if s and s._conditionHide then s:_conditionHide() end end,
-    })
-end
+-- Exported (not local) because the show/hide/toggle actions that use it live in
+-- library/actions/, outside the rule engine.
+function Mux._ruleSubject(ctx) return ctx and (ctx.tab or ctx.pane) end
 
 -- ── User-defined actions (DATA; round-trip to rules.json) ─────────────────────
 -- An action is an ordered list of STEPS, each a typed operation from the palette
--- below (send a command, show/hide/zoom this pane, set content, run Lua, …).
--- Legacy single-kind specs are normalised to a one-step list on the fly, so older
--- saves keep working.
+-- (send a command, show/hide/zoom this pane, set content, run Lua, … — see
+-- library/actions/ for the built-in ops). Legacy single-kind specs are
+-- normalised to a one-step list on the fly, so older saves keep working.
 
 Mux._declActions = Mux._declActions or {}   -- id → spec  ({ id, label, steps })
 
 local _rulesFile  = (Mux._persistentDir or ".") .. "/rules.json"
 local _rulesDirty = false
 
--- ── Operation palette ─────────────────────────────────────────────────────────
+-- ── Operation palette registry ──────────────────────────────────────────────────
 -- Each op: { id, label, group, icon, desc, fields = { {key,label,kind,options?,desc?} },
 --            run = function(step, ctx) }. `kind` of a field tells the editor which
 -- control to show: text | lua | content | theme | choice. ctx = { pane, tab, value }.
 Mux.actionOps     = Mux.actionOps     or {}
 Mux.actionOpOrder = Mux.actionOpOrder or {}
-local function registerOp(id, def)
+function Mux.registerActionOp(id, def)
     def.id = id
     if not Mux.actionOps[id] then Mux.actionOpOrder[#Mux.actionOpOrder + 1] = id end
     Mux.actionOps[id] = def
 end
-Mux.registerActionOp = registerOp   -- packages can add their own palette ops
-
-local function paneOf(ctx)    return ctx and ctx.pane end
-local function subjectOf(ctx) return ctx and (ctx.tab or ctx.pane) end
-
-registerOp("send", { label = "Send command", group = "Game", icon = "⌨",
-    desc = "Send a command to the game, as if you typed it.",
-    fields = { { key = "command", label = "Command", kind = "text" } },
-    run = function(s) if send then send(s.command or "") end end })
-registerOp("echo", { label = "Echo to console", group = "Game", icon = "💬",
-    fields = { { key = "text", label = "Text", kind = "text" } },
-    run = function(s) if cecho then cecho("\n" .. (s.text or "") .. "\n") end end })
-registerOp("raise", { label = "Raise event", group = "Game", icon = "📣",
-    desc = "Raise a Mudlet event other scripts (or an 'Event fired' condition) can react to.",
-    fields = { { key = "event", label = "Event name", kind = "text" } },
-    run = function(s) if raiseEvent and s.event and s.event ~= "" then raiseEvent(s.event) end end })
-
-registerOp("showPane", { label = "Show this pane", group = "Pane", icon = "👁",
-    run = function(_, ctx) local p = paneOf(ctx); if p and p._conditionShow then p:_conditionShow() end end })
-registerOp("hidePane", { label = "Hide this pane", group = "Pane", icon = "🚫",
-    run = function(_, ctx) local p = paneOf(ctx); if p and p._conditionHide then p:_conditionHide() end end })
-registerOp("zoomPane", { label = "Zoom this pane", group = "Pane", icon = "🔍",
-    run = function(_, ctx) local p = paneOf(ctx); if p and p.zoom then p:zoom() end end })
-registerOp("unzoomPane", { label = "Un-zoom this pane", group = "Pane", icon = "🔭",
-    run = function(_, ctx) local p = paneOf(ctx); if p and p._unzoom then p:_unzoom() end end })
-registerOp("removePane", { label = "Remove this pane", group = "Pane", icon = "✖",
-    desc = "Close the pane this action runs on.",
-    run = function(_, ctx) local p = paneOf(ctx); if p and p.close then p:close() end end })
-
-registerOp("applyContent", { label = "Set content of this pane", group = "Content", icon = "▦",
-    fields = { { key = "content", label = "Content", kind = "content" } },
-    run = function(s, ctx) local subj = subjectOf(ctx)
-        if subj and s.content and Mux._applyContent then Mux._applyContent(subj, s.content) end end })
-registerOp("createPane", { label = "Create pane with content", group = "Content", icon = "➕",
-    desc = "Split this pane and put the chosen content in the new one.",
-    fields = {
-        { key = "content",   label = "Content",   kind = "content" },
-        { key = "direction", label = "Direction", kind = "choice",
-          options = { { value = "v", label = "Right" }, { value = "h", label = "Below" } } },
-    },
-    run = function(s, ctx)
-        local p = paneOf(ctx); if not (p and p.split) then return end
-        local ns = p:split(s.direction or "v")
-        if ns and ns.childB and s.content then
-            tempTimer(0, function() pcall(Mux._applyContent, ns.childB, s.content) end)
-        end
-    end })
-
-registerOp("switchTheme", { label = "Switch theme", group = "Appearance", icon = "🎨",
-    fields = { { key = "theme", label = "Theme", kind = "theme" } },
-    run = function(s) if s.theme and Mux.settings and Mux.settings.set then Mux.settings.set("mux", "theme", s.theme) end end })
-
-registerOp("lua", { label = "Run Lua", group = "Advanced", icon = "⚙",
-    desc = "Run custom Lua. The action context is the vararg — write: local ctx = ...  then use ctx.pane / ctx.tab / ctx.value.",
-    fields = { { key = "code", label = "Lua code", kind = "lua" } },
-    run = function(s, ctx)
-        local fn, err = loadstring(s.code or "")
-        if not fn then if Mux._warn then Mux._warn("action lua compile: %s", tostring(err)) end return end
-        local ok, e2 = pcall(fn, ctx)
-        if not ok and Mux._warn then Mux._warn("action lua run: %s", tostring(e2)) end
-    end })
 
 -- Normalise a spec to a step list (converts legacy kind-based specs).
 function Mux._actionSteps(spec)
@@ -608,7 +537,9 @@ local function saveRules()
         local acts = {}
         for _, s in pairs(Mux._declActions) do acts[#acts+1] = s end
         local conds = {}
-        for _, c in pairs(Mux._declConditions) do conds[#conds+1] = c end
+        for _, c in pairs(Mux._conditions) do
+            if not c.readOnly then conds[#conds+1] = c end
+        end
         local ok, f = pcall(io.open, _rulesFile, "w")
         if not ok or not f then return end
         local ok2, str = pcall(yajl.to_string, { actions = acts, conditions = conds })
@@ -628,6 +559,8 @@ function Mux.createDeclarativeAction(spec, noSave)
 end
 
 function Mux.deleteDeclarativeAction(id)
+    local def = Mux.getAction and Mux.getAction(id)
+    if def and def.readOnly then return end   -- read-only entries aren't deletable
     if Mux.unregisterAction then Mux.unregisterAction(id) end
     Mux._declActions[id] = nil
     saveRules()
@@ -635,48 +568,62 @@ end
 
 function Mux.getDeclarativeAction(id) return Mux._declActions[id] end
 
--- ── Named conditions (DATA; round-trip to rules.json) ─────────────────────────
+-- ── Named conditions ────────────────────────────────────────────────────────
 -- A named condition wraps a primitive condition spec with an id + label so it can
 -- populate the rule "When" dropdown and be reused across panes/tabs. Rules store a
 -- reference { ref = id }; presets/content still use inline specs.
-Mux._declConditions = Mux._declConditions or {}   -- id → { id, label, cond = {type,…} }
+--
+-- One registry, one registration function, for both code-defined (built-in) and
+-- user-created (declarative, via Settings → Conditions) entries — same shape as
+-- Mux.registerAction/registerContent/registerTheme/registerWorkspace. The only
+-- difference is `readOnly = true`: not editable/deletable in the editor, and
+-- excluded from the rules.json round-trip (see saveRules above) since it's code,
+-- not user data. Not specific to Muxlet's own built-ins — any package can mark
+-- its own registered condition readOnly the same way.
+--
+-- API:
+--   Mux.registerCondition(id, { label, cond, readOnly })
+--   Mux.unregisterCondition(id)
+--   Mux.getCondition(id)                    → def | nil
+--   Mux.listConditions()                    → array of { id, label, cond, readOnly } (read-only first, then alpha)
+Mux._conditions = Mux._conditions or {}   -- id → { id, label, cond = {type,…}, readOnly }
 
--- Built-in named conditions: always present, read-only, and a starting example.
-Mux._builtinConditions = {
-    { id = "always",       label = "Always",       cond = { type = "always" } },
-    { id = "connected",    label = "Connected",    cond = { type = "connected" } },
-    { id = "connecting",   label = "Connecting",   cond = { type = "connecting" } },
-    { id = "disconnected", label = "Disconnected", cond = { type = "disconnected" } },
-}
-local _builtinCondById = {}
-for _, c in ipairs(Mux._builtinConditions) do _builtinCondById[c.id] = c end
+function Mux.registerCondition(id, def)
+    assert(type(id) == "string" and id ~= "", "condition id must be a non-empty string")
+    assert(type(def) == "table", "condition def must be a table")
+    def.id    = id
+    def.label = def.label or id
+    def.cond  = def.cond or { type = "always" }
+    Mux._conditions[id] = def
+    return def
+end
+
+function Mux.unregisterCondition(id) Mux._conditions[id] = nil end
 
 -- Resolve a rule's cond to a primitive spec, following { ref = id } to a named
 -- (user or built-in) condition. Inline specs pass through unchanged.
 function Mux._resolveCond(cond)
     if type(cond) ~= "table" then return cond end
     if cond.ref then
-        local def = Mux._declConditions[cond.ref] or _builtinCondById[cond.ref]
+        local def = Mux._conditions[cond.ref]
         return (def and def.cond) or { type = "always" }
     end
     return cond
 end
 
-function Mux.getCondition(id) return Mux._declConditions[id] or _builtinCondById[id] end
+function Mux.getCondition(id) return id and Mux._conditions[id] or nil end
 
--- Built-in + user named conditions, for the editor list and the When dropdown.
+-- Read-only + editable named conditions, for the editor list and the When
+-- dropdown. Read-only entries sort first, then everything else alphabetically.
 function Mux.listConditions()
     local out = {}
-    for _, c in ipairs(Mux._builtinConditions) do
-        out[#out+1] = { id = c.id, label = c.label, cond = c.cond, builtin = true }
+    for id, c in pairs(Mux._conditions) do
+        out[#out+1] = { id = id, label = c.label or id, cond = c.cond, readOnly = c.readOnly or false }
     end
-    local ids = {}
-    for id in pairs(Mux._declConditions) do ids[#ids+1] = id end
-    table.sort(ids)
-    for _, id in ipairs(ids) do
-        local c = Mux._declConditions[id]
-        out[#out+1] = { id = id, label = c.label or id, cond = c.cond, builtin = false }
-    end
+    table.sort(out, function(a, b)
+        if a.readOnly ~= b.readOnly then return a.readOnly end
+        return a.label:lower() < b.label:lower()
+    end)
     return out
 end
 
@@ -701,16 +648,21 @@ function Mux._reapplyNamedCondition(id)
     end
 end
 
+-- Thin wrapper over Mux.registerCondition for the user-facing Settings →
+-- Conditions editor: registers (without readOnly=true, so it's editable/
+-- deletable/exported) and persists to rules.json.
 function Mux.createDeclarativeCondition(def, noSave)
     assert(type(def) == "table" and def.id and def.id ~= "", "condition needs an id")
-    Mux._declConditions[def.id] = {
-        id = def.id, label = def.label or def.id, cond = def.cond or { type = "always" },
-    }
+    Mux.registerCondition(def.id, { label = def.label or def.id, cond = def.cond or { type = "always" } })
     if not noSave then saveRules() end
     Mux._reapplyNamedCondition(def.id)
 end
-function Mux.deleteDeclarativeCondition(id) Mux._declConditions[id] = nil; saveRules() end
-function Mux.getDeclarativeCondition(id) return Mux._declConditions[id] end
+function Mux.deleteDeclarativeCondition(id)
+    local c = Mux._conditions[id]
+    if not c or c.readOnly then return end   -- read-only entries aren't deletable
+    Mux.unregisterCondition(id)
+    saveRules()
+end
 
 -- ── Export (conditions & actions) ──────────────────────────────────────────
 -- Serializes a single condition/action definition into one
@@ -730,8 +682,8 @@ function Mux.exportCondition(id)
         Mux._echo("\n<red>[mux]<reset> Usage: mux conditions export <id>|all\n")
         return
     end
-    local c = Mux._declConditions[id]
-    if not c then
+    local c = Mux._conditions[id]
+    if not c or c.readOnly then
         Mux._echo(string.format(
             "\n<red>[mux]<reset> No declarative condition named '%s'.\n"
             .. "  (Built-ins can't be exported — they're already code. Use `mux conditions list`.)\n",
@@ -748,14 +700,16 @@ end
 
 function Mux.exportAllConditions()
     local ids = {}
-    for cid in pairs(Mux._declConditions) do ids[#ids + 1] = cid end
+    for cid, c in pairs(Mux._conditions) do
+        if not c.readOnly then ids[#ids + 1] = cid end
+    end
     table.sort(ids)
     if #ids == 0 then
         Mux._echo("\n<yellow>[mux]<reset> No declarative conditions to export.\n")
         return
     end
     local lines = { "-- Generated by `mux conditions export all`.", "" }
-    for _, cid in ipairs(ids) do lines[#lines + 1] = Mux._conditionRegisterLua(Mux._declConditions[cid]) end
+    for _, cid in ipairs(ids) do lines[#lines + 1] = Mux._conditionRegisterLua(Mux._conditions[cid]) end
     lines[#lines + 1] = ""
     local outPath = Mux._writeExportFile("conditions-export.lua", table.concat(lines, "\n"))
     if outPath then

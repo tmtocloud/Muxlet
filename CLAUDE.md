@@ -316,29 +316,34 @@ The returned `formHandle` exposes `.totalHeight`, `.closeDropdown()`, `.refresh(
 
 ```
 src/scripts/globals.lua            — Mux table, ID generators, class factory, context menu renderer, Mux._serializeLua (shared table→Lua-source serializer for all export commands)
+src/scripts/theme.lua              — token engine (Mux.tok, setGlobalToken/setLocalToken) + theme registry (registerTheme, applyTheme, activeTheme()), saveThemeFromGlobals/exportTheme/exportAllThemes
 src/scripts/settings.lua           — settings registry, settings dialog, row builders
 src/scripts/content.lua            — registerContent, _applyContent, singleton tracking
+src/scripts/action.lua             — action registry mechanics only (registerAction, runAction, listActions); built-ins live in library/actions/
 src/scripts/update.lua             — version check and auto-update logic
-src/scripts/style.lua               — token engine (Mux.tok, setGlobalToken/setLocalToken) + theme registry (registerTheme, applyTheme, activeTheme(), merged from the former theme.lua), saveThemeFromGlobals/exportTheme/exportAllThemes
 src/scripts/pane.lua               — MuxPane class: construction, titlebar, lock/unlock, close, resize
 src/scripts/tabs.lua               — Tab infrastructure: buildTabInfrastructure, addTab, activateTabObj
-src/scripts/connection.lua         — connectionAware pane/tab integration
+src/scripts/connection.lua         — connectionAware pane/tab integration, connection-screen overlay mechanics (Mux._runOverlay; the mux.overlay.* actions themselves live in library/actions/)
 src/scripts/split.lua              — MuxSplit: binary split with drag-resize handle
 src/scripts/panespace.lua           — MuxPaneSpace: border-zone management, root node management
 src/scripts/manager.lua            — pane lookup (getPane), z-order (raisePane / raiseFloatingPanes via Mux._raiseSeq), recovery (mux panes / mux reveal). No focus tracking — panes are styled by their resting frame, not a focus border.
 src/scripts/dialog.lua             — Mux.createDialog(opts), Mux.dialogCss palette
 src/scripts/widgets.lua            — Mux.ui declarative, theme-aware form builder (buildForm/specHeight/formHeight)
 src/scripts/welcome.lua            — first-run welcome dialog (registered internal content)
-src/scripts/workspace.lua          — registerWorkspace, applyWorkspace, saveWorkspace, auto-save, exportWorkspace (dependency-aware — bundles referenced conditions/actions), exportAll
-src/scripts/conditional.lua        — condition engine (Mux._conditionValue, rule evaluation), declarative condition/action store (createDeclarativeCondition/Action, rules.json), exportCondition/exportAction (+ "all" variants)
-src/scripts/content_builtins.lua   — registerGmcpViewer + gmcp_inspector content
+src/scripts/workspace.lua          — registerWorkspace mechanics, applyWorkspace, saveWorkspace, auto-save, exportWorkspace (dependency-aware — bundles referenced conditions/actions), exportAll; the built-in "default" workspace lives in library/workspaces/
 src/scripts/properties.lua         — Mux.showPaneProperties, Mux.showTabProperties, mux_properties content
+src/scripts/conditional.lua        — rule engine (Mux._conditionValue, rule evaluation), condition/action-op registries (registerCondition, registerActionOp), declarative condition/action store (createDeclarativeCondition/Action, rules.json), exportCondition/exportAction (+ "all" variants). Built-in conditions live in library/conditions/.
 src/scripts/devmode.lua            — local-build auto-reload and `mux reload` helpers
-src/scripts/themes/                — dark.lua, light.lua (theme definitions)
+src/scripts/library/                — everything registered through the mechanics above, one file per item (mirrors the registries: content types register via Mux.registerContent, themes via Mux.registerTheme, actions/steps via Mux.registerAction/registerActionOp, conditions via Mux.registerCondition, workspaces via Mux.registerWorkspace). Loads last (see scripts.json) since registration never depends on other registered items, only on its own engine having loaded.
+  library/content/                 — gmcp.lua, buttons.lua, capture.lua
+  library/themes/                  — dark.lua, light.lua
+  library/actions/                 — one file per built-in action (reconnect, showSelf/hideSelf, showTarget/hideTarget/toggleTarget, overlay*) and step op (stepSend, stepEcho, …)
+  library/conditions/              — always.lua, connected.lua, connecting.lua, disconnected.lua
+  library/workspaces/               — default.lua
 src/aliases/mux.lua                — the `mux` command alias (parses all subcommands)
 ```
 
-Load order (`src/scripts/scripts.json`): globals → settings → content → update → theme → pane → tabs → connection → split → panespace → manager → dialog → widgets → welcome → workspace → content_builtins → properties → devmode → themes
+Load order (`src/scripts/scripts.json`): globals → theme → settings → content → action → update → pane → tabs → connection → split → panespace → manager → anchor → dialog → widgets → welcome → workspace → properties → conditional → devmode → library
 
 There is no keybinds module. Muxlet ships no Alt+key bindings; every action is reachable through the `mux` command alias, the titlebar buttons, and the context menus. (The reveal-strip tooltip in `pane.lua` mentions "Press Alt+[ to restore titlebar," but no such binding is registered — the tooltip text is stale and the titlebar is restored by clicking the reveal strip, through the Properties dialog, with `pane:setTitlebarVisible(true)`, or with `mux reveal <id>`. Treat that tooltip as a known bug, not a documented feature.)
 
@@ -403,7 +408,7 @@ External API names (Geyser, Mudlet built-ins) are not ours to rename.
 
 ## What NOT to do
 
-- Do not build UI directly into `pane.content` without going through `Mux._applyContent` — doing so leaves `contentBg` visible (placeholder on top), bypasses the content lifecycle, and causes `activeContent` to not be saved in workspaces. **Exception:** dialogs built with `MuxDialog:mountForm` (dialog.lua) must go the OTHER way — build directly on `dlg.content` (hide `dlg.contentBg` manually, then call `dlg:mountForm(...)`), matching `contentLibrary/buttons.lua`'s `openGridSettings` / `contentLibrary/capture.lua`'s `openCaptureSettings`. Routing a `mountForm` dialog through `_applyContent` swaps `target.content` for a temporary slot sized to the dialog's PRE-`fitContent` geometry; the ScrollBox `mountForm` builds never catches up when `fitContent` grows the frame afterward, leaving most of the dialog showing Qt's bare white background.
+- Do not build UI directly into `pane.content` without going through `Mux._applyContent` — doing so leaves `contentBg` visible (placeholder on top), bypasses the content lifecycle, and causes `activeContent` to not be saved in workspaces. **Exception:** dialogs built with `MuxDialog:mountForm` (dialog.lua) must go the OTHER way — build directly on `dlg.content` (hide `dlg.contentBg` manually, then call `dlg:mountForm(...)`), matching `library/content/buttons.lua`'s `openGridSettings` / `library/content/capture.lua`'s `openCaptureSettings`. Routing a `mountForm` dialog through `_applyContent` swaps `target.content` for a temporary slot sized to the dialog's PRE-`fitContent` geometry; the ScrollBox `mountForm` builds never catches up when `fitContent` grows the frame afterward, leaving most of the dialog showing Qt's bare white background.
 - Do not append hand-rendered widgets to a `buildForm` panel/dialog OUTSIDE the `specs` array it was built from. `buildForm`'s own `relayout()` (collapse/expand, and any external caller of `formHandle.relayout`/`target._muxRelayout`) only resizes the content label to fit the specs IT knows about — extra content appended afterward gets silently clobbered on the next relayout. If a panel needs a custom look a plain field spec can't produce (e.g. a clickable list row with a delete icon), add a new block-layout entry to `Mux.ui._builtins` (see `listRow` in widgets.lua) and put it in the specs array like any other row, rather than hand-building it alongside the form.
 - Any code that resizes a pane/dialog's `.outer` directly (`d.outer:resize(...)`) must follow with `Mux._reflowContent(d)` (or call a helper that already does), or nested `.content` several levels deep (tab → sub-tab → ScrollBox) keeps reporting its PRE-resize size even though the visible frame changed. `MuxPane:_detachToFloat` already does this; `MuxDialog:fitContent` and `Mux._fitDialogToActiveTab` needed it added.
 - Do not register Muxlet system UI content without `internal = true` — it will appear in the user-facing "Add Content" menu and be written to the content catalog file.

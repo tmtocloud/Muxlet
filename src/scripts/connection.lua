@@ -214,29 +214,17 @@ function MuxSurface:_hideTabStateOverlay(tab, key)
     self:_hideTabConnScreen(tab)
 end
 
-if Mux.registerAction then
-    local function runOverlay(ctx, key, state, show)
-        if not ctx then return end
-        if ctx.tab and ctx.pane then
-            if show then ctx.pane:_showTabStateOverlay(ctx.tab, key, state)
-            else ctx.pane:_hideTabStateOverlay(ctx.tab, key) end
-        elseif ctx.pane then
-            if show then ctx.pane:_showStateOverlay(key, state)
-            else ctx.pane:_hideStateOverlay(key) end
-        end
+-- Shared dispatch for the mux.overlay.* built-in actions (library/actions/).
+-- Exported (not local) since those actions live outside this file now.
+function Mux._runOverlay(ctx, key, state, show)
+    if not ctx then return end
+    if ctx.tab and ctx.pane then
+        if show then ctx.pane:_showTabStateOverlay(ctx.tab, key, state)
+        else ctx.pane:_hideTabStateOverlay(ctx.tab, key) end
+    elseif ctx.pane then
+        if show then ctx.pane:_showStateOverlay(key, state)
+        else ctx.pane:_hideStateOverlay(key) end
     end
-    Mux.registerAction("mux.overlay.disconnected.show", { name = "Show “Disconnected” overlay", group = "Connection", icon = "⊘",
-        desc = "Cover this pane/tab with the disconnected screen.",
-        run = function(ctx) runOverlay(ctx, "disconnected", "disconnected", true) end })
-    Mux.registerAction("mux.overlay.disconnected.hide", { name = "Hide “Disconnected” overlay", group = "Connection", icon = "⊘",
-        desc = "Remove the disconnected overlay.",
-        run = function(ctx) runOverlay(ctx, "disconnected", "disconnected", false) end })
-    Mux.registerAction("mux.overlay.connecting.show", { name = "Show “Connecting” overlay", group = "Connection", icon = "⟳",
-        desc = "Cover this pane/tab with the connecting screen.",
-        run = function(ctx) runOverlay(ctx, "connecting", "connecting", true) end })
-    Mux.registerAction("mux.overlay.connecting.hide", { name = "Hide “Connecting” overlay", group = "Connection", icon = "⟳",
-        desc = "Remove the connecting overlay.",
-        run = function(ctx) runOverlay(ctx, "connecting", "connecting", false) end })
 end
 
 -- ── State propagation ─────────────────────────────────────────────────────────

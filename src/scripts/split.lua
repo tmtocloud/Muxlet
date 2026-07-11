@@ -465,6 +465,27 @@ function MuxSplit:_flushRatio()
     end
     recheck(self.childA)
     recheck(self.childB)
+
+    -- Mudlet's resizeWindow/moveWindow calls made during _setRatio's applyGeometry
+    -- pass are queued and don't take effect until the next event-loop tick, so a
+    -- content resize() hook invoked synchronously right above (e.g. buttons.lua's
+    -- pixel-laid-out Button Grid) can measure its container's stale pre-resize
+    -- size. _applyTitlebarVisibility works around the same lag with a deferred
+    -- second pass (pane.lua); mirror it here so a split-handle release settles to
+    -- the correct final geometry instead of leaving pixel-laid-out content stuck
+    -- at its pre-drag size.
+    local function settle(node)
+        if not node then return end
+        if node.outer then
+            node._lastContentW, node._lastContentH = nil, nil
+            if Mux._relayoutContent then Mux._relayoutContent(node) end
+        else
+            settle(node.childA)
+            settle(node.childB)
+        end
+    end
+    local childA, childB = self.childA, self.childB
+    tempTimer(0, function() settle(childA); settle(childB) end)
 end
 
 -- Accepts a MuxPane or a MuxSplit. Reparents its root widget into the slot.

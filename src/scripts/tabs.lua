@@ -1190,15 +1190,12 @@ function MuxSurface:_receiveTab(tab, fromPane, insertPos)
 
     -- Re-apply active content after the cross-pane move. Geyser's auto_hidden
     -- flags on child widgets can survive the changeContainer/show cycle in an
-    -- inconsistent state, leaving the content area blank. Routing through
-    -- Mux._applyContent (instead of manually calling remove and clearing
-    -- _activeContent beforehand) lets its own remove/destroyContentSlot/apply
-    -- sequence run: that destroy step is gated on target._activeContent being
-    -- set, so clearing it first — as this used to do — skipped the slot
-    -- delete and leaked the pre-move _contentSlot (and everything inside it)
-    -- as an orphaned child of the reparented tab.content, corrupting state
-    -- for content whose widgets aren't safely re-creatable by name (e.g. the
-    -- map content's singleton native mapper widget).
+    -- inconsistent state, leaving the content area blank. Route through
+    -- Mux._applyContent (not a manual remove) so its own destroy/apply sequence
+    -- runs with target._activeContent still set, which its slot-delete step
+    -- requires; otherwise the pre-move _contentSlot leaks as an orphaned child
+    -- (a problem for content with non-re-creatable widgets, e.g. the map's
+    -- singleton native mapper).
     if tab._activeContent and Mux._content and Mux._applyContent then
         Mux._applyContent(tab, tab._activeContent, true)
     end

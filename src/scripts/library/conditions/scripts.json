@@ -1,0 +1,6 @@
+[
+  {"name": "always"},
+  {"name": "connected"},
+  {"name": "connecting"},
+  {"name": "disconnected"}
+]

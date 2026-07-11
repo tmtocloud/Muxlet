@@ -148,20 +148,22 @@ elseif sub == "workspaces" then
 
 -- ── mux conditions / mux actions ────────────────────────────────────────────
 -- Named (declarative) conditions/actions, created from Settings → Conditions/
--- Actions. list/export only ever look at Mux._declConditions/_declActions —
--- built-ins (Always, Connected, mux.showSelf, ...) are code, not data, so
--- there's nothing to export for them; `mux workspace export`/`mux export`
--- already skip them for the same reason.
+-- Actions. list/export only ever look at non-builtin entries — built-ins
+-- (Always, Connected, mux.showSelf, ...) are code, not data, so there's
+-- nothing to export for them; `mux workspace export`/`mux export` already
+-- skip them for the same reason.
 elseif sub == "conditions" then
     local action = words[2] and words[2]:lower() or ""
     if action == "list" or action == "" then
         Mux._echo("\n<cyan>[mux]<reset> Named conditions:\n")
         local ids = {}
-        for id in pairs(Mux._declConditions) do ids[#ids + 1] = id end
+        for id, c in pairs(Mux._conditions) do
+            if not c.readOnly then ids[#ids + 1] = id end
+        end
         table.sort(ids)
         if #ids == 0 then Mux._echo("  — none yet —\n") end
         for _, id in ipairs(ids) do
-            local c = Mux._declConditions[id]
+            local c = Mux._conditions[id]
             Mux._echo(string.format("  %s   ·   %s\n", id, c.label or id))
         end
     elseif action == "export" then

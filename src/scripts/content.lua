@@ -355,9 +355,9 @@ end
 ---
 --- (NOT a candidate for Geyser's useAdd2: that rewrites .add on every
 --- descendant widget type, including ScrollBox, which collides with
---- ScrollBox's own internal add2 handling and broke dialogs everywhere --
---- see Muxlet commit 8cd78ed. This re-hides after the fact instead of
---- changing how widgets get added, so it can't have that blast radius.)
+--- ScrollBox's own internal add2 handling and breaks dialogs everywhere.
+--- This re-hides after the fact instead of changing how widgets get added,
+--- so it can't have that blast radius.)
 -- @param container   the container that just received new children
 -- @param reference   optional; carries the real hidden/auto_hidden state to
 --                     check, if different from container (e.g. a freshly

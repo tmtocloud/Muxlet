@@ -184,7 +184,7 @@ local function _buildRuleEditorRows(subject)
 end
 
 -- (Capture configuration moved into the content's own settings dialog, opened from
--- the ⚙ gear on the capture console — see contentLibrary/capture.lua.)
+-- the ⚙ gear on the capture console — see library/content/capture.lua.)
 
 
 -- Live screen geometry of a pane, for the read-only Properties readout. Uses the
@@ -724,7 +724,7 @@ local function paneRows(pane)
         end
     end
 
-    -- One "Theme" tab with Style and Colors separator sections (instead of two
+    -- One "Design" tab with Style and Colors separator sections (instead of two
     -- tabs). Style rows aren't token-backed so they get no reset; colour rows
     -- revert to the theme.
     local themeRows = {}
@@ -751,7 +751,7 @@ local function paneRows(pane)
         { label = "General",     rows = general, _geomTab = true },
         { label = "Permissions", rows = behavior },
         { label = "Rules",       rows = rulesTab },
-        { label = "Theme",       rows = themeRows, _localColors = true },
+        { label = "Design",      rows = themeRows, _localColors = true },
     }, pane)
 end
 
@@ -889,8 +889,8 @@ local function tabRows(host, tab)
         writeFn    = function(v) host:setTabNameAlign(tab.id, v) end,
     }
 
-    -- Group: General (incl. Renamable above Name, like panes), Permissions, Theme.
-    -- Theme is the same per-scope token editor panes use, but tabs also expose their
+    -- Group: General (incl. Renamable above Name, like panes), Permissions, Design.
+    -- Design is the same per-scope token editor panes use, but tabs also expose their
     -- size tokens (Style) so a tab's shape/font/etc. can be set locally.
     local GENERAL = {
         ["Tabs"] = true, ["Renamable"] = true, ["Name"] = true,
@@ -958,7 +958,7 @@ local function tabRows(host, tab)
         { label = "General",     rows = general },
         { label = "Permissions", rows = permissions },
         { label = "Rules",       rows = rulesTab },
-        { label = "Theme",       rows = themeRows, _localColors = true },
+        { label = "Design",      rows = themeRows, _localColors = true },
     }
 end
 

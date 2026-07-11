@@ -540,17 +540,17 @@ local function tabHierarchy()
     end
     promote(root)
 
-    -- Muxlet top level: General | Theme | Actions. Theme is built from the
+    -- Muxlet top level: General | Design | Actions. Design is built from the
     -- muxtheme (picker) namespace; we add the spec-driven Pane, Tabs and Interface
     -- token editors as custom children here.
     local muxNode = root._map["Muxlet"]
     if muxNode then
-        local themeNode = muxNode._map["Theme"]
+        local themeNode = muxNode._map["Design"]
         if themeNode then
             -- Ensure a "General" child holds the theme picker + Interface colours.
-            -- promote() only adds one when Theme had children at that point; now that
+            -- promote() only adds one when Design had children at that point; now that
             -- Panes/Tabs are injected here (after promote), create it explicitly so the
-            -- picker ns isn't orphaned on Theme itself.
+            -- picker ns isn't orphaned on Design itself.
             local generalNode
             for _, c in ipairs(themeNode.children) do
                 if c.label == "General" then generalNode = c; break end
@@ -575,7 +575,7 @@ local function tabHierarchy()
             { label = "Conditions", custom = "conditions", children = {}, _map = {} }
         muxNode.children[#muxNode.children + 1] =
             { label = "Actions", custom = "actions", children = {}, _map = {} }
-        local DESIRED = { General = 1, Theme = 2, Conditions = 3, Actions = 4 }
+        local DESIRED = { General = 1, Design = 2, Conditions = 3, Actions = 4 }
         for _, c in ipairs(muxNode.children) do
             if DESIRED[c.label] then c.order = DESIRED[c.label] end
         end
@@ -795,7 +795,7 @@ local function _aeOpPickerOpts()
     local out = { { value = "", label = "+ Add step…" } }
     for _, id in ipairs(Mux.actionOpOrder or {}) do
         local op = Mux.actionOps[id]
-        if op then out[#out+1] = { value = id, label = (op.group or "").." · "..(op.label or id) } end
+        if op then out[#out+1] = { value = id, label = (op.group or "").." · "..(op.label or id), desc = op.desc } end
     end
     return out
 end
@@ -1059,10 +1059,10 @@ end
 -- ── New/Edit Condition dialog ──────────────────────────────────────────────────
 -- A focused popup: identity + base type + type-specific parameters, with Save
 -- (persists), Cancel (discards the draft), and — when editing — Delete. Nothing
--- is written to Mux._declConditions until Save is clicked.
+-- is registered (Mux.registerCondition) until Save is clicked.
 --
 -- Built directly on d:mountForm (no Mux.registerContent/_applyContent) — matching
--- contentLibrary/buttons.lua and contentLibrary/capture.lua, the two existing
+-- library/content/buttons.lua and library/content/capture.lua, the two existing
 -- mountForm-based dialogs. _applyContent briefly swaps target.content for a slot
 -- container sized to the dialog's PRE-fitContent geometry; mountForm's internal
 -- ScrollBox is built against that stale small size and never catches up when
@@ -1113,11 +1113,7 @@ local function openConditionDialog(editId, onDone, readOnly)
 
     local d
     if editId then
-        -- Mux.getDeclarativeCondition only checks user-created conditions; a
-        -- built-in (e.g. "Always", "Connected") isn't in that table, so it
-        -- always resolved to nil here and silently fell back to the "gmcp_exists"
-        -- default below — showing every built-in as "GMCP has value" with a
-        -- blank path. Mux.getCondition checks both declared AND built-in tables.
+        -- Mux.getCondition covers both declarative and built-in entries alike.
         local s = Mux.getCondition and Mux.getCondition(editId)
         local cond = {}
         if s then for k, v in pairs(s.cond or {}) do cond[k] = v end end
@@ -1191,7 +1187,7 @@ local function buildConditionEditor(target, bg)
     -- User conditions first (most actionable), built-ins after, in one list.
     local userConds, builtinConds = {}, {}
     for _, c in ipairs(Mux.listConditions and Mux.listConditions() or {}) do
-        if c.builtin then builtinConds[#builtinConds+1] = c else userConds[#userConds+1] = c end
+        if c.readOnly then builtinConds[#builtinConds+1] = c else userConds[#userConds+1] = c end
     end
     local allConds = {}
     for _, c in ipairs(userConds)    do allConds[#allConds+1] = c end
@@ -1214,7 +1210,7 @@ local function buildConditionEditor(target, bg)
         specs[#specs+1] = { type = "divider", label = "— none yet — click \"+ New Condition\" to add one —" }
     else
         for _, c in ipairs(allConds) do
-            local cid, isBuiltin = c.id, c.builtin
+            local cid, isBuiltin = c.id, c.readOnly
             specs[#specs+1] = { type = "listRow", rowHeight = 44, dim = isBuiltin,
                 title    = c.label,
                 subtitle = string.format("%s   ·   %s%s", c.id, _condTypeLabel(c.cond and c.cond.type),
@@ -1251,7 +1247,7 @@ local function buildConditionEditor(target, bg)
   if not ok then Mux._err("buildConditionEditor failed: %s", tostring(err)) end
 end
 
--- ── Token editor (Settings → Theme → Pane/Interface) ────────────────────────
+-- ── Token editor (Settings → Design → Pane/Interface) ────────────────────────
 -- Spec-driven editor for the global token overrides, filtered by group + kind so
 -- it can back split Style (sizes) / Colors sub-tabs. target._settingsCustom looks
 -- like "tok|Pane,Titlebar,Buttons|color". Each row shows the resolved (inherited
@@ -1368,7 +1364,7 @@ local function buildTokenEditor(target, bg)
     if not ok then Mux._err("buildTokenEditor failed: %s", tostring(err)) end
 end
 
--- Settings → Theme → General: the theme picker plus the global "Interface" chrome
+-- Settings → Design → General: the theme picker plus the global "Interface" chrome
 -- colours (context menu, ghosts, scrollbar) — folded in here so there's no separate
 -- Interface tab. Picker rows don't get a reset icon; colour rows revert to theme.
 local function buildThemeGeneral(target, bg)
@@ -1683,7 +1679,7 @@ function Mux.settings.toggle()
 end
 
 Mux.settings.register("muxtheme", "active", {
-    tab         = "Muxlet/Theme",
+    tab         = "Muxlet/Design",
     label       = "Theme",
     description = "Active color theme",
     default     = "dark",
@@ -1839,7 +1835,7 @@ Mux.settings.onChange("mux", "debug", function(value)
 end)
 
 -- Tabs use the same token element templates as panes (Mux.css "tab*"), edited
--- globally via Theme > Tabs and per-tab via Properties; MuxSurface:_restyleTabBar
+-- globally via Design > Tabs and per-tab via Properties; MuxSurface:_restyleTabBar
 -- applies them.
 
 -- tempTimer(0) defers past the synchronous script-loading stack so all Muxlet

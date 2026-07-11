@@ -185,10 +185,9 @@ function Mux.applyWorkspace(name)
                     -- set before Mux._applyContent ever shows anything, so a pane whose
                     -- rule says "start hidden" never flashes/sticks visible first.
                     if p.rules and #p.rules > 0 and Mux._evaluateRules then
-                        -- TEMP DIAGNOSTIC: remove once the session-start hide bug is
-                        -- pinned down. Dumps each rule's resolved condition + computed
-                        -- value right before evaluation, so we can see whether this call
-                        -- runs at all and what it actually computes on a fresh restore.
+                        -- Diagnostic: echoes each rule's resolved condition and computed
+                        -- value right before evaluation, so a fresh restore's rule state
+                        -- is visible in the console.
                         for _, r in ipairs(p.rules) do
                             local rc = Mux._resolveCond and Mux._resolveCond(r.cond) or r.cond
                             local v  = Mux._conditionValue and Mux._conditionValue(r.cond, p)
@@ -516,15 +515,16 @@ end
 -- can bundle their registration calls alongside it, self-contained.
 
 -- Recursively collects condition/action ids referenced by rules anywhere in
--- `node` (a workspace def, or any sub-tree of one), restricted to ids that
--- are actually declarative (Mux._declConditions/_declActions) — built-in refs
--- (e.g. ref="always", act="mux.showSelf") are never in those tables, so they
--- fall out naturally with no separate "is this built-in" check needed.
+-- `node` (a workspace def, or any sub-tree of one), restricted to ids that are
+-- actually declarative (non-builtin) — built-in refs (e.g. ref="always",
+-- act="mux.showSelf") are excluded via the builtin flag, so they fall out
+-- naturally with no separate "is this built-in" table to check.
 local function collectRuleDeps(node, condIds, actIds, seen)
     if type(node) ~= "table" or seen[node] then return end
     seen[node] = true
-    if type(node.cond) == "table" and node.cond.ref and Mux._declConditions[node.cond.ref] then
-        condIds[node.cond.ref] = true
+    if type(node.cond) == "table" and node.cond.ref then
+        local c = Mux._conditions[node.cond.ref]
+        if c and not c.readOnly then condIds[node.cond.ref] = true end
     end
     if type(node.act) == "string" and Mux._declActions[node.act] then actIds[node.act] = true end
     if type(node.actElse) == "string" and Mux._declActions[node.actElse] then actIds[node.actElse] = true end
@@ -542,7 +542,7 @@ local function sortedIds(set)
 end
 
 -- Registration lines for a set of condition/action ids, e.g.
---   Mux._conditionRegisterLua(Mux._declConditions["lowhp"])
+--   Mux._conditionRegisterLua(Mux._conditions["lowhp"])
 -- for every id in `condIds`, under a section comment — only emitted when the
 -- set is non-empty, so a workspace with no rule dependencies exports exactly
 -- as before (just the Mux.registerWorkspace call).
@@ -588,7 +588,7 @@ function Mux.exportWorkspace(name)
         lines[#lines + 1] = Mux._themeRegisterLua(themeName, Mux._userThemes[themeName])
         lines[#lines + 1] = ""
     end
-    for _, l in ipairs(depLines("Conditions used by this workspace", sortedIds(condIds), Mux._declConditions, Mux._conditionRegisterLua)) do
+    for _, l in ipairs(depLines("Conditions used by this workspace", sortedIds(condIds), Mux._conditions, Mux._conditionRegisterLua)) do
         lines[#lines + 1] = l
     end
     for _, l in ipairs(depLines("Actions used by this workspace", sortedIds(actIds), Mux._declActions, Mux._actionRegisterLua)) do
@@ -612,8 +612,12 @@ end
 -- Your Own Workspace mode), where a package ships its whole library and lets
 -- the end user pick and choose, not just one self-contained workspace.
 function Mux.exportAll()
+    local declConditions = {}
+    for id, c in pairs(Mux._conditions) do
+        if not c.readOnly then declConditions[id] = c end
+    end
     local themeNames = sortedIds(Mux._userThemes)
-    local condIds    = sortedIds(Mux._declConditions)
+    local condIds    = sortedIds(declConditions)
     local actIds     = sortedIds(Mux._declActions)
     local wsNames    = sortedIds(Mux._workspaces)
 
@@ -630,7 +634,7 @@ function Mux.exportAll()
         end
         lines[#lines + 1] = ""
     end
-    for _, l in ipairs(depLines("Conditions", condIds, Mux._declConditions, Mux._conditionRegisterLua)) do
+    for _, l in ipairs(depLines("Conditions", condIds, declConditions, Mux._conditionRegisterLua)) do
         lines[#lines + 1] = l
     end
     for _, l in ipairs(depLines("Actions", actIds, Mux._declActions, Mux._actionRegisterLua)) do
@@ -892,21 +896,8 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
     end
 end
 
-Mux.registerWorkspace("default", {
-    name     = "Default",
-    theme    = "dark",
-    paneSpace = {
-        id   = "screen",
-        zone = "screen",
-        root = {
-            type            = "pane",
-            id              = "output",
-            name            = "Mudlet",
-            mainConsoleHost = true,
-            activeContent   = "mux_console",
-        },
-    },
-})
+-- The built-in "default" workspace lives in library/workspaces/default.lua —
+-- this file is the registry mechanism only.
 
 loadWorkspacesFile()
 

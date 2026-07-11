@@ -15,18 +15,25 @@
 -- degradation), the same pattern used for optional cross-package features.
 --
 -- API:
---   Mux.registerAction(id, { name, group, run, icon })
+--   Mux.registerAction(id, { name, group, run, icon, readOnly })
 --   Mux.unregisterAction(id)
 --   Mux.getAction(id)                       → def | nil
---   Mux.listActions()                       → array of { id, name, group, icon } (sorted)
+--   Mux.listActions()                       → array of { id, name, group, icon, readOnly } (sorted)
 --   Mux.runAction(id [, ctx])               → bool ok   (ctx passed to run)
 --
 -- An action def:
---   id     string   unique key, e.g. "fed2.galaxy.open"  (dotted namespacing encouraged)
---   name   string   human label shown in pickers, e.g. "Open Galaxy"
---   group  string   optional grouping for pickers, e.g. "Fed2" / "Map" / "Window"
---   run    function run(ctx) — performs the action; ctx = { target=<pane>, source=<widget>, ... }
---   icon   string   optional glyph/emoji shown alongside the label
+--   id        string   unique key, e.g. "fed2.galaxy.open"  (dotted namespacing encouraged)
+--   name      string   human label shown in pickers, e.g. "Open Galaxy"
+--   group     string   optional grouping for pickers, e.g. "Fed2" / "Map" / "Window"
+--   run       function run(ctx) — performs the action; ctx = { target=<pane>, source=<widget>, ... }
+--   icon      string   optional glyph/emoji shown alongside the label
+--   readOnly  bool     true = not editable/deletable in Settings → Actions. Same
+--                      registration path either way — readOnly is just a flag, not
+--                      a different mechanism, and not specific to Muxlet's own
+--                      built-ins: any package can mark its own registered action
+--                      readOnly the same way. A user-created action
+--                      (Mux.createDeclarativeAction, conditional.lua) never sets
+--                      it, so it's editable/deletable/exportable by default.
 
 Mux.actions = Mux.actions or {}
 
@@ -60,7 +67,7 @@ function Mux.listActions()
     local out = {}
     for id, def in pairs(Mux.actions) do
         out[#out + 1] = { id = id, name = def.name, group = def.group, icon = def.icon,
-                          desc = def.desc, hidden = def.hidden }
+                          desc = def.desc, hidden = def.hidden, readOnly = def.readOnly or false }
     end
     table.sort(out, function(a, b)
         if a.group == b.group then return a.name:lower() < b.name:lower() end
@@ -84,25 +91,8 @@ function Mux.runAction(id, ctx)
     return ok
 end
 
--- ── Built-in actions ──────────────────────────────────────────────────────────
--- A small generic set so the action picker is populated out of the box and the
--- end-to-end path is demonstrable before any package registers its own.  Each
--- carries a `desc` shown on hover in the action picker.
-Mux.registerAction("mux.reconnect", {
-    name = "Reconnect", group = "Muxlet", icon = "🔌",
-    desc = "Reconnect to the current game server.",
-    run = function() reconnect() end,
-})
-Mux.registerAction("mux.clearConsole", {
-    name = "Clear Console", group = "Muxlet", icon = "🧹",
-    desc = "Clear the main console window.",
-    run = function() clearWindow() end,
-})
-Mux.registerAction("mux.demoEcho", {
-    name = "Demo — Echo to Console", group = "Muxlet", icon = "💬",
-    desc = "Example action. Prints a line to the console to show a button is wired "
-        .. "to a registered action (vs a raw command). Safe to ignore or rebind.",
-    run = function() Mux._echo("\n<cyan>[Muxlet]<reset> Demo action ran — a button is bound to a registered action.\n") end,
-})
+-- Built-in actions live in library/actions/ (see that folder for reconnect,
+-- clearConsole, show/hide/toggle pane, and the step-op palette) — this file is
+-- the registry mechanism only.
 
 if Mux._log then Mux._log("action registry loaded") end

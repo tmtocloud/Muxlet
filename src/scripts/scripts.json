@@ -1,9 +1,9 @@
 [
   {"name": "globals"},
-  {"name": "style"},
+  {"name": "theme"},
   {"name": "settings"},
   {"name": "content"},
-  {"name": "actions"},
+  {"name": "action"},
   {"name": "update"},
   {"name": "pane"},
   {"name": "tabs"},
@@ -16,9 +16,8 @@
   {"name": "widgets"},
   {"name": "welcome"},
   {"name": "workspace"},
-  {"name": "contentLibrary"},
   {"name": "properties"},
   {"name": "conditional"},
   {"name": "devmode"},
-  {"name": "themes"}
+  {"name": "library"}
 ]

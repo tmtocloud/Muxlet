@@ -1,4 +1,4 @@
--- Muxlet — Button Grid content
+-- Muxlet - Button Grid content
 --
 -- A registered, user-addable content type: a configurable grid of buttons.  Each
 -- button runs a raw command string (expandAlias) or a registered action
@@ -52,7 +52,7 @@ end
 local function layoutRects(cfg, W, H, editing)
     local cols = math.max(1, cfg.cols)
     local gapX, gapY = cfg.gapX, cfg.gapY
-    -- Pass 1: assign each button a grid cell (col/row/span) — independent of rowH.
+    -- Pass 1: assign each button a grid cell (col/row/span) - independent of rowH.
     local cells, r, c = {}, 0, 0
     for i, btn in ipairs(cfg.buttons) do
         local span = math.max(1, math.min(btn.width or 1, cols))
@@ -120,7 +120,7 @@ local function runButton(btn)
     if a.type == "action" and a.actionId then
         local ctx = { source = "button" }
         -- Actions flagged needsTarget act on an explicit OTHER pane/tab rather
-        -- than "self" — resolve the persisted target id (see
+        -- than "self" - resolve the persisted target id (see
         -- the "Target Pane/Tab" row below) to a live object and hand it over the
         -- same way the rule engine does (ctxFor, conditional.lua): ctx.tab for a tab
         -- (plus its host as ctx.pane), else just ctx.pane.
@@ -219,7 +219,7 @@ end
 -- ── Button editor (dialog) ────────────────────────────────────────────────────────
 -- Live preview on every change (no disk write); persisted on Done / close.
 -- Action is a dropdown with hover descriptions; text fields have no per-field
--- Apply button (Enter commits, Done saves).  Dialog sizes to fit — no scrolling.
+-- Apply button (Enter commits, Done saves).  Dialog sizes to fit - no scrolling.
 
 openButtonEditor = function(target, idx)
     local cfg = configFor(target.id)
@@ -255,7 +255,7 @@ openButtonEditor = function(target, idx)
     end
 
     -- Options for the "Target Pane/Tab" row, shown only for actions that declare
-    -- needsTarget — they act on an explicit other
+    -- needsTarget - they act on an explicit other
     -- pane/tab rather than "self". Mux.listTargets (manager.lua) enumerates every
     -- pane and tab in the workspace, including tabs currently condition-hidden.
     local function targetOptions()
@@ -420,7 +420,7 @@ openGridSettings = function(target)
     }
     d:mountForm(rows, { prefix = d._gid .. "_gs", hideApply = true })
     d.onClose = function() scheduleSave() end
-    -- Locking hides the edit wrench, so warn before closing — pointing at
+    -- Locking hides the edit wrench, so warn before closing - pointing at
     -- `mux reveal` as the way back.
     if d.closeBtn then
         d.closeBtn:setClickCallback(function(event)
@@ -542,7 +542,7 @@ Mux.registerContent("mux_buttons", {
             menuGroup = "info", menuOrder = 95,
             -- The wrench icon already reaches this directly whenever it's visible
             -- on the titlebar, so this row must not itself force the right-click
-            -- menu open on a full-size, non-compact pane — it's a fallback for
+            -- menu open on a full-size, non-compact pane - it's a fallback for
             -- tabs/compact/folded only (see menuFallbackOnly in pane.lua).
             menuFallbackOnly = true,
             run = function(ctx) toggleButtonsEdit(ctx) end,

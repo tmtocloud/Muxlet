@@ -1,4 +1,4 @@
--- capture.lua — "Capture / Redirect" content.
+-- capture.lua - "Capture / Redirect" content.
 --
 -- Watches the game output and shunts matching lines into this pane/tab's capture
 -- view, optionally hiding them from the main console. Built on the rule engine:
@@ -20,7 +20,7 @@
 -- blank line (or a couple) right after it, so the command still visibly "does
 -- something". When the capture asks for it, arm a short-lived trigger that gags
 -- whitespace-only lines for the next few lines and stops at the first real content.
--- (Only trailing blanks can be removed — a blank that arrived *before* the match is
+-- (Only trailing blanks can be removed - a blank that arrived *before* the match is
 -- already rendered and can't be reactively deleted.)
 local _bgTrig, _bgTimer
 local function _disarmBlankGag()

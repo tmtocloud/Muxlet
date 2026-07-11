@@ -65,11 +65,6 @@ function Mux._raiseFreeFloatingPanes()
     end
 end
 
-
-
--- Zoom the focused pane to full screen (requires pane.zoomable = true).
--- Calling again while zoomed restores the pane to its previous state.
-
 -- ── Recovery: inspect & reveal ────────────────────────────────────────────────
 --
 -- Hiding a pane's titlebar or its Properties affordance is done from the UI, but
@@ -106,7 +101,7 @@ end
 -- Finds any pane or tab (visible or condition-hidden, see MuxTab:_conditionHide
 -- in tabs.lua) in the workspace by id. Returns (obj, "pane"|"tab") or nil.
 -- Public so consumers outside this file (e.g. the Button Grid's target picker,
--- contentLibrary/buttons.lua) can resolve a persisted target id back to a
+-- library/content/buttons.lua) can resolve a persisted target id back to a
 -- live object without duplicating the pane/tab tree walk.
 function Mux.findTarget(id)
     if not id then return nil end
@@ -616,7 +611,5 @@ if not Mux._unloadHandler then
         end
     )
 end
-
--- All non-floating panes sorted by creation order (ID alphabetically).
 
 Mux._log("v%s loaded", Mux._version)

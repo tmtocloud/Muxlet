@@ -2203,10 +2203,8 @@ function MuxPane:applyTheme()
     if self.contentBg  then self.contentBg:setStyleSheet(Mux.css("content", self))       end
     if self.titlebar   then
         self.titlebar:setStyleSheet(Mux.css("titlebar", self))
-        -- Same renderer _refreshTitlebarName uses elsewhere, so a theme switch
-        -- doesn't clobber a pane's nameAlign (this used to hard-code a left-aligned
-        -- echo here, snapping center/right-aligned names back to left on every
-        -- theme change) and picks up the per-pane titlebar.text.color token.
+        -- Reuses _refreshTitlebarName's own renderer so a theme switch preserves the
+        -- pane's nameAlign and picks up the per-pane titlebar.text.color token.
         self:_refreshTitlebarName()
         self:_updateInfoBtnPos()
     end

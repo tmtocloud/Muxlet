@@ -1,4 +1,4 @@
--- Muxlet — Light theme
+-- Muxlet - Light theme
 -- Soft grey-white palette for bright environments.
 --
 -- A theme is a SPARSE token-override table: it overrides only the tokens that
@@ -6,9 +6,8 @@
 -- through). Anything omitted inherits the fallback.
 --
 -- Note: the dark theme's close/min button HOVER states brighten the border
--- colour; the original light theme left the base border to persist on hover.
--- Under the shared element template light sets *.hover.border.color equal to its
--- base border colour, so the rendered result is identical — just made explicit.
+-- colour; light instead sets *.hover.border.color equal to its own base border
+-- colour, so hovering a close/min button leaves the border unchanged.
 
 Mux.registerTheme("light", {
     -- Pane frame

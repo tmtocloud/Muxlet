@@ -1,4 +1,4 @@
--- Muxlet — built-in GMCP content
+-- Muxlet - built-in GMCP content
 --
 -- Mux.registerGmcpViewer(path)
 --   Fixed-path live GMCP viewer registered as a content type.
@@ -56,7 +56,7 @@ local function tableCount(t)
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
--- Mux.registerGmcpViewer — fixed-path live GMCP viewer (HTML label)
+-- Mux.registerGmcpViewer - fixed-path live GMCP viewer (HTML label)
 -- ════════════════════════════════════════════════════════════════════════════
 
 local DEPTH_LIMIT = 6
@@ -270,7 +270,7 @@ function Mux.registerGmcpViewer(path)
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
--- GMCP Inspector — type-grouped interactive widget-tree visualiser
+-- GMCP Inspector - type-grouped interactive widget-tree visualiser
 -- ════════════════════════════════════════════════════════════════════════════
 
 local _inspectors   = {}
@@ -278,8 +278,8 @@ local INS_DEFAULT   = "char.vitals"
 local INS_HDR_H     = 30
 local POLL_INTERVAL = 1
 local BODY_LIMIT    = 40    -- max items per type group per level
-local BROWSER_THRESH_ARR = 10   -- arrays with > this many items hidden in browser
-local BROWSER_THRESH_OBJ = 20   -- objects with > this many keys hidden in browser
+local BROWSER_THRESH_ARR = 10   -- reserved: not currently applied (see path browser below)
+local BROWSER_THRESH_OBJ = 20   -- reserved: not currently applied (see path browser below)
 
 -- Zoom table: {rowHeight, fontSize} indexed by st.zoomIdx (default = 3)
 local ZOOM = {
@@ -287,7 +287,7 @@ local ZOOM = {
 }
 local ZOOM_DEFAULT = 3
 
--- Type group constants — controls sort order and section header display
+-- Type group constants - controls sort order and section header display
 local TG_OBJECT  = 1
 local TG_ARRAY   = 2
 local TG_STRING  = 3
@@ -317,7 +317,7 @@ local function typeGroup(v)
     end
 end
 
--- Module-level widget counters — reset each insDrawBody call (Lua single-threaded, safe)
+-- Module-level widget counters - reset each insDrawBody call (Lua single-threaded, safe)
 local _insEpoch    = 0
 local _insSeq      = 0
 local _insTargetId = ""
@@ -837,7 +837,7 @@ local function insDrawHeader(st)
         }
     ]]
 
-    -- Path label — styled as interactive (underline-like border on hover handled via CSS hover)
+    -- Path label - styled as interactive (underline-like border on hover handled via CSS hover)
     st.pathLabel:setStyleSheet([[
         QLabel {
             background: rgba(20,28,42,0.85);
@@ -951,12 +951,10 @@ local function insSetPath(st, path)
     insRefresh(st)
 end
 
--- ── GMCP path browser — filtered tree UI ─────────────────────────────────────
+-- ── GMCP path browser - filtered tree UI ─────────────────────────────────────
 --
--- Nodes are hidden when their child count exceeds the type-specific threshold.
--- Arrays:  > BROWSER_THRESH_ARR children → hidden
--- Objects: > BROWSER_THRESH_OBJ children → hidden
--- Leaf values are never shown (browser selects table paths only).
+-- Every table node (object or array) is listed regardless of size; only leaf
+-- values are excluded, since the browser selects table paths only.
 -- First level is auto-expanded on open, as are ancestors of the current path.
 
 local _brEpoch = 0
@@ -1053,7 +1051,7 @@ local function insShowPathBrowser(st)
     local brExpanded = {}
     local currentSel = st.path
 
-    -- Show any table node in the browser — size-based hiding is for the body view only
+    -- Show any table node in the browser - size-based hiding is for the body view only
     local function isBrVisible(val) return type(val) == "table" end
 
     -- Auto-expand first level and ancestors of current selection
@@ -1199,7 +1197,7 @@ local function insShowPathBrowser(st)
                 row.isArr and "[arr" or "{obj", row.count))
             table.insert(brRows, bd)
 
-            -- Click callbacks — select this path
+            -- Click callbacks - select this path
             local capRowPath = row.path
             local function selectRow()
                 currentSel = capRowPath
@@ -1254,12 +1252,12 @@ local function insApply(target)
     hdrBg:setStyleSheet(string.format(
         "background:%s;border-bottom:1px solid rgba(255,255,255,0.08);", HC.hdr_bg))
 
-    -- Path label is the primary interactive element — click opens the path browser
+    -- Path label is the primary interactive element - click opens the path browser
     local pathLabel = Geyser.Label:new({
         name=pfx.."hpath", x=4, y=4, width="70%", height=INS_HDR_H-8,
     }, target.content)
 
-    -- Pause/Live and zoom buttons — right-justified small controls
+    -- Pause/Live and zoom buttons - right-justified small controls
     local pauseBtn = Geyser.Label:new({
         name=pfx.."pause", x="-94", y=5, width=54, height=INS_HDR_H-10,
     }, target.content)
