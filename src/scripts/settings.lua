@@ -141,6 +141,17 @@ function Mux.settings.get(ns, key)
     return nil
 end
 
+-- Repaint an open Settings window so a value changed from anywhere (CLI, API, a
+-- code path) is reflected live in its widgets. This only re-reads each widget's
+-- readFn and repaints — it never writes back — so it cannot loop with the UI's own
+-- writeFn. No-op when the window is closed. The hook is installed further down
+-- (Mux._settings_ui._refreshAllForms); referenced here at call time, not load time.
+local function notifyOpenSettingsUi()
+    if Mux._settings_ui and Mux._settings_ui._refreshAllForms then
+        pcall(Mux._settings_ui._refreshAllForms)
+    end
+end
+
 function Mux.settings.set(ns, key, value)
     local reg = Mux.settings._registry[ns] and Mux.settings._registry[ns][key]
     if not reg then
@@ -171,6 +182,7 @@ function Mux.settings.set(ns, key, value)
 
     local cb = Mux.settings._onChange[ns .. "." .. key]
     if cb then cb(value) end
+    notifyOpenSettingsUi()
 
     Mux._log("settings.set: %s.%s = %s", ns, key, tostring(value))
     return true
@@ -186,6 +198,7 @@ function Mux.settings.clear(ns, key)
     Mux.settings.save()
     local cb = Mux.settings._onChange[ns .. "." .. key]
     if cb then cb(reg.default) end
+    notifyOpenSettingsUi()
     Mux._log("settings.clear: %s.%s (default=%s)", ns, key, tostring(reg.default))
     return true
 end
@@ -273,6 +286,54 @@ function Mux.settings.showList(ns)
         end
     end
     cecho("\n")
+end
+
+-- List every registered settings namespace as an index, so the settings surface
+-- is discoverable without knowing namespace names up front. Sorted by tab order
+-- (the same hint that positions their tabs) then name. Ends with a pointer to the
+-- things that are NOT settings namespaces but are configured elsewhere.
+function Mux.settings.showNamespaces()
+    local names = {}
+    for ns in pairs(Mux.settings._registry) do names[#names + 1] = ns end
+    if #names == 0 then
+        cecho("\n<yellow>[Muxlet]<reset> No settings namespaces are registered.\n")
+        return
+    end
+    -- Alphabetical by namespace. "mux" sorts before "muxtheme"/"muxupdate" (a
+    -- shorter prefix sorts first), and downstream packages fall in by their own
+    -- name — stable and predictable, without depending on the sparse _tabOrder hint.
+    table.sort(names, function(a, b) return a < b end)
+
+    cecho("\n<green>[Muxlet]<reset> Settings namespaces:\n\n")
+    for _, ns in ipairs(names) do
+        local reg   = Mux.settings._registry[ns] or {}
+        local count = 0
+        for _ in pairs(reg) do count = count + 1 end
+        local tab   = Mux.settings._tabPaths[ns]
+        local disp  = nsDisplay(ns)
+        local label = (disp ~= ns) and string.format("%s <dim_grey>(%s)<reset>", ns, disp) or ns
+        local where = tab and string.format("  <dim_grey>\226\134\146 %s tab<reset>", tab) or ""
+        cecho(string.format("  <cyan>%s<reset>  <yellow>%d<reset> setting%s%s\n",
+            label, count, count == 1 and "" or "s", where))
+    end
+    cecho("\n  <dim_grey>Use<reset> <cyan>mux settings list <ns><reset> "
+        .. "<dim_grey>for one, or<reset> <cyan>mux settings list all<reset> "
+        .. "<dim_grey>for everything.<reset>\n")
+    cecho("\n  <dim_grey>Conditions, actions, themes and workspaces are not settings \226\128\148 "
+        .. "manage them with<reset>\n"
+        .. "  <cyan>mux conditions list<reset><dim_grey>,<reset> <cyan>mux actions list<reset><dim_grey>,<reset> "
+        .. "<cyan>mux themes<reset> <dim_grey>and<reset> <cyan>mux workspaces<reset><dim_grey>.<reset>\n\n")
+end
+
+-- List every namespace's full settings in sequence (mux settings list all).
+function Mux.settings.showAll()
+    local names = {}
+    for ns in pairs(Mux.settings._registry) do names[#names + 1] = ns end
+    -- Alphabetical by namespace. "mux" sorts before "muxtheme"/"muxupdate" (a
+    -- shorter prefix sorts first), and downstream packages fall in by their own
+    -- name — stable and predictable, without depending on the sparse _tabOrder hint.
+    table.sort(names, function(a, b) return a < b end)
+    for _, ns in ipairs(names) do Mux.settings.showList(ns) end
 end
 
 function Mux.settings.showSetting(ns, key)

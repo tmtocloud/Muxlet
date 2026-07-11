@@ -66,7 +66,9 @@ if sub == "help" then
 
   <white>Settings<reset>
   mux settings                 — toggle settings window
-  mux settings list [ns]       — list settings for a namespace
+  mux settings list            — list all settings namespaces
+  mux settings list <ns>       — list settings in one namespace
+  mux settings list all        — list every setting in every namespace
   mux settings get ns.key      — show one setting
   mux settings set ns.key val  — change a setting
 
@@ -205,8 +207,14 @@ elseif sub == "settings" then
     else
         local sub2 = words[2] and words[2]:lower() or ""
         if sub2 == "list" then
-            local ns = words[3] or "mux"
-            Mux.settings.showList(ns)
+            local ns = words[3]
+            if not ns then
+                Mux.settings.showNamespaces()
+            elseif ns:lower() == "all" then
+                Mux.settings.showAll()
+            else
+                Mux.settings.showList(ns)
+            end
         elseif sub2 == "get" and words[3] then
             local ns, key = words[3]:match("^([^%.]+)%.(.+)$")
             if ns and key then
