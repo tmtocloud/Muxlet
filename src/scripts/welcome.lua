@@ -97,7 +97,8 @@ local function ensureWelcomeWidget()
             width = w, height = math.max(16, (c.thisH or 30) - 12),
         }, row)
         lbl:setStyleSheet(string.format(
-            "background:transparent; border:none; color:%s; font-size:%dpx;", fg, fs))
+            "background:transparent; border:none; color:%s; font-size:%dpx; "
+            .. "qproperty-alignment:'AlignLeft|AlignTop'; qproperty-wordWrap:true;", fg, fs))
         lbl:echo(spec.html or "")
         return {}
     end, { layout = "block", rowHeight = 30 })
@@ -226,6 +227,10 @@ local function buildWelcomeDialog()
     end
 
     dialog:mountForm(buildSpecs(getMode, setMode, onStart), { prefix = "mux_welcome_f" })
+    -- Refit once Geyser settles geometry (see the same note in update.lua).
+    tempTimer(0, function()
+        if dialog._muxRelayout then pcall(dialog._muxRelayout) end
+    end)
     dialog:show()
     dialog:raise()
     return dialog

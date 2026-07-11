@@ -311,6 +311,13 @@ end
 -- Enough of GitHub's release-note markdown to read well in a QLabel: headings go
 -- bold, list markers become bullets, blank lines become spacing. Everything is
 -- escaped first so stray angle brackets don't corrupt the label.
+-- Inline markdown applied to already-escaped text: **bold** and `code`.
+local function inlineMd(s)
+    s = s:gsub("%*%*(.-)%*%*", "<b>%1</b>")   -- **bold** → <b>
+    s = s:gsub("`([^`]-)`", "%1")             -- `code` → render the text plainly
+    return s
+end
+
 local function mdToHtml(body)
     body = tostring(body or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
     if body:match("^%s*$") then return "" end
@@ -323,11 +330,11 @@ local function mdToHtml(body)
             local heading = raw:match("^#+%s+(.*)$")
             local bullet  = raw:match("^%s*[%-%*]%s+(.*)$")
             if heading then
-                lines[#lines + 1] = "<b>" .. escapeHtml(heading) .. "</b>"
+                lines[#lines + 1] = "<b>" .. inlineMd(escapeHtml(heading)) .. "</b>"
             elseif bullet then
-                lines[#lines + 1] = "&nbsp;&nbsp;• " .. escapeHtml(bullet)
+                lines[#lines + 1] = "&nbsp;&nbsp;• " .. inlineMd(escapeHtml(bullet))
             else
-                lines[#lines + 1] = escapeHtml(raw)
+                lines[#lines + 1] = inlineMd(escapeHtml(raw))
             end
         end
     end
@@ -367,7 +374,8 @@ local function ensureRichWidget()
             name = uid .. "_rt", x = c.padL, y = 5, width = w, height = math.max(14, (c.thisH or 30) - 10),
         }, row)
         lbl:setStyleSheet(string.format(
-            "background:transparent; border:none; color:%s; font-size:%dpx;",
+            "background:transparent; border:none; color:%s; font-size:%dpx; "
+            .. "qproperty-alignment:'AlignLeft|AlignTop'; qproperty-wordWrap:true;",
             fg, spec.fontSize or 12))
         lbl:echo(spec.html or "")
         return {}
@@ -545,6 +553,14 @@ function Mux.showUpdateDialog(cand, changelog)
         end }
 
     d:mountForm(specs, { prefix = "mux_update_f" })
+    -- Geyser only finalises this dialog's geometry after the current stack
+    -- unwinds; the mount-time fit therefore runs against provisional sizes and
+    -- can misplace/overshoot rows until something forces a relayout. Re-run the
+    -- layout on the next tick so the first render matches the settled state
+    -- (previously this only corrected itself when the user clicked the dialog).
+    tempTimer(0, function()
+        if Mux._updateDialog == d and d._muxRelayout then pcall(d._muxRelayout) end
+    end)
 end
 
 -- ── Version check ─────────────────────────────────────────────────────────────
