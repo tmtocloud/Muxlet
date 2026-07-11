@@ -124,7 +124,18 @@ function Mux._reinstallPackage(path, opts)
             pcall(uninstallPackage, "Muxlet")   -- fires the sysUninstallPackage teardown
         end
         if doWipe and wipeFn then pcall(wipeFn) end
-        installPackage(path)
+        -- installPackage is synchronous (loads and runs the new package's scripts
+        -- before returning), so its result here is authoritative. Report it with raw
+        -- cecho rather than Mux._echo — the table that function belonged to was just
+        -- torn down and rebuilt, and we want this message to survive either way.
+        local ok, err = installPackage(path)
+        if ok then
+            cecho("\n<green>[Muxlet]<reset> Update installed. Run <cyan>mux version<reset> to confirm the new build.\n")
+        else
+            cecho(string.format(
+                "\n<red>[Muxlet]<reset> Reinstall failed (%s). Install manually from <cyan>%s<reset>\n",
+                tostring(err or "unknown error"), path))
+        end
     end)
 end
 

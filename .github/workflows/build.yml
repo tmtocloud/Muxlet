@@ -36,6 +36,7 @@ jobs:
             # Tagged release: use tag name (strip 'v' prefix)
             VERSION="${GITHUB_REF#refs/tags/v}"
             echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "pkg_version=$VERSION" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
             echo "release_name=v$VERSION" >> $GITHUB_OUTPUT
             echo "is_dispatch_release=false" >> $GITHUB_OUTPUT
@@ -43,6 +44,7 @@ jobs:
             # Manual promote: treat as a production release without needing a local tag push
             VERSION="${{ inputs.version }}"
             echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "pkg_version=$VERSION" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
             echo "release_name=v$VERSION" >> $GITHUB_OUTPUT
             echo "is_dispatch_release=true" >> $GITHUB_OUTPUT
@@ -50,9 +52,16 @@ jobs:
             # Branch push or unversioned dispatch: pre-release using mfile version.
             # Tag is bare version (e.g. "1.0.6", no "v" prefix) so it is visually
             # distinct from production tags ("v1.0.6") and never matches tags: ['v*'],
-            # preventing the production job from firing on CI-created pre tags.
+            # preventing the production job from firing on CI-created pre tags. The tag
+            # stays bare so the same rolling per-version release gets updated by every
+            # commit, but the *package* version (pkg_version, injected into mfile below)
+            # gets the short sha appended — that's what update.lua and the Settings
+            # titlebar parse back out of Mux._version to identify the exact build and
+            # decide whether the "v" prefix belongs.
             VERSION=$(jq -r '.version' mfile)
+            SHORT_SHA=$(git rev-parse --short HEAD)
             echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "pkg_version=${VERSION}-${SHORT_SHA}" >> $GITHUB_OUTPUT
             echo "is_release=false" >> $GITHUB_OUTPUT
             echo "release_name=prerelease" >> $GITHUB_OUTPUT
             echo "is_dispatch_release=false" >> $GITHUB_OUTPUT
@@ -71,10 +80,10 @@ jobs:
 
       - name: Inject version into mfile
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          PKG_VERSION="${{ steps.version.outputs.pkg_version }}"
           tmp=$(mktemp)
-          jq --arg v "$VERSION" '.version = $v' mfile > "$tmp" && mv "$tmp" mfile
-          echo "Version set to $VERSION"
+          jq --arg v "$PKG_VERSION" '.version = $v' mfile > "$tmp" && mv "$tmp" mfile
+          echo "Version set to $PKG_VERSION"
 
       - name: Build with muddler
         run: docker run --rm -v "$PWD:/work" -w /work demonnic/muddler
