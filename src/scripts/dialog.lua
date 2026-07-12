@@ -353,10 +353,18 @@ function MuxDialog:fitContent(contentH)
         pcall(function() self._body:resize(self._bodyW or self._body:get_width(), math.max(self._contentH, visH)) end)
     end
     if math.abs((self.floatH or 0) - h) >= 2 then
+        -- Grow/shrink around the dialog's current vertical CENTER, not its top.
+        -- Clamping only the bottom edge (old behaviour) left a dialog whose
+        -- content ends up far taller than its initial height guess (e.g. the
+        -- welcome popup, mounted at the default 280px before its real ~800px
+        -- of copy is measured) glued to the bottom of the screen once resized,
+        -- instead of staying visually centered.
+        local oldH    = self.floatH or h
+        local oldY    = self.floatY or 0
+        local centerY = oldY + oldH / 2
         self.floatH = h
         if self.outer then self.outer:resize(self.floatW or self.outer:get_width(), h) end
-        local y = self.floatY or 0
-        if y + h > (sh or 0) then self.floatY = math.max(0, (sh or 0) - h) end
+        self.floatY = Mux._clamp(math.floor(centerY - h / 2), 0, math.max(0, (sh or 0) - h))
         if self.outer and self.outer.reposition then self.outer:reposition() end
         -- Resizing self.outer does not, by itself, push the new pixel size down
         -- through self.frame/self.content — Geyser only recomputes percentage-based

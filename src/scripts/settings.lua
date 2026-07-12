@@ -1956,9 +1956,15 @@ tempTimer(0, function()
     if Mux.registerContent then
         Mux.registerContent("mux_settings", muxSettingsContentDef)
     end
+    -- Always apply once at startup, even when the saved theme already matches
+    -- Mux._activeThemeName's default: applyTheme is also what pushes the
+    -- profile-wide scrollbar QSS (Mux.refreshStyling -> _pushProfileCss), and
+    -- skipping it here left that CSS unsent for the whole session whenever the
+    -- user had never actually switched themes, so scrollbars in early dialogs
+    -- (e.g. the first-run welcome popup) rendered with native unthemed chrome.
     local savedTheme = Mux.settings.get("muxtheme", "active") or Mux.settings.get("mux", "theme")
-    if savedTheme and Mux.applyTheme and savedTheme ~= Mux._activeThemeName then
-        Mux.applyTheme(savedTheme)
+    if Mux.applyTheme then
+        Mux.applyTheme(savedTheme or Mux._activeThemeName)
     end
     Mux.debug = Mux.settings.get("mux", "debug")
     Mux._ready = true
