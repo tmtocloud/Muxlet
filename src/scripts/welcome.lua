@@ -181,7 +181,7 @@ local function para(specs, html, opts)
     specs[#specs + 1] = {
         type = "welcomeText", html = html,
         color = opts.color, fontSize = opts.fontSize,
-        rowHeight = estimateHeight(html, _APPROX_W, opts.fontSize or 13) + (opts.pad or 2),
+        rowHeight = estimateHeight(html, opts.width or _APPROX_W, opts.fontSize or 13) + (opts.pad or 2),
     }
 end
 
@@ -196,8 +196,14 @@ local function buildBodySpecs()
     para(specs, defList(_REACT))
 
     -- Collapsed by default: this is a reference, not part of the tour.
+    -- Extra safety margin here specifically: every command line packs a bold
+    -- code span plus its description onto one line, which wraps more than the
+    -- shorter, lighter concept/react lists above, and estimateHeight's char-count
+    -- heuristic underestimates that wrapping enough to clip the tail of this
+    -- block (it was getting cut off partway through the Diagnostics group).
+    -- A narrower assumed width forces the estimate to assume more wraps.
     specs[#specs + 1] = { type = "divider", label = "Full command reference", _collapsed = true }
-    para(specs, helpHtml(), { fontSize = 12 })
+    para(specs, helpHtml(), { fontSize = 12, width = _APPROX_W * 0.8, pad = 20 })
 
     return specs
 end

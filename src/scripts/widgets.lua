@@ -549,21 +549,33 @@ end
 --   "block"   the builder owns the whole row (label, widget, and its own reset if any).
 -- Custom widgets are always inline (see Mux.ui.registerWidget).
 
+-- Shared chrome for block-layout rows: label on the left, with a hover-tooltip
+-- help icon in front of it when spec.desc is set (mirrors renderInlineLabel's
+-- treatment for inline rows, so every row shows help the same way instead of
+-- a trailing text line that clips for longer descriptions).
+local function renderBlockLabel(row, uid, spec, css, hasDesc, padL, availW, y)
+    local nameX = hasDesc and padL + 22 or padL
+    local nameW = hasDesc and (availW - 22) or availW
+    local nl = Geyser.Label:new({name=uid.."_n", x=nameX, y=y, width=nameW, height=14}, row)
+    nl:setStyleSheet(css.rowLabel)
+    nl:rawEcho(spec.label)
+    if hasDesc then
+        local hi = Geyser.Label:new({name=uid.."_hi", x=padL, y=y+2, width=16, height=16, fillBg=1}, row)
+        hi:setStyleSheet(css.helpIcon)
+        hi:rawEcho("<center>i</center>")
+        hi:setToolTip(spec.desc, 6)
+        hi:setOnEnter(function() hi:setStyleSheet(css.helpIconHover) end)
+        hi:setOnLeave(function() hi:setStyleSheet(css.helpIcon) end)
+    end
+end
+
 -- ── Colour field (block) — delegates to the standalone Mux.ui.colorField ──────
 local function w_color(row, c)
     local spec, css, uid = c.spec, c.css, c.uid
     local rsv = c.showReset and (c.resetW + c.resetGap) or 0
     local availW = c.formW - c.padL - c.padR - rsv
-    local nl = Geyser.Label:new({name=uid.."_n", x=c.padL, y=6, width=availW, height=14}, row)
-    nl:setStyleSheet(css.rowLabel)
-    nl:rawEcho(spec.label)
+    renderBlockLabel(row, uid, spec, css, c.hasDesc, c.padL, availW, 6)
     local topY = 22
-    if c.hasDesc then
-        local dl = Geyser.Label:new({name=uid.."_d", x=c.padL, y=20, width=availW, height=13}, row)
-        dl:setStyleSheet(css.rowDesc)
-        dl:rawEcho(spec.desc)
-        topY = 34
-    end
     local cf = Mux.ui.colorField(row, {
         x = c.padL, y = topY, width = availW,
         value = tostring(spec.readFn() or "#000000"),
@@ -638,15 +650,7 @@ local function w_wideText(row, c)
     local hideApply = c.hideApply
     local inputW    = hideApply and availW or (availW - c.applyW - c.inputGap)
 
-    local nl = Geyser.Label:new({name=uid.."_n", x=c.padL, y=6, width=availW, height=14}, row)
-    nl:setStyleSheet(css.rowLabel)
-    nl:rawEcho(spec.label)
-
-    if c.hasDesc then
-        local dl = Geyser.Label:new({name=uid.."_d", x=c.padL, y=20, width=availW, height=13}, row)
-        dl:setStyleSheet(css.rowDesc)
-        dl:rawEcho(spec.desc)
-    end
+    renderBlockLabel(row, uid, spec, css, c.hasDesc, c.padL, availW, 6)
 
     local input = Geyser.CommandLine:new({name=uid.."_i", x=c.padL, y=36, width=inputW, height=c.height}, row)
     input:setStyleSheet(css.textInput)

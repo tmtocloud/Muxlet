@@ -503,10 +503,11 @@ function Mux._fitDialogToActiveTab(d)
     end
     local tab, bars = leaf(d, 0)
     if not (tab and tab._muxContentH) then return end
-    local theme  = Mux.activeTheme() or {}
-    local titleH = theme.titlebarHeight or 22
-    local tabH   = theme.tabBarHeight   or 22
-    local need   = titleH + 2*2 + bars*tabH + tab._muxContentH + 16
+    local theme   = Mux.activeTheme() or {}
+    local titleH  = theme.titlebarHeight or 22
+    local tabH    = theme.tabBarHeight   or 22
+    local footerH = d._footerH or 0   -- room for a MuxDialog:pinFooter strip, if one is pinned
+    local need    = titleH + 2*2 + bars*tabH + tab._muxContentH + footerH + 16
     local _, sh  = getMainWindowSize()
     local capH   = math.floor((sh or 1000) * 0.70)
     local h      = math.max(160, math.min(capH, need))
@@ -527,6 +528,16 @@ function Mux._fitDialogToActiveTab(d)
     -- relayout re-fires the fit, which no-ops here (height unchanged), so it ends.
     if tab._muxRelayout and tempTimer then
         tempTimer(0, function() pcall(tab._muxRelayout) end)
+    end
+    -- A pinned footer (MuxDialog:pinFooter) is a plain absolutely-positioned Label,
+    -- not an edge-relative Geyser size string like _tabViewport's, so it doesn't
+    -- auto-track this resize — re-pin it here the same way MuxDialog:fitContent
+    -- already re-pins it on every one of its own calls.
+    if d._footerBox then
+        local cw = (d.content and d.content:get_width()) or 0
+        local ch = (d.content and d.content:get_height()) or 0
+        pcall(function() d._footerBox:resize(cw, footerH) end)
+        pcall(function() d._footerBox:move(0, math.max(0, ch - footerH)) end)
     end
 end
 

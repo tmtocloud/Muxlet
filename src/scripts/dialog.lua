@@ -475,7 +475,11 @@ end
 -- accurate initial height and avoid a visible post-mount resize/reposition.
 function MuxDialog:pinFooter(specs, formOpts)
     formOpts = formOpts or {}
-    if not (self._scrollBox and self._body) then return end
+    -- A tabbed dialog (self:enableTabs()/:addTab(), see MuxSurface) has no
+    -- :mountForm scrollbox — its content lives per-tab. Support pinning a footer
+    -- below the tab viewport too, not just below a plain mountForm body.
+    local tabbed = self._tabViewport ~= nil
+    if not (tabbed or (self._scrollBox and self._body)) then return end
 
     local footerH = Mux.ui.formHeight(specs, formOpts)
     self._footerH = footerH
@@ -485,22 +489,31 @@ function MuxDialog:pinFooter(specs, formOpts)
         self._footerBox = nil
     end
 
-    -- Grow the outer frame by footerH (fitContent already sized it for the body
-    -- alone); self._contentH is left untouched so the scroll body keeps the size
-    -- driven by its own real content, not stretched to fill the footer's space.
-    self.floatH = (self.floatH or 0) + footerH
-    if self.outer then self.outer:resize(self.floatW or self.outer:get_width(), self.floatH) end
-    if self._autoPositioned and not self._userMoved then
-        local _, sh = getMainWindowSize()
-        self.floatY = _dialogCenteredY(self.floatH, self._posSlot, sh)
+    local cw, ch
+    if tabbed then
+        -- Shrink the tab viewport itself — an edge-relative Geyser size string,
+        -- so it stays correctly sized through any later resize/tab switch —
+        -- instead of a mountForm scrollbox, and let Mux._fitDialogToActiveTab
+        -- (which already folds self._footerH into its own height budget) grow
+        -- the outer frame to make room, mirroring what :fitContent does below
+        -- for the non-tabbed path.
+        pcall(function() self._tabViewport:resize("100%", Mux._fromEdgePx(footerH)) end)
+        if Mux._scheduleFit then Mux._scheduleFit(self) end
+        cw = self.content and self.content:get_width()  or (self._bodyW or 320)
+        ch = self.content and self.content:get_height() or footerH
+    else
+        -- Reflow through fitContent (same _fitMaxPct clamp + centering every later
+        -- section expand/collapse uses) instead of hand-growing floatH by footerH.
+        -- The old direct "floatH = floatH + footerH" skipped the max-height clamp
+        -- entirely, so a body already near the cap could be pushed past the bottom
+        -- of the screen the moment a footer was pinned on top of it.
+        self:fitContent(self._contentH)
+        cw = self.content and self.content:get_width()  or (self._bodyW or 320)
+        ch = self.content and self.content:get_height() or footerH
+        local scrollH = math.max(10, ch - footerH)
+        pcall(function() self._scrollBox:resize(cw, scrollH) end)
     end
-    if self.outer and self.outer.reposition then self.outer:reposition() end
-    if Mux._reflowContent then pcall(Mux._reflowContent, self) end
-
-    local cw = self.content and self.content:get_width()  or (self._bodyW or 320)
-    local ch = self.content and self.content:get_height() or footerH
     local scrollH = math.max(10, ch - footerH)
-    pcall(function() self._scrollBox:resize(cw, scrollH) end)
 
     local theme = Mux.activeTheme() or {}
     local bg    = (theme.ui and theme.ui.bg) or "rgb(18,18,26)"
