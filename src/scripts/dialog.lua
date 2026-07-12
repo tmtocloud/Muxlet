@@ -223,10 +223,22 @@ end
 -- Properties dialog tiles off an open pane Properties dialog even though they're
 -- different heights. Off-diagonal (explicitly-positioned) dialogs are ignored,
 -- and closing a dialog frees its slot for reuse.
+local _DIALOG_CASCADE_STEP = 30
+local _DIALOG_CASCADE_MAX_STEPS = 12
+
+-- Vertically-centered Y for height `h` at cascade slot `slot`, clamped on screen.
+-- Shared by the initial placement and by fitContent/pinFooter, so a dialog whose
+-- true content height differs from its initial size estimate (or grows once a
+-- footer is pinned) stays centered instead of drifting toward the top of the
+-- screen — it re-derives Y from the *current* height every time, rather than
+-- only ever nudging the dialog down when it would overflow the bottom edge.
+local function _dialogCenteredY(h, slot, sh)
+    local baseY = math.floor(((sh or 0) - h) / 2)
+    return Mux._clamp(baseY + (slot or 0) * _DIALOG_CASCADE_STEP, 0, math.max(0, (sh or 0) - h))
+end
+
 local function _dialogCascadePos(w, h, sw, sh)
     local baseX = math.floor((sw - w) / 2)
-    local baseY = math.floor((sh - h) / 2)
-    local step, maxSteps = 30, 12
 
     -- Slots are claimed by stored index, not re-derived from geometry: auto-fit
     -- resizes a dialog's height, which would shift a geometry-derived Y index off
@@ -238,10 +250,10 @@ local function _dialogCascadePos(w, h, sw, sh)
     end
 
     local k = 0
-    while taken[k] and k < maxSteps do k = k + 1 end
+    while taken[k] and k < _DIALOG_CASCADE_MAX_STEPS do k = k + 1 end
 
-    local x = Mux._clamp(baseX + k * step, 0, math.max(0, sw - w))
-    local y = Mux._clamp(baseY + k * step, 0, math.max(0, sh - h))
+    local x = Mux._clamp(baseX + k * _DIALOG_CASCADE_STEP, 0, math.max(0, sw - w))
+    local y = _dialogCenteredY(h, k, sh)
     return x, y, k
 end
 
@@ -269,6 +281,11 @@ function MuxDialog:init(opts)
     else
         x, y, cascadeSlot = _dialogCascadePos(w, h, sw, sh)
     end
+    -- Auto-positioned dialogs (no explicit x/y) stay vertically re-centered as
+    -- fitContent/pinFooter change their height, until the user drags them (see
+    -- pane.lua's titlebar drag start, which flips _userMoved).
+    self._autoPositioned = not (opts.x or opts.y)
+    self._posSlot        = cascadeSlot or 0
 
     -- Build the underlying pane with dialog defaults.
     MuxPane.init(self, {
@@ -363,8 +380,12 @@ function MuxDialog:fitContent(contentH)
     if math.abs((self.floatH or 0) - h) >= 2 then
         self.floatH = h
         if self.outer then self.outer:resize(self.floatW or self.outer:get_width(), h) end
-        local y = self.floatY or 0
-        if y + h > (sh or 0) then self.floatY = math.max(0, (sh or 0) - h) end
+        if self._autoPositioned and not self._userMoved then
+            self.floatY = _dialogCenteredY(h, self._posSlot, sh)
+        else
+            local y = self.floatY or 0
+            if y + h > (sh or 0) then self.floatY = math.max(0, (sh or 0) - h) end
+        end
         if self.outer and self.outer.reposition then self.outer:reposition() end
         -- Resizing self.outer does not, by itself, push the new pixel size down
         -- through self.frame/self.content — Geyser only recomputes percentage-based
@@ -469,6 +490,10 @@ function MuxDialog:pinFooter(specs, formOpts)
     -- driven by its own real content, not stretched to fill the footer's space.
     self.floatH = (self.floatH or 0) + footerH
     if self.outer then self.outer:resize(self.floatW or self.outer:get_width(), self.floatH) end
+    if self._autoPositioned and not self._userMoved then
+        local _, sh = getMainWindowSize()
+        self.floatY = _dialogCenteredY(self.floatH, self._posSlot, sh)
+    end
     if self.outer and self.outer.reposition then self.outer:reposition() end
     if Mux._reflowContent then pcall(Mux._reflowContent, self) end
 

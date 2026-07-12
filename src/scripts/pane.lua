@@ -475,6 +475,7 @@ function MuxPane:_buildTitlebar(theme)
         drag.paneY  = self.outer:get_y()
         drag.dropTargets = nil  -- snapshot lazily on the first move frame
         drag.anchorSpec  = nil
+        self._userMoved  = true  -- stop MuxDialog's auto re-centering once the user drags it
         self.titlebar:setCursor("ClosedHand")
         if self.floating then self:raise() end
     end)

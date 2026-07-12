@@ -1220,12 +1220,19 @@ function Mux.ui.buildForm(parent, specs, opts)
             curSec = secIdx
             local arrow
             if spec.label and spec.label ~= "" then
-                arrow = Geyser.Label:new({
-                    name=uid.."_ar", x=padL, y=math.floor((divH-14)/2), width=12, height=14,
-                }, divRow)
-                arrow:setStyleSheet("background:transparent;border:none;color:rgba(170,175,195,0.8);font-size:10px;")
-                arrow:echo(sections[secIdx].collapsed and "▸" or "▾")
-                local lblX  = padL + 14
+                -- spec.static skips the arrow and click-to-collapse wiring: a plain
+                -- labeled separator for callers that don't want it doubling as a
+                -- collapsible section header (e.g. the update dialog's "Changes" rule).
+                local isStatic = spec.static == true
+                local lblX = padL
+                if not isStatic then
+                    arrow = Geyser.Label:new({
+                        name=uid.."_ar", x=padL, y=math.floor((divH-14)/2), width=12, height=14,
+                    }, divRow)
+                    arrow:setStyleSheet("background:transparent;border:none;color:rgba(170,175,195,0.8);font-size:10px;")
+                    arrow:echo(sections[secIdx].collapsed and "▸" or "▾")
+                    lblX = padL + 14
+                end
                 local textW = math.min(math.max(60, #spec.label * 8 + 8), formW - lblX - padR - 20)
                 local nl = Geyser.Label:new({
                     name=uid.."_n", x=lblX, y=math.floor((divH-14)/2), width=textW, height=14,
@@ -1240,16 +1247,18 @@ function Mux.ui.buildForm(parent, specs, opts)
                     }, divRow)
                     line:setStyleSheet(css.dividerLine)
                 end
-                local function toggle()
-                    local sec = sections[secIdx]
-                    sec.collapsed = not sec.collapsed
-                    arrow:echo(sec.collapsed and "▸" or "▾")
-                    closeDropdown()
-                    if relayout then relayout() end
+                if not isStatic then
+                    local function toggle()
+                        local sec = sections[secIdx]
+                        sec.collapsed = not sec.collapsed
+                        arrow:echo(sec.collapsed and "▸" or "▾")
+                        closeDropdown()
+                        if relayout then relayout() end
+                    end
+                    divRow:setClickCallback(toggle)
+                    nl:setClickCallback(toggle)
+                    arrow:setClickCallback(toggle)
                 end
-                divRow:setClickCallback(toggle)
-                nl:setClickCallback(toggle)
-                arrow:setClickCallback(toggle)
             else
                 local line = Geyser.Label:new({
                     name=uid.."_l", x=padL, y=math.floor(divH/2), width=formW-padL-padR, height=1,

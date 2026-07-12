@@ -23,10 +23,12 @@
 -- Manual check:    mux version
 -- Enable startup checks:      mux settings set muxupdate.update_check_enabled true
 -- Opt in to pre-releases:     mux settings set muxupdate.update_include_prereleases true
--- Test the dialog with fake data:
+-- Test the dialog with fake data (pass automatic=true to see the "Remind Me
+-- Later"/"Never Check Automatically" buttons a real startup check would show):
 --   Mux.showUpdateDialog(
 --     { kind="prerelease", version="2.1.0", tag="2.1.0", sha="deadbeef", assets={} },
---     { { version="2.1.0", kind="prerelease", body="- New feature\n- A fix", sha="deadbeef" } })
+--     { { version="2.1.0", kind="prerelease", body="- New feature\n- A fix", sha="deadbeef" } },
+--     { automatic = true })
 
 -- ── Settings (Update tab) ─────────────────────────────────────────────────────
 --
@@ -331,6 +333,11 @@ end
 
 local function mdToHtml(body)
     body = tostring(body or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+    -- Trim a leading/trailing run of blank lines (e.g. a trailing blank before
+    -- build.yml's injected "**Commit:**" line) so it doesn't render as dead space
+    -- at the end of the section. Interior blank lines (paragraph breaks) are left
+    -- alone.
+    body = body:match("^%s*(.-)%s*$") or ""
     if body:match("^%s*$") then return "" end
     local lines = {}
     for line in (body .. "\n"):gmatch("([^\n]*)\n") do
@@ -397,6 +404,7 @@ end
 
 Mux._changelog       = Mux._changelog       or {}   -- retained for manual testing
 Mux._updateCandidate = Mux._updateCandidate or nil
+Mux._updateAutomatic = Mux._updateAutomatic or false
 
 local function closeUpdateDialog()
     if Mux._updateDialog then
@@ -463,14 +471,23 @@ local function installFromRelease(cand)
 end
 
 -- Build (or rebuild) the update dialog for a chosen candidate + changelog entries.
-function Mux.showUpdateDialog(cand, changelog)
+-- opts.automatic: true when this dialog was raised by the silent startup check;
+-- false for a user-initiated check ("mux version" / the settings "Check now"
+-- button). Only the automatic case offers "Remind Me Later"/"Never Check
+-- Automatically" — a manual check already told the user exactly what they asked
+-- for, so those two don't make sense there.
+function Mux.showUpdateDialog(cand, changelog, opts)
     ensureRichWidget()
     closeUpdateDialog()
 
     cand      = cand or Mux._updateCandidate or {}
     changelog = changelog or Mux._changelog or {}
+    opts      = opts or {}
+    local automatic = opts.automatic
+    if automatic == nil then automatic = Mux._updateAutomatic end
     Mux._updateCandidate = cand
     Mux._changelog       = changelog
+    Mux._updateAutomatic = automatic and true or false
 
     local iVer  = installedBaseVersion()
     local isPre = cand.kind == "prerelease"
@@ -506,10 +523,10 @@ function Mux.showUpdateDialog(cand, changelog)
     bodySpecs[#bodySpecs + 1] = { type = "richText", html = verText,
         rowHeight = estimateRichHeight(verText) + 4 }
 
-    bodySpecs[#bodySpecs + 1] = { type = "divider", label = "What's New" }
+    bodySpecs[#bodySpecs + 1] = { type = "divider", label = "Changes", static = true }
 
     if changelog and #changelog > 0 then
-        for _, entry in ipairs(changelog) do
+        for idx, entry in ipairs(changelog) do
             local header
             if entry.kind == "prerelease" and entry == cand and entry.version == iVer then
                 header = "v" .. entry.version .. "  (updated pre-release build)"
@@ -518,7 +535,9 @@ function Mux.showUpdateDialog(cand, changelog)
             else
                 header = "v" .. entry.version
             end
-            bodySpecs[#bodySpecs + 1] = { type = "divider", label = header }
+            -- Only the newest entry starts expanded; older ones are collapsed by
+            -- default so a long changelog doesn't spam the dialog.
+            bodySpecs[#bodySpecs + 1] = { type = "divider", label = header, _collapsed = idx > 1 }
             local html = mdToHtml(entry.body)
             if html == "" then html = "<span style='color:rgba(105,125,180,255);'>No notes for this release.</span>" end
             bodySpecs[#bodySpecs + 1] = { type = "richText", html = html, rowHeight = estimateRichHeight(html) }
@@ -535,20 +554,27 @@ function Mux.showUpdateDialog(cand, changelog)
                 closeUpdateDialog()
                 installFromRelease(cand)
             end },
-        { type = "button", label = "Remind Me Later", _noReset = true,
+    }
+    -- "Remind Me Later"/"Never Check Automatically" only make sense when Muxlet
+    -- raised this dialog on its own; a user who typed "mux version" or clicked
+    -- "Check for updates now" already got the answer they asked for, and the X
+    -- closes the dialog without changing any of that state either way.
+    if automatic then
+        footerSpecs[#footerSpecs + 1] = { type = "button", label = "Remind Me Later", _noReset = true,
             onClick = function()
                 closeUpdateDialog()
                 Mux._updateState.remindSkip = 5
                 saveUpdateState()
-            end },
-        { type = "button", label = "Never Check Automatically", style = "danger", _noReset = true,
+            end }
+        footerSpecs[#footerSpecs + 1] = { type = "button", label = "Never Check Automatically",
+            style = "danger", _noReset = true,
             onClick = function()
                 closeUpdateDialog()
                 Mux.settings.set("muxupdate", "update_check_enabled", false)
                 Mux._updateState.remindSkip = 0
                 saveUpdateState()
-            end },
-    }
+            end }
+    end
 
     local bodyH   = Mux.ui.formHeight(bodySpecs, {})
     local footerH = Mux.ui.formHeight(footerSpecs, {})
@@ -558,7 +584,7 @@ function Mux.showUpdateDialog(cand, changelog)
         width     = 480,
         height    = bodyH + footerH + 40,   -- +chrome estimate; fitContent/pinFooter correct this exactly
         singleton = "mux_update",
-        maxHeightPct = 0.7,
+        maxHeightPct = 0.8,
     })
     if not d then return end
     if d.contentBg then d.contentBg:echo(""); d.contentBg:hide() end
@@ -626,7 +652,7 @@ function Mux.checkForUpdates(silent)
         end
 
         local changelog = buildChangelog(cands, chosen, installedBaseVersion())
-        Mux.showUpdateDialog(chosen, changelog)
+        Mux.showUpdateDialog(chosen, changelog, { automatic = silent })
     end)
 
     Mux._updateDlErrHandler = registerAnonymousEventHandler("sysDownloadError", function(_, filename)
