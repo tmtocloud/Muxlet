@@ -475,17 +475,6 @@ function Mux.showUpdateDialog(cand, changelog)
     local iVer  = installedBaseVersion()
     local isPre = cand.kind == "prerelease"
 
-    local d = Mux.createDialog({
-        title     = "Muxlet Update",
-        width     = 520,
-        height    = 300,
-        singleton = "mux_update",
-        maxHeightPct = 0.82,
-    })
-    if not d then return end
-    if d.contentBg then d.contentBg:echo(""); d.contentBg:hide() end
-    Mux._updateDialog = d
-
     -- Intro + version line as one rich block.
     local verText
     if isPre and cand.version == iVer then
@@ -510,12 +499,14 @@ function Mux.showUpdateDialog(cand, changelog)
             escapeHtml(tostring(Mux._version or "?")), escapeHtml(cand.version or "?"))
     end
 
-    local specs = {}
+    -- Only the intro + changelog scroll; buttons are pinned in a footer below
+    -- via :pinFooter so they stay visible regardless of scroll position.
+    local bodySpecs = {}
 
-    specs[#specs + 1] = { type = "richText", html = verText,
-        rowHeight = estimateRichHeight(verText) + 6 }
+    bodySpecs[#bodySpecs + 1] = { type = "richText", html = verText,
+        rowHeight = estimateRichHeight(verText) + 4 }
 
-    specs[#specs + 1] = { type = "divider", label = "What's New" }
+    bodySpecs[#bodySpecs + 1] = { type = "divider", label = "What's New" }
 
     if changelog and #changelog > 0 then
         for _, entry in ipairs(changelog) do
@@ -527,51 +518,54 @@ function Mux.showUpdateDialog(cand, changelog)
             else
                 header = "v" .. entry.version
             end
-            specs[#specs + 1] = { type = "divider", label = header }
+            bodySpecs[#bodySpecs + 1] = { type = "divider", label = header }
             local html = mdToHtml(entry.body)
             if html == "" then html = "<span style='color:rgba(105,125,180,255);'>No notes for this release.</span>" end
-            specs[#specs + 1] = { type = "richText", html = html, rowHeight = estimateRichHeight(html) }
+            bodySpecs[#bodySpecs + 1] = { type = "richText", html = html, rowHeight = estimateRichHeight(html) }
         end
     else
-        specs[#specs + 1] = { type = "richText",
+        bodySpecs[#bodySpecs + 1] = { type = "richText",
             html = "<span style='color:rgba(105,125,180,255);'>No release notes found.</span>",
             rowHeight = 28 }
     end
 
-    specs[#specs + 1] = { type = "divider", label = "" }
+    local footerSpecs = {
+        { type = "button", label = "Update Now", style = "primary", _noReset = true,
+            onClick = function()
+                closeUpdateDialog()
+                installFromRelease(cand)
+            end },
+        { type = "button", label = "Remind Me Later", _noReset = true,
+            onClick = function()
+                closeUpdateDialog()
+                Mux._updateState.remindSkip = 5
+                saveUpdateState()
+            end },
+        { type = "button", label = "Never Check Automatically", style = "danger", _noReset = true,
+            onClick = function()
+                closeUpdateDialog()
+                Mux.settings.set("muxupdate", "update_check_enabled", false)
+                Mux._updateState.remindSkip = 0
+                saveUpdateState()
+            end },
+    }
 
-    local note = "<span style='color:rgba(105,125,180,255);'>After updating, close and reopen your "
-              .. "Mudlet profile so every UI element redraws cleanly.</span>"
-    specs[#specs + 1] = { type = "richText", html = note, rowHeight = estimateRichHeight(note) + 4 }
+    local bodyH   = Mux.ui.formHeight(bodySpecs, {})
+    local footerH = Mux.ui.formHeight(footerSpecs, {})
 
-    specs[#specs + 1] = { type = "button", label = "Update Now", style = "primary", _noReset = true,
-        onClick = function()
-            closeUpdateDialog()
-            installFromRelease(cand)
-        end }
-    specs[#specs + 1] = { type = "button", label = "Remind Me Later", _noReset = true,
-        onClick = function()
-            closeUpdateDialog()
-            Mux._updateState.remindSkip = 5
-            saveUpdateState()
-        end }
-    specs[#specs + 1] = { type = "button", label = "Never Check Automatically", style = "danger", _noReset = true,
-        onClick = function()
-            closeUpdateDialog()
-            Mux.settings.set("muxupdate", "update_check_enabled", false)
-            Mux._updateState.remindSkip = 0
-            saveUpdateState()
-        end }
+    local d = Mux.createDialog({
+        title     = "Muxlet Update",
+        width     = 480,
+        height    = bodyH + footerH + 40,   -- +chrome estimate; fitContent/pinFooter correct this exactly
+        singleton = "mux_update",
+        maxHeightPct = 0.7,
+    })
+    if not d then return end
+    if d.contentBg then d.contentBg:echo(""); d.contentBg:hide() end
+    Mux._updateDialog = d
 
-    d:mountForm(specs, { prefix = "mux_update_f" })
-    -- Geyser only finalises this dialog's geometry after the current stack
-    -- unwinds; the mount-time fit therefore runs against provisional sizes and
-    -- can misplace/overshoot rows until something forces a relayout. Re-run the
-    -- layout on the next tick so the first render matches the settled state
-    -- (previously this only corrected itself when the user clicked the dialog).
-    tempTimer(0, function()
-        if Mux._updateDialog == d and d._muxRelayout then pcall(d._muxRelayout) end
-    end)
+    d:mountForm(bodySpecs, { prefix = "mux_update_f" })
+    d:pinFooter(footerSpecs, { prefix = "mux_update_ft" })
 end
 
 -- ── Version check ─────────────────────────────────────────────────────────────

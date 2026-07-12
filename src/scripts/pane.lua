@@ -1018,8 +1018,8 @@ end
 -- menu row (glyph + label + action, optional submenu). The engine places what
 -- fits as icons and folds the lowest-priority remainder into the menu — so the
 -- menu is exactly the complement of the visible icons, never a second hand-kept
--- list. Nothing folded (and not compact) → no menu. A ⋯ overflow button appears
--- only when something is folded, as the visible handle for the menu.
+-- list. There is no dedicated overflow button; folded elements (or compact_titlebar)
+-- just make the right-click context menu active on that titlebar.
 --
 -- Builtins are referenced by a resolver to their existing Label; content
 -- contributes its own and may "play in" any side/group/order but cannot remove or
@@ -1310,9 +1310,9 @@ function MuxPane:_syncButtons(force)
     local ctx          = self:_elementCtx()
     local left, right, all = self:_collectTbElements(ctx)   -- visible iconable; no Geyser calls
 
-    -- Any content element with a menu row forces the ⋯ menu to exist and be
-    -- reachable by right-click — even when its icon is visible in the bar — so
-    -- content settings are always available from the right-click menu.
+    -- Any content element with a menu row forces the right-click context menu to
+    -- exist — even when its icon is visible in the bar — so content settings are
+    -- always reachable from it.
     local hasMenuExtra = false
     if ctx.content and ctx.content.titlebarElements then
         for _, s in ipairs(ctx.content.titlebarElements) do

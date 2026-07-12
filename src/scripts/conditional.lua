@@ -242,6 +242,28 @@ local function ctxFor(subject, value, met)
     return { pane = subject, value = value, met = met }
 end
 
+-- Reverse a rule's held effect when it stops being able to fire (removed, or
+-- disabled/reconfigured via _reapplyRule): if it was last "met", its actElse
+-- (if any) is exactly the "condition just became false" action, so run it once
+-- — otherwise whatever act last fired (e.g. Hide) would linger forever with
+-- nothing left to undo it. A rule with no actElse has no defined "unmet" state
+-- to fall back to, so there's nothing to retire.
+local function retireRule(subject, rule)
+    if rule._lastMet and rule.actElse and Mux.runAction then
+        Mux.runAction(rule.actElse, ctxFor(subject, rule._lastVal, false))
+    end
+    rule._evaledOnce, rule._lastMet, rule._lastVal = false, nil, nil
+end
+
+-- True if any of the subject's rules can still fire.
+local function anyRuleEnabled(subject)
+    if not subject.rules then return false end
+    for _, r in ipairs(subject.rules) do
+        if r.enabled ~= false then return true end
+    end
+    return false
+end
+
 -- Pulse conditions aren't polled — an external source (a Mudlet trigger) pushes a
 -- value into the engine via _fireRulePulse, which runs the rule's action once per
 -- pulse with the matched value/captures in ctx. line_match is the first such kind.
@@ -358,17 +380,30 @@ end
 function Mux._removeRule(subject, id)
     if not (subject and subject.rules) then return end
     for i, r in ipairs(subject.rules) do
-        if r.id == id then uninstallCond(subject, r); table.remove(subject.rules, i); break end
+        if r.id == id then
+            retireRule(subject, r)
+            uninstallCond(subject, r)
+            table.remove(subject.rules, i)
+            break
+        end
     end
     if #subject.rules == 0 then Mux._deregisterRuleSubject(subject) end
+    -- No enabled rule left to govern this subject — fall back to the engine's
+    -- own default resting state (mirrors MuxPane:setCondition's legacy "no
+    -- condition → visible", generalized here for the multi-rule model and for
+    -- tabs too), rather than leaving it stuck in whatever the last rule set.
+    if not anyRuleEnabled(subject) and subject._conditionHidden and subject._conditionShow then
+        subject:_conditionShow()
+    end
 end
 
 -- Re-apply a rule in place after its enabled flag or condition params change:
--- tear down its trigger, re-arm (respecting enabled), and re-evaluate — without
--- reordering the list (so the editor's rule numbering is stable).
+-- retire its held effect (see retireRule), tear down its trigger, re-arm
+-- (respecting enabled), and re-evaluate — without reordering the list (so the
+-- editor's rule numbering is stable).
 function Mux._reapplyRule(subject, rule)
+    retireRule(subject, rule)
     uninstallCond(subject, rule)
-    rule._evaledOnce, rule._lastMet, rule._lastVal = false, nil, nil
     Mux._registerRuleSubject(subject)
     installCond(subject, rule)
     evalRule(subject, rule, true)

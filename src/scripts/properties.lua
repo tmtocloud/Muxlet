@@ -628,7 +628,7 @@ local function paneRows(pane)
         ["Name"] = true, ["Name Align"] = true, ["Width %"] = true,
         ["Height %"] = true,
     }
-    local DISPLAY = { ["Titlebar"] = true, ["Properties Button"] = true, ["Anchor Icon"] = true }
+    local DISPLAY = { ["Titlebar"] = true, ["Properties Button"] = true, ["Anchor Icon"] = true, ["Anchor Priority"] = true }
     -- Permissions order roughly follows the titlebar left→right / menu top→bottom
     -- reading order of the elements these permissions govern. Non-icon permissions
     -- (Movable, Convertible, Resizable) trail at the end.

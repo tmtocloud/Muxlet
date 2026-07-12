@@ -5,12 +5,13 @@
 -- calling Mux.settings.set("mux", "welcome_shown", true) in their own muxletReady
 -- handler — no separate disable flag needed.
 --
--- Built as a first-class MuxDialog whose body is a widget form mounted with
--- :mountForm (ScrollBox + buildForm). That gives clean text wrapping, a real
--- titlebar close button, and automatic sizing/scrolling for free — the dialog
--- grows to fit its content up to a fraction of the screen height, then scrolls.
--- welcome.lua loads after dialog.lua and widgets.lua, so createDialog / buildForm
--- / registerWidget are all available at load time.
+-- Body (intro/concepts/commands) scrolls via :mountForm; the mode choice and
+-- Get Started button are pinned below it via :pinFooter so they're always
+-- visible and never scroll out of reach. Both specs lists are built and
+-- measured (Mux.ui.formHeight) BEFORE the dialog is created, so the initial
+-- height guess handed to Mux.createDialog already matches what mountForm/
+-- pinFooter will compute — no big post-mount resize, no reposition fighting a
+-- user who grabs the titlebar in the first moment.
 
 -- ── Palette (matches Muxlet's dark UI) ────────────────────────────────────────
 
@@ -20,46 +21,77 @@ local C_TERM  = "#8fb8ff"   -- concept name / accent
 local C_CODE  = "#7ab4ff"   -- command text
 
 -- ── Copy ──────────────────────────────────────────────────────────────────────
+-- Plain, factual, one line per concept. No taglines, no "you'll love this".
 
 local _INTRO =
-    "Muxlet turns Mudlet into a tiling workspace. Divide the screen into panes, "
- .. "load game content into each, and arrange them however you like. Save an "
- .. "arrangement as a <i>workspace</i> and it comes back exactly as you left it "
- .. "next session. Everything is opt-in — skip the panels entirely and drive it "
- .. "all from the command line whenever you prefer."
+    "Muxlet replaces Mudlet's single console with a grid of resizable windows, "
+ .. "each showing whatever you put in it — the console, a map, GMCP data, "
+ .. "anything a package provides. Save an arrangement as a workspace to reload "
+ .. "it by name later. Everything below is optional and also reachable from "
+ .. "the command line."
 
 -- Each entry becomes one "<b>Term</b> — description" line. Descriptions wrap.
 local _CONCEPTS = {
-    { "Panes",      "Resizable panels that hold content. Dock them to the background or let them float freely." },
-    { "Tabs",       "Stack several views inside one pane and switch between them, just like a browser." },
-    { "Splits",     "Divide any pane in two — side by side or stacked — to build the layout you want." },
-    { "Content",    "Ready-made views you drop into a pane by right-click: the command console, GMCP readouts, and anything downstream packages provide." },
-    { "Workspaces", "Named layouts you can save and reload. Your live arrangement is remembered automatically between sessions." },
+    { "Panes",      "A resizable window. Dock it into the layout or float it free." },
+    { "Tabs",       "Several panes stacked in one spot, switched like browser tabs." },
+    { "Splits",     "One pane divided into two, side by side or stacked." },
+    { "Content",    "What a pane shows — the console, a GMCP readout, a map, anything a package adds. "
+                 .. "Change it from the pane's titlebar or right-click menu." },
+    { "Workspaces", "A saved arrangement of panes, tabs, and content, reloaded by name." },
+    { "Themes",     "Colors and style for every pane and tab. Switch between built-in themes or save your own." },
+    { "Anchoring",  "Pin a floating pane to another pane's edge so it stays put when that pane moves or resizes." },
 }
 
 local _REACT = {
-    { "Conditions", "Named tests against live game state — GMCP fields, variables, and more." },
-    { "Actions",    "Sequences of steps that fire when a condition is met: show or hide a pane, swap its content, send a command. Together they let your layout react to what happens in-game." },
+    { "Conditions", "A named test against game state — a GMCP field, a variable, more." },
+    { "Actions",    "A sequence of steps that runs when a condition is met: show or hide a pane, "
+                 .. "change its content, send a command." },
 }
 
-local _CUSTOM = {
-    { "Themes",   "Switch the entire look between dark, light, and your own saved palettes. Fine-tune panes and tabs under Settings \226\134\146 Design." },
-    { "Settings", "Every option lives in the Settings window — open it any time with <span style='color:" .. C_CODE .. "'>mux settings</span>. Automatic update checks live on its Update tab." },
-}
-
-local _DRIVE =
-    "Panes and tabs are edited straight from the UI — titlebar buttons, right-click "
- .. "menus, and the Properties panel. Session control, themes, workspaces, and "
- .. "conditions/actions are managed from the command line (or baked into a package). "
- .. "Conditions and Actions each have their own editor under the Settings window."
-
-local _COMMANDS = {
-    { "mux",             "Start Muxlet — restores your last session" },
-    { "mux help",        "The full command reference" },
-    { "mux settings",    "Open the Settings window" },
-    { "mux workspaces",  "Browse and load saved layouts" },
-    { "mux theme [name]","Show or switch the active theme" },
-    { "mux version",     "Show the version and check for updates" },
+-- Same groups/commands as `mux help` (src/aliases/mux.lua), reformatted as a
+-- collapsed-by-default reference rather than duplicated as its own tour section.
+local _HELP_GROUPS = {
+    { group = "Session", cmds = {
+        { "mux",                        "start (restores your last session)" },
+        { "mux stop",                   "disable, restore the normal Mudlet console" },
+        { "mux reset",                  "re-apply the reset workspace" },
+        { "mux status",                 "show status overview" },
+    } },
+    { group = "Workspaces", cmds = {
+        { "mux workspace save <name>",  "save the full UI state as a named workspace" },
+        { "mux workspace load <name>",  "restore a saved workspace" },
+        { "mux workspace list",         "list all registered workspaces (mux workspaces)" },
+        { "mux workspace delete <name>","remove a saved workspace" },
+        { "mux workspace export <name>","write a workspace as ready-to-paste Lua" },
+    } },
+    { group = "Conditions &amp; Actions", cmds = {
+        { "mux conditions list",        "list named conditions" },
+        { "mux conditions export <id>|all", "write conditions as ready-to-paste Lua" },
+        { "mux actions list",           "list named actions" },
+        { "mux actions export <id>|all","write actions as ready-to-paste Lua" },
+        { "mux export",                 "write every theme, condition, action, and workspace to one file" },
+    } },
+    { group = "Themes", cmds = {
+        { "mux theme [name]",           "show or switch the active theme" },
+        { "mux theme save <name>",      "save the current look as a named theme" },
+        { "mux theme export <name>|all","re-export a saved theme" },
+        { "mux themes",                 "list all registered themes" },
+    } },
+    { group = "Settings", cmds = {
+        { "mux settings",               "toggle the Settings window (or click the ⚙ on the main pane's titlebar)" },
+        { "mux settings list [ns|all]", "list settings namespaces or values" },
+        { "mux settings get ns.key",    "show one setting" },
+        { "mux settings set ns.key val","change a setting" },
+    } },
+    { group = "Recovery", cmds = {
+        { "mux panes",                  "list every pane/tab with its id and hidden state" },
+        { "mux reveal <id>|all",        "restore a hidden pane/tab, or every one, to the screen" },
+    } },
+    { group = "Diagnostics", cmds = {
+        { "mux debug [on|off]",         "toggle debug output" },
+        { "mux version",                "show version and check for updates" },
+        { "mux reload [wipe]",          "reinstall from local build (dev)" },
+    } },
 }
 
 -- ── Rich-text form widget (block, word-wrapping) ──────────────────────────────
@@ -68,11 +100,14 @@ local _COMMANDS = {
 -- another file having registered one. Distinct name ("welcomeText") so it can't
 -- collide with or perturb the updater's own rich-text widget.
 
-local _APPROX_W = 520
+local _APPROX_W = 500
 
+-- Tuned tight (0.46 px/char, +3px leading) rather than generous — the previous,
+-- looser constants overestimated wrapped-line count and left a visible gap at
+-- the end of every section before the next divider.
 local function estimateHeight(html, width, fontPx)
     width = width or _APPROX_W
-    local perPx      = (fontPx or 13) * 0.52          -- rough average glyph advance
+    local perPx      = (fontPx or 13) * 0.46
     local charsPerLn = math.max(20, math.floor(width / perPx))
     local lines = 0
     for seg in (html .. "<br>"):gmatch("(.-)<br>") do
@@ -81,7 +116,7 @@ local function estimateHeight(html, width, fontPx)
                      :gsub("&gt;", ">"):gsub("&mdash;", "-"):gsub("\226\134\146", ">")
         lines = lines + math.max(1, math.ceil(math.max(1, #plain) / charsPerLn))
     end
-    return lines * (fontPx and (fontPx + 7) or 20)
+    return lines * (fontPx and (fontPx + 3) or 16)
 end
 
 local function ensureWelcomeWidget()
@@ -93,8 +128,7 @@ local function ensureWelcomeWidget()
         local fs   = spec.fontSize or 13
         local w    = c.formW - c.padL - c.padR
         local lbl  = Geyser.Label:new({
-            name = c.uid .. "_wt", x = c.padL, y = 6,
-            width = w, height = math.max(16, (c.thisH or 30) - 12),
+            name = c.uid .. "_wt", x = c.padL, y = 4, width = w, height = math.max(16, (c.thisH or 30) - 8),
         }, row)
         lbl:setStyleSheet(string.format(
             "background:transparent; border:none; color:%s; font-size:%dpx; "
@@ -104,8 +138,8 @@ local function ensureWelcomeWidget()
     end, { layout = "block", rowHeight = 30 })
 end
 
--- Render a { term, desc } list into one HTML block with hanging lines.
-local function defList(items, fontPx)
+-- Render a { term, desc } list into one HTML block, one line per entry.
+local function defList(items)
     local parts = {}
     for _, e in ipairs(items) do
         parts[#parts + 1] = string.format(
@@ -113,124 +147,146 @@ local function defList(items, fontPx)
          .. "<span style='color:%s'> &mdash; %s</span>",
             C_TERM, e[1], C_BODY, e[2])
     end
-    return table.concat(parts, "<br><br>")
+    return table.concat(parts, "<br>")
 end
 
--- Render the command list as aligned, monospaced-looking rows.
-local function cmdList()
+-- _HELP_GROUPS commands use the same "<name>" placeholder syntax as the
+-- terminal `mux help` text, but this renders as HTML (unlike the terminal),
+-- where bare angle brackets read as unknown tags and get swallowed. Escape them.
+local function escHelp(s)
+    return (s:gsub("<", "&lt;"):gsub(">", "&gt;"))
+end
+
+-- Render the full `mux help` reference (_HELP_GROUPS) as one HTML block: a
+-- bold group heading per group, then its commands as aligned rows.
+local function helpHtml()
     local parts = {}
-    for _, e in ipairs(_COMMANDS) do
+    for _, g in ipairs(_HELP_GROUPS) do
         parts[#parts + 1] = string.format(
-            "<span style='color:%s'><b>%s</b></span>"
-         .. "<span style='color:%s'>&nbsp;&nbsp;&mdash;&nbsp;%s</span>",
-            C_CODE, e[1], C_MUTED, e[2])
+            "<span style='color:%s;font-size:11px;'><b>%s</b></span>", C_MUTED, g.group)
+        for _, e in ipairs(g.cmds) do
+            parts[#parts + 1] = string.format(
+                "<span style='color:%s'><b>%s</b></span>"
+             .. "<span style='color:%s'>&nbsp;&nbsp;&mdash;&nbsp;%s</span>",
+                C_CODE, escHelp(e[1]), C_MUTED, e[2])
+        end
     end
     return table.concat(parts, "<br>")
 end
 
--- ── Spec builder ──────────────────────────────────────────────────────────────
+-- ── Spec builders ─────────────────────────────────────────────────────────────
 
-local function buildSpecs(getMode, setMode, onStart)
+local function para(specs, html, opts)
+    opts = opts or {}
+    specs[#specs + 1] = {
+        type = "welcomeText", html = html,
+        color = opts.color, fontSize = opts.fontSize,
+        rowHeight = estimateHeight(html, _APPROX_W, opts.fontSize or 13) + (opts.pad or 2),
+    }
+end
+
+local function buildBodySpecs()
     local specs = {}
+    para(specs, _INTRO)
 
-    local function para(html, opts)
-        opts = opts or {}
-        specs[#specs + 1] = {
-            type = "welcomeText", html = html,
-            color = opts.color, fontSize = opts.fontSize,
-            rowHeight = estimateHeight(html, _APPROX_W, opts.fontSize or 13) + (opts.pad or 8),
-        }
-    end
-    local function section(label) specs[#specs + 1] = { type = "divider", label = label } end
+    specs[#specs + 1] = { type = "divider", label = "The building blocks" }
+    para(specs, defList(_CONCEPTS))
 
-    para(_INTRO)
+    specs[#specs + 1] = { type = "divider", label = "Conditions & Actions" }
+    para(specs, defList(_REACT))
 
-    section("The building blocks")
-    para(defList(_CONCEPTS))
-
-    section("Make it react")
-    para(defList(_REACT))
-
-    section("Make it yours")
-    para(defList(_CUSTOM))
-
-    section("Two ways to drive it")
-    para(_DRIVE)
-
-    section("Handy commands")
-    para(cmdList())
-
-    section("Getting started")
-    para("Muxlet can open automatically each session, or stay out of the way until "
-      .. "you ask for it. You can change this any time in Settings.",
-      { color = C_MUTED })
-
-    specs[#specs + 1] = {
-        type       = "segmentedControl",
-        label      = "When Mudlet opens",
-        widgetWidth = 230,
-        options    = {
-            { label = "Open Muxlet", value = "auto"   },
-            { label = "Wait for me", value = "manual" },
-        },
-        readFn  = function() return getMode() end,
-        writeFn = function(v) setMode(v) end,
-        _noReset = true,
-    }
-
-    specs[#specs + 1] = {
-        type = "button", label = "Get Started", style = "primary", _noReset = true,
-        onClick = onStart,
-    }
+    -- Collapsed by default: this is a reference, not part of the tour.
+    specs[#specs + 1] = { type = "divider", label = "Full command reference", _collapsed = true }
+    para(specs, helpHtml(), { fontSize = 12 })
 
     return specs
 end
 
--- ── Dialog ──────────────────────────────────────────────────────────────────
+local function buildFooterSpecs(getMode, setMode, onStart)
+    return {
+        {
+            type       = "segmentedControl",
+            label      = "On Mudlet startup",
+            widgetWidth = 230,
+            options    = {
+                { label = "Open automatically", value = "auto"   },
+                { label = "Don't auto-open",     value = "manual" },
+            },
+            readFn  = function() return getMode() end,
+            writeFn = function(v) setMode(v) end,
+            _noReset = true,
+        },
+        {
+            type = "button", label = "Get Started", style = "primary", _noReset = true,
+            onClick = onStart,
+        },
+    }
+end
+
+-- ── Dialog ────────────────────────────────────────────────────────────────────
+
+local _FORM_OPTS = { dividerHeight = 22 }
+
+-- Mirrors buildForm's own initial relayout (widgets.lua): sums every row EXCEPT
+-- those belonging to a section whose divider set _collapsed = true. Used only
+-- for the pre-creation height guess — Mux.ui.formHeight would count the
+-- collapsed help reference as fully expanded and open the dialog too tall.
+local function visibleFormHeight(specs, opts)
+    local total, collapsed = 0, false
+    for _, spec in ipairs(specs) do
+        if spec.type == "divider" then
+            collapsed = spec._collapsed == true
+            total = total + (spec.rowHeight or opts.dividerHeight or 24)
+        elseif not collapsed then
+            total = total + Mux.ui.specHeight(spec, opts)
+        end
+    end
+    return total
+end
 
 local function buildWelcomeDialog()
     ensureWelcomeWidget()
 
     local selectedMode = "auto"
-    local committed    = false   -- true once the user has made an explicit choice
 
-    -- Mark the welcome as shown on ANY close (button or titlebar ×) so it never
-    -- nags again; only apply the auto-start preference when the user actually
-    -- confirmed a choice via Get Started.
     local function markShown()
         if Mux.settings and Mux.settings.get and not Mux.settings.get("mux", "welcome_shown") then
             Mux.settings.set("mux", "welcome_shown", true)
         end
     end
 
+    local function getMode() return selectedMode end
+    local function setMode(v) selectedMode = v end
+
+    local bodySpecs   = buildBodySpecs()
+    local footerSpecs = buildFooterSpecs(getMode, setMode, function() end)   -- onClick wired after dialog exists
+    local bodyH   = visibleFormHeight(bodySpecs, _FORM_OPTS)
+    local footerH = Mux.ui.formHeight(footerSpecs, _FORM_OPTS)
+
     local dialog = Mux.createDialog({
         title     = "Welcome to Muxlet",
-        width     = 560,
+        width     = 520,
+        height    = bodyH + footerH + 40,   -- +chrome estimate; fitContent/pinFooter correct this exactly
+        maxHeightPct = 0.7,
         singleton = "mux_welcome",
         onClose   = markShown,
     })
 
-    local function getMode() return selectedMode end
-    local function setMode(v) selectedMode = v end
-
     local function onStart()
-        committed = true
         local autoStart = (selectedMode == "auto")
         markShown()
         Mux.settings.set("mux", "auto_start", autoStart)
         pcall(function() dialog:close() end)
         if autoStart and Mux.fullStart then Mux.fullStart() end
     end
+    footerSpecs[#footerSpecs].onClick = onStart
 
     if dialog.contentBg then
         pcall(function() dialog.contentBg:hide() end)
     end
 
-    dialog:mountForm(buildSpecs(getMode, setMode, onStart), { prefix = "mux_welcome_f" })
-    -- Refit once Geyser settles geometry (see the same note in update.lua).
-    tempTimer(0, function()
-        if dialog._muxRelayout then pcall(dialog._muxRelayout) end
-    end)
+    dialog:mountForm(bodySpecs, { prefix = "mux_welcome_f", dividerHeight = 22 })
+    dialog:pinFooter(footerSpecs, { prefix = "mux_welcome_ft" })
     dialog:show()
     dialog:raise()
     return dialog

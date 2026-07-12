@@ -33,11 +33,12 @@ local function onMuxletReady()
         -- Every field below is optional — omit any you don't have an opinion
         -- on yet (see Mux.configureHost for the full list and defaults).
         Mux.configureHost({
-            suppressWelcome = true,   -- you're showing your own onboarding, not Muxlet's
-            autoStart       = false,  -- your onboarding decides when Mux.fullStart() runs
-            quietStart      = true,   -- you're printing your own "started" message
-            checkForUpdates = false,  -- you pin a Muxlet version; don't offer drift from it
-            defaultWorkspace = "myPackageWorkspace",  -- must already be registered
+            suppressWelcome    = true,   -- you're showing your own onboarding, not Muxlet's
+            autoStart          = false,  -- your onboarding decides when Mux.fullStart() runs
+            quietStart         = true,   -- you're printing your own "started" message
+            checkForUpdates    = false,  -- you pin a Muxlet version; don't offer drift from it
+            includePrereleases = false,  -- only relevant if checkForUpdates is left true
+            defaultWorkspace   = "myPackageWorkspace",  -- must already be registered
         })
 
         -- The rest of your package's real startup goes here: register
@@ -208,7 +209,7 @@ titlebarElements = {
     side     = "left",              -- "left" | "right" cluster
     group    = "info",              -- packing/menu group for ordering
     order    = 0,                   -- order within the group
-    priority = 100,                 -- higher folds into the ⋯ menu last
+    priority = 100,                 -- higher folds into the right-click menu last
     icon     = "⚙",                 -- glyph, or a function(ctx) -> glyph
     tooltip  = "Clock settings",
     iconable = true,                -- false = never a titlebar icon, menu-only
@@ -471,7 +472,8 @@ Node shapes:
 - **Split:** `{ type = "split", direction = "v"|"h", ratio = 0..1, a = <node>, b = <node> }`
 - **Pane:** `{ type = "pane", id, name, activeContent, contentState, tabs, condition,
   actionTrue, actionFalse, … capability flags (mainConsoleHost, closeable, movable,
-  bordered, …) }`
+  bordered, addable, …) }`. `addable` only needs setting explicitly when it diverges
+  from its per-role default (true for the main console host, false otherwise).
 
 Runtime workspace API:
 
@@ -530,7 +532,8 @@ hand users the whole menu.
 - **Rules, named conditions, named actions** → `rules.json`.
 - **Named themes** (`mux theme save`) → `user_themes.json`.
 - **Workspaces** → the workspaces file (auto-saved `current` plus any you name).
-- **Settings** → Mudlet's per-profile setting store, under namespaces (`mux.*`).
+- **Settings** → Mudlet's per-profile setting store, under namespaces (`mux.*` for
+  core behavior, `muxtheme.*` for the active theme, `muxupdate.*` for update checks).
 
 Content persists via its own `serialize`/`restore`, embedded in the workspace snapshot.
 

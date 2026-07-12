@@ -616,12 +616,12 @@ function Mux._contentMenuItem(spec, baseCtx, menuOnly)
     }
 end
 
--- Overflow context menu: appears on titlebar right-click ONLY when the titlebar
--- is too narrow to show all buttons (self._overflowMode == true).
+-- Overflow context menu: active on titlebar right-click only when the titlebar
+-- is too narrow to show all buttons, or compact_titlebar is on (self._overflowMode).
 -- Items mirror what the buttons do, with the same show/hide conditions.
--- The right-click / ⋯ menu is exactly the set of elements the placement engine
--- folded off the titlebar (plus any menu-only content elements). One definition
--- per element drives both its icon and this row, so they can never drift.
+-- The menu is exactly the set of elements the placement engine folded off the
+-- titlebar (plus any menu-only content elements). One definition per element
+-- drives both its icon and this row, so they can never drift.
 function Mux._showContextMenu(pane, globalX, globalY)
     if not pane or not pane.contextMenu then return end
     local menu  = Mux._contextMenu

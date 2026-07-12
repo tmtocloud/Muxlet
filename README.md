@@ -147,11 +147,13 @@ Each pane's titlebar shows only the buttons its capabilities allow: split vertic
 split horizontal, swap with sibling, anchor (floating panes only), zoom, Content
 Library, minimize (floating panes, and embedded panes in a top/bottom split),
 Properties (≡), and close. The pane hosting the main console also shows a **+**
-button to spawn a new floating pane. If the titlebar is too narrow, overflowing
-buttons fold into a **⋯** menu.
+button to spawn a new floating pane. There's no separate overflow button — if the
+titlebar is too narrow to show every button, or the `compact_titlebar` setting is
+on, the folded buttons simply become reachable from the right-click menu instead.
 
-- **Right-click** a titlebar for the full context menu (it lists whatever's folded,
-  plus any content settings the current content publishes).
+- **Right-click** a titlebar for the context menu. It's only active when something
+  is folded (narrow titlebar or `compact_titlebar`), or when the current content
+  publishes menu settings, and lists whatever's folded plus those settings.
 - **Drag** a titlebar to move a floating pane.
 - **Drop** a pane on another pane's edge (the 20% margins) to insert a split there.
 - **Drag** a corner handle to resize.

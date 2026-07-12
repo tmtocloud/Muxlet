@@ -342,29 +342,29 @@ function MuxDialog:fitContent(contentH)
     local theme   = Mux.activeTheme() or {}
     local titleH  = (self.titlebarVisible ~= false) and (theme.titlebarHeight or 22) or 0
     local chrome  = titleH + 2 * 2 + 8           -- titlebar + border inset + footer pad
+    local footerH = self._footerH or 0           -- reserved by :pinFooter, 0 otherwise
     local maxH    = math.floor((sh or 1000) * (self._fitMaxPct or 0.82))
     local minH    = self._fitMinH or 140
-    local h       = math.max(minH, math.min(maxH, self._contentH + chrome))
-    local visH    = h - chrome                   -- visible content viewport
+    local h       = math.max(minH, math.min(maxH, self._contentH + chrome + footerH))
+    local visH    = h - chrome - footerH         -- scroll body's own viewport, footer excluded
 
     -- Body is as tall as the content, but at least the viewport, so short content
     -- fills the area and tall content scrolls (no empty scroll gap on shrink).
     if self._body then
         pcall(function() self._body:resize(self._bodyW or self._body:get_width(), math.max(self._contentH, visH)) end)
     end
+    -- Only a footer-bearing dialog needs the scrollbox pinned to an explicit pixel
+    -- height (visH, i.e. short of the footer strip) — every other mountForm dialog
+    -- keeps its original 100%-of-content ScrollBox, unaffected by this branch.
+    if footerH > 0 and self._scrollBox then
+        local curW = (self._scrollBox.get_width and self._scrollBox:get_width()) or (self._bodyW and (self._bodyW + 2))
+        pcall(function() self._scrollBox:resize(curW, visH) end)
+    end
     if math.abs((self.floatH or 0) - h) >= 2 then
-        -- Grow/shrink around the dialog's current vertical CENTER, not its top.
-        -- Clamping only the bottom edge (old behaviour) left a dialog whose
-        -- content ends up far taller than its initial height guess (e.g. the
-        -- welcome popup, mounted at the default 280px before its real ~800px
-        -- of copy is measured) glued to the bottom of the screen once resized,
-        -- instead of staying visually centered.
-        local oldH    = self.floatH or h
-        local oldY    = self.floatY or 0
-        local centerY = oldY + oldH / 2
         self.floatH = h
         if self.outer then self.outer:resize(self.floatW or self.outer:get_width(), h) end
-        self.floatY = Mux._clamp(math.floor(centerY - h / 2), 0, math.max(0, (sh or 0) - h))
+        local y = self.floatY or 0
+        if y + h > (sh or 0) then self.floatY = math.max(0, (sh or 0) - h) end
         if self.outer and self.outer.reposition then self.outer:reposition() end
         -- Resizing self.outer does not, by itself, push the new pixel size down
         -- through self.frame/self.content — Geyser only recomputes percentage-based
@@ -374,6 +374,14 @@ function MuxDialog:fitContent(contentH)
         -- fitContent leaves most of the new frame showing bare Qt background
         -- instead of the scroll body.
         if Mux._reflowContent then pcall(Mux._reflowContent, self) end
+    end
+    -- Re-pin the footer every call (not just the first): collapsing a section
+    -- shrinks contentH and re-enters here via onLayoutChange, and without this the
+    -- footer stayed at its original y while the frame shrank around it, trailing
+    -- off below the (now shorter) window.
+    if self._footerBox then
+        pcall(function() self._footerBox:resize(self._footerBox:get_width(), footerH) end)
+        pcall(function() self._footerBox:move(0, visH) end)
     end
 end
 
@@ -424,8 +432,73 @@ function MuxDialog:mountForm(specs, formOpts)
 
     local handle = Mux.ui.buildForm(body, specs, opts)
     self._muxRelayout = handle and handle.relayout
-    self:fitContent(Mux.ui.formHeight(specs, formOpts))
+    -- handle.totalHeight is buildForm's OWN post-layout measurement — it already
+    -- accounts for any section collapsed by default (spec._collapsed = true).
+    -- Mux.ui.formHeight is a blind sum of every row and would re-inflate the
+    -- dialog back to fully-expanded height even though the collapsed rows were
+    -- never shown, so it's only a fallback for a handle that came back empty.
+    self:fitContent((handle and handle.totalHeight) or Mux.ui.formHeight(specs, formOpts))
     return handle
+end
+
+-- Pin a small, non-scrolling row of controls (buttons, a segmented control) to
+-- the bottom of the dialog, below the :mountForm scroll body — call once, right
+-- after :mountForm. Buttons that live inside the scrollable form disappear when
+-- content overflows and the user has scrolled away from the bottom; a footer
+-- never scrolls, so actions stay reachable regardless of scroll position.
+--
+-- Grows the dialog by the footer's own height (Mux.ui.formHeight(specs, opts)),
+-- shrinks the scroll body to make room, and lays the footer specs out with a
+-- plain (non-scrolling) Mux.ui.buildForm call. Caller passes the SAME specs
+-- table to Mux.ui.formHeight up front (before creating the dialog) to size an
+-- accurate initial height and avoid a visible post-mount resize/reposition.
+function MuxDialog:pinFooter(specs, formOpts)
+    formOpts = formOpts or {}
+    if not (self._scrollBox and self._body) then return end
+
+    local footerH = Mux.ui.formHeight(specs, formOpts)
+    self._footerH = footerH
+
+    if self._footerBox then
+        pcall(function() if self._footerBox.delete then self._footerBox:delete() else self._footerBox:hide() end end)
+        self._footerBox = nil
+    end
+
+    -- Grow the outer frame by footerH (fitContent already sized it for the body
+    -- alone); self._contentH is left untouched so the scroll body keeps the size
+    -- driven by its own real content, not stretched to fill the footer's space.
+    self.floatH = (self.floatH or 0) + footerH
+    if self.outer then self.outer:resize(self.floatW or self.outer:get_width(), self.floatH) end
+    if self.outer and self.outer.reposition then self.outer:reposition() end
+    if Mux._reflowContent then pcall(Mux._reflowContent, self) end
+
+    local cw = self.content and self.content:get_width()  or (self._bodyW or 320)
+    local ch = self.content and self.content:get_height() or footerH
+    local scrollH = math.max(10, ch - footerH)
+    pcall(function() self._scrollBox:resize(cw, scrollH) end)
+
+    local theme = Mux.activeTheme() or {}
+    local bg    = (theme.ui and theme.ui.bg) or "rgb(18,18,26)"
+    local footer = Geyser.Label:new(
+        { name = self.id .. "_footer" .. (self._formGen or 0), x = 0, y = scrollH, width = cw, height = footerH },
+        self.content)
+    footer:setStyleSheet(string.format(
+        "background:%s; border-top:1px solid rgba(255,255,255,0.10);", bg))
+    self._footerBox = footer
+
+    local opts = {}
+    for k, v in pairs(formOpts) do opts[k] = v end
+    opts.width  = cw
+    opts.prefix = (formOpts.prefix or (self.id .. "_ft"))
+    local this = self
+    opts.getContentScreenPos = formOpts.getContentScreenPos or function()
+        local posTheme = Mux.activeTheme() or {}
+        local bi       = 2
+        local titleH   = (this.titlebarVisible ~= false) and (posTheme.titlebarHeight or 22) or 0
+        return (this.floatX or 0) + bi, (this.floatY or 0) + bi + titleH + scrollH
+    end
+
+    return Mux.ui.buildForm(footer, specs, opts)
 end
 
 function Mux.createDialog(opts)
