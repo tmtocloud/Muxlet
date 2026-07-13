@@ -84,9 +84,92 @@ upgrading in place) every time `onMuxletReady` fires — including the retry
 after it triggers an upgrade, since the freshly installed Muxlet raises its
 own `muxletReady`, which your handler receives again. `Mux.configureHost`
 (called from inside the callback, once the version is confirmed) bundles the
-startup choices that go along with owning your own onboarding — see its
-doc comment in `update.lua` for the full field list and what each defaults to
-if you omit it.
+startup choices that go along with owning your own onboarding — see its doc
+comment in `update.lua` for the full field list, or
+[below](#reusing-muxlets-update-system-for-your-own-package) for the
+update-specific fields (`updateRepo` and friends) in more depth.
+
+## Reusing Muxlet's update system for your own package
+
+Muxlet's own update checker — GitHub Releases polling, a changelog dialog with
+collapsible per-version sections, prerelease handling, download-and-reinstall —
+can check *your* package's repo instead of building your own. Opt in through
+the same `Mux.configureHost` call from the bootstrap block above:
+
+```lua
+Mux.configureHost({
+  -- ...suppressWelcome/autoStart/quietStart/etc. from the bootstrap example...
+
+  updateRepo            = "yourname/your-package",  -- REQUIRED to opt in
+  requiredMuxletVersion  = MUXLET_VERSION,            -- optional; same constant
+  requiredMuxletUrl      = MUXLET_URL,                -- you already computed above
+})
+```
+
+`updateRepo` is the only required field. Everything else defaults sensibly:
+
+| Field | Default | Purpose |
+|---|---|---|
+| `updateLabel` | last path segment of `updateRepo` | Display name in the dialog and settings |
+| `updatePackageName` | same as `updateLabel` | `getPackages()`/`installPackage` identity |
+| `updateInstall` | `nil` → plain install/uninstall on `updatePackageName` | Override for anything unusual (see Muxlet's own reinstall, which needs its persistent-dir wipe dance) |
+| `updateInstalledVersion` | `nil` → `getPackageInfo(updatePackageName).version` | Override if your version lives elsewhere |
+| `updateSettingsNamespace` | same as `updateLabel` | Namespace for the check-enabled/prereleases/check-now settings |
+| `updateSettingsTab` | `"<updateLabel>/Update"` | Where that namespace's settings tab lands |
+
+At most one host can be registered, and it always takes priority: once
+`updateRepo` is set, Muxlet stops polling its own repo entirely — there's no
+separate "Muxlet has an update" cadence to reconcile against yours.
+
+### The optional Muxlet bump
+
+Also pass `requiredMuxletVersion`/`requiredMuxletUrl` (the exact two values
+you already computed for the bootstrap block above) and the update dialog
+gains a second tab showing what that Muxlet version bump actually changes.
+Clicking **Update Now** then upgrades Muxlet first — reusing
+`Mux.ensureVersion`, the same primitive that powers your one-time boot gate —
+before installing your own update. One click; the user never has to
+separately go update Muxlet first. Omit both fields and the dialog only ever
+shows your package's own content: single tab, no bump logic at all.
+
+### Settings placement
+
+The check-enabled/include-prereleases toggles and the "Check for updates now"
+button are registered under `updateSettingsNamespace`, anchored to
+`updateSettingsTab`. If you already have your own settings namespace and tab,
+pass them explicitly so the new rows land alongside your existing settings
+instead of spawning new ones — this is exactly what fed2-tools does:
+
+```lua
+Mux.configureHost({
+  updateRepo              = "tmtocloud/fed2-tools",
+  requiredMuxletVersion    = F2T_REQUIRED_MUXLET,
+  requiredMuxletUrl        = MUXLET_URL,
+  updateSettingsNamespace  = "f2t",               -- reuse fed2-tools' own namespace
+  updateSettingsTab        = "Fed2-Tools/Update",  -- own top-level tab, dedicated Update sub-tab
+})
+```
+
+Muxlet's own "Muxlet/Update" tab (and its independent startup check) steps
+aside the moment a host registers — this *moves* the Update tab under your own
+top-level tab rather than adding a second, competing one.
+
+### Testing without cutting a release
+
+`Mux.showUpdateDialog(cand, changelog, opts)` builds the dialog directly from
+hand-constructed data, bypassing the network fetch entirely — useful for
+checking layout and wording before your first real release. `cand.target =
+"host"` renders it as your package's dialog rather than Muxlet's own:
+
+```lua
+Mux.showUpdateDialog(
+  { kind = "release", version = "1.1.0", tag = "v1.1.0", target = "host", assets = {} },
+  { { version = "1.1.0", kind = "release", body = "- New feature\n- A fix" } },
+  { automatic = true }   -- true previews the silent-startup footer (Remind Me
+                         -- Later/Never Check Automatically); false/omit
+                         -- previews the manual-check footer (Update Now only)
+)
+```
 
 ## Accessing the live graph
 
@@ -533,7 +616,9 @@ hand users the whole menu.
 - **Named themes** (`mux theme save`) → `user_themes.json`.
 - **Workspaces** → the workspaces file (auto-saved `current` plus any you name).
 - **Settings** → Mudlet's per-profile setting store, under namespaces (`mux.*` for
-  core behavior, `muxtheme.*` for the active theme, `muxupdate.*` for update checks).
+  core behavior, `muxtheme.*` for the active theme, `muxupdate.*` for Muxlet's own
+  update checks — or your own `updateSettingsNamespace` instead, if you've registered
+  as a host; see [Reusing Muxlet's update system](#reusing-muxlets-update-system-for-your-own-package)).
 
 Content persists via its own `serialize`/`restore`, embedded in the workspace snapshot.
 
