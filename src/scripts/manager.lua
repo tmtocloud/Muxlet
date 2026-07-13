@@ -417,7 +417,8 @@ function Mux.status()
     for _ in pairs(Mux._splits)   do sc = sc + 1 end
     for _ in pairs(Mux._paneSpaces) do ps = ps + 1 end
 
-    Mux._echo("\n<cyan>[Muxlet]<reset> v" .. Mux._version .. "\n")
+    local verLabel = Mux._versionLabel and Mux._versionLabel() or ("v" .. tostring(Mux._version))
+    Mux._echo("\n<cyan>[Muxlet]<reset> " .. verLabel .. "\n")
 
     if Mux._running then
         local wsDisplay = Mux._activeWorkspaceName or "unknown"

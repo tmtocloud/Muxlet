@@ -255,7 +255,8 @@ elseif sub == "reveal" then
 
 -- ── mux version ──────────────────────────────────────────────────────────────
 elseif sub == "version" then
-    Mux._echo(string.format("\n<cyan>[Muxlet]<reset> Version: <white>%s<reset>\n", Mux._version))
+    local verLabel = Mux._versionLabel and Mux._versionLabel() or tostring(Mux._version)
+    Mux._echo(string.format("\n<cyan>[Muxlet]<reset> Version: <white>%s<reset>\n", verLabel))
     Mux.checkForUpdates(false)
 
 -- ── mux reload ───────────────────────────────────────────────────────────────

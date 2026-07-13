@@ -219,7 +219,7 @@ end
 function Mux._versionIsNewer(v1, v2)
     if not v1 or not v2 then return false end
     local function parse(v)
-        local base = tostring(v):match("^(%d[%d%.]*)") or "0"
+        local base = tostring(v):gsub("^v", ""):match("^(%d[%d%.]*)") or "0"
         local major, minor, patch = base:match("^(%d+)%.?(%d*)%.?(%d*)")
         return tonumber(major) or 0, tonumber(minor) or 0, tonumber(patch) or 0
     end
@@ -230,23 +230,59 @@ function Mux._versionIsNewer(v1, v2)
     return pat1 > pat2
 end
 
--- Bare "major.minor.patch" of a version string (drops any "-sha" suffix).
+-- Bare "major.minor.patch" of a version string (drops any leading "v" and any
+-- "-sha" suffix — callers may pass a raw release tag like "v2.1.0").
 local function baseVersionOf(v)
-    return (tostring(v or "0")):match("^(%d[%d%.]*)") or "0"
+    return (tostring(v or "0"):gsub("^v", "")):match("^(%d[%d%.]*)") or "0"
+end
+
+-- True if a version string is a pre-release/dev build (anything past a bare
+-- semver — same test devmode uses). Mux._version itself never carries a "v"
+-- (Muxlet's own build injects a bare number for a production release, or
+-- "number-sha" for a pre-release — see Muxlet's build.yml) — a "-sha" suffix
+-- is the only signal that distinguishes a pre-release from a production
+-- build of the same number.
+local function isPreOf(v)
+    v = tostring(v or "")
+    if v == "" or v == "unknown" then return false end
+    return baseVersionOf(v) ~= v
+end
+
+-- True if the currently installed Muxlet already meets `requiredVersion` — the
+-- single source of truth Mux.ensureVersion/Mux.bootHost act on, and that a
+-- host's own boot sequence can call directly to decide scheduling (e.g.
+-- whether a mismatch needs deferring until after its game's login completes)
+-- without re-implementing version comparison itself.
+--
+-- Default (exact=false) is a floor: any installed version >= requiredVersion
+-- satisfies, ordinary "minimum version" dependency semantics. exact=true pins
+-- to that release instead — an installed version that is OLDER *or newer*
+-- both fail, for walking back a Muxlet release that broke a consumer.
+--
+-- A "v"-prefixed requiredVersion (e.g. "v2.1.0") means a host specifically
+-- pinned to Muxlet's *production* release of that number — a pre-release
+-- build carrying the same bare number (still tagged with its "-sha" suffix,
+-- e.g. "2.1.0-a3f91cd") must not silently satisfy it just because the
+-- numbers match; only a clean, no-suffix installed version does. A bare
+-- requiredVersion (no "v") accepts either.
+--
+-- "unknown" (can't determine what's installed) is always treated as satisfied
+-- rather than risking a reinstall loop.
+function Mux._versionSatisfied(requiredVersion, exact)
+    local installed = Mux._version
+    if installed == "unknown" then return true end
+    if exact then
+        if baseVersionOf(installed) ~= baseVersionOf(requiredVersion) then return false end
+        if tostring(requiredVersion):match("^v") and isPreOf(installed) then return false end
+        return true
+    end
+    return not Mux._versionIsNewer(requiredVersion, installed)
 end
 
 -- Short commit sha a version string was cut from ("2.1.0-a3f91cd" → "a3f91cd"),
 -- or nil for a bare production version.
 local function shaOf(v)
     return (tostring(v or "")):match("^%d[%d%.]*%-(%w+)$")
-end
-
--- True if a version string is a pre-release/dev build (anything past a bare
--- semver — same test devmode uses).
-local function isPreOf(v)
-    v = tostring(v or "")
-    if v == "" or v == "unknown" then return false end
-    return baseVersionOf(v) ~= v
 end
 
 local function installedBaseVersion() return baseVersionOf(Mux._version) end
@@ -289,6 +325,20 @@ local function installedLabelOf(v)
         return sha and (baseVersionOf(v) .. "-" .. sha) or baseVersionOf(v)
     end
     return "v" .. baseVersionOf(v)
+end
+
+-- Every place that shows "the version" to the user (Settings titlebar, `mux
+-- version`, `mux status`) reads through this so a registered host is never
+-- invisible even though it — not Muxlet — is what the user actually installed.
+-- Bare "vX.Y.Z" when no host is registered; "vX.Y.Z (hostLabel vA.B.C)" once
+-- one is (see Mux.configureHost).
+function Mux._versionLabel()
+    local label = installedLabelOf(Mux._version)
+    local host  = Mux._hostUpdate
+    if host then
+        label = string.format("%s  (%s %s)", label, host.label, installedLabelOf(hostInstalledVersion()))
+    end
+    return label
 end
 
 -- A GitHub release object → a normalized candidate table.
@@ -993,25 +1043,23 @@ end
 
 -- ── Downstream version pinning (unchanged public API) ─────────────────────────
 --
--- Mux.ensureVersion(requiredVersion, url, callback)
+-- Mux.ensureVersion(requiredVersion, url, callback, exact)
 --
 -- For packages built against a specific Muxlet version. Call it from your own
 -- package's `muxletReady` handler (see README "Bootstrapping from your own
--- package"). If the loaded Muxlet already satisfies requiredVersion, callback runs
--- immediately. Otherwise Muxlet reinstalls itself in place from `url` (a GitHub
--- release download URL) and does NOT call callback — the freshly installed Muxlet
--- raises its own muxletReady, which re-invokes your handler, which calls
--- Mux.ensureVersion again; this time the version check passes and callback runs.
+-- package"). If the loaded Muxlet already satisfies requiredVersion (per
+-- Mux._versionSatisfied — a floor by default, or an exact pin if exact=true),
+-- callback runs immediately. Otherwise Muxlet reinstalls itself in place from
+-- `url` (a GitHub release download URL, upgrading OR downgrading as needed) and
+-- does NOT call callback — the freshly installed Muxlet raises its own
+-- muxletReady, which re-invokes your handler, which calls Mux.ensureVersion
+-- again; this time the version check passes and callback runs.
 --
 -- This is also what powers the transparent Muxlet bump in the hosted update
 -- dialog's "Update Now" (see Mux.showUpdateDialog) — the one-time boot gate and
 -- the live "you also need a newer Muxlet" case are the same operation.
---
--- Mux._version of "unknown" is treated as satisfied rather than risking a
--- reinstall loop.
-function Mux.ensureVersion(requiredVersion, url, callback)
-    local installed = Mux._version
-    if installed == "unknown" or not Mux._versionIsNewer(requiredVersion, installed) then
+function Mux.ensureVersion(requiredVersion, url, callback, exact)
+    if Mux._versionSatisfied(requiredVersion, exact) then
         local ok, err = pcall(callback)
         if not ok then Mux._err("Mux.ensureVersion callback error: %s", tostring(err)) end
         return
@@ -1019,18 +1067,71 @@ function Mux.ensureVersion(requiredVersion, url, callback)
 
     if not url then
         Mux._err(
-            "Mux.ensureVersion: installed Muxlet %s does not satisfy required %s, and no url was given to upgrade.",
-            tostring(installed), requiredVersion)
+            "Mux.ensureVersion: installed Muxlet %s does not satisfy required %s, and no url was given to reinstall.",
+            tostring(Mux._version), requiredVersion)
         return
     end
 
+    local verb = Mux._versionIsNewer(requiredVersion, Mux._version) and "Upgrading" or "Downgrading"
     Mux._echo(string.format(
-        "\n<yellow>[Muxlet]<reset> Upgrading Muxlet %s -> %s...\n", tostring(installed), requiredVersion))
+        "\n<yellow>[Muxlet]<reset> %s Muxlet %s -> %s...\n", verb, tostring(Mux._version), requiredVersion))
 
     if table.contains(getPackages(), "Muxlet") then
         uninstallPackage("Muxlet")
     end
     installPackage(url)
+end
+
+-- Mux.bootHost(opts)
+--
+-- One call replacing the boot-sequence boilerplate a hosting package used to
+-- hand-roll around Mux.configureHost + Mux.ensureVersion (its own
+-- pre-check of Mux._versionIsNewer, its own dispatch on muxletReady). Call it
+-- every time your persistent `muxletReady` handler fires, and once more
+-- immediately if Mux._ready is already true when your init script runs.
+--
+-- Accepts every Mux.configureHost option (applied via that same function,
+-- including updateRepo/requiredMuxletVersion/requiredMuxletUrl — repeated below
+-- only where bootHost gives them extra meaning) plus:
+--
+--   opts.pinMuxletVersion (bool)     false (default): requiredMuxletVersion is a
+--                                    floor — any installed version at or above
+--                                    it satisfies. true: exact pin — an
+--                                    installed version that is OLDER *or newer*
+--                                    both trigger a reinstall to exactly
+--                                    requiredMuxletVersion (for walking back a
+--                                    release that broke you).
+--   opts.onReady (function)         Called once a satisfying Muxlet is
+--                                    confirmed loaded: synchronously, right
+--                                    now, if already satisfied; otherwise once
+--                                    the reinstall this triggers finishes, its
+--                                    fresh muxletReady re-invokes your handler,
+--                                    which calls Mux.bootHost again — pass the
+--                                    same opts from a *persistent* handler, not
+--                                    a one-shot one, or the second call never
+--                                    happens.
+--
+-- What this still can't do for you, because Muxlet's own code can't run before
+-- it exists, and a handler Muxlet registers on itself can't outlive its own
+-- uninstall:
+--   - Install Muxlet the very first time it's completely absent. Keep your own
+--     `if not table.contains(getPackages(), "Muxlet") then installPackage(url)
+--     end` fallback for that case.
+--   - Notice Muxlet disappearing mid-session (manual uninstall, a conflicting
+--     package, etc.). Register your own persistent sysUninstallPackage handler
+--     if you want to recover from that automatically.
+function Mux.bootHost(opts)
+    opts = opts or {}
+    Mux.configureHost(opts)
+
+    local onReady = opts.onReady or function() end
+    if not opts.requiredMuxletVersion then
+        local ok, err = pcall(onReady)
+        if not ok then Mux._err("Mux.bootHost onReady callback error: %s", tostring(err)) end
+        return
+    end
+
+    Mux.ensureVersion(opts.requiredMuxletVersion, opts.requiredMuxletUrl, onReady, opts.pinMuxletVersion)
 end
 
 -- Register the two toggles + "Check for updates now" button under a given

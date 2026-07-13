@@ -28,26 +28,46 @@ local MUXLET_VERSION = "2.1.0"
 local MUXLET_URL = "https://github.com/<owner>/Muxlet/releases/download/v2.1.0/Muxlet.mpackage"
 
 local function onMuxletReady()
-    Mux.ensureVersion(MUXLET_VERSION, MUXLET_URL, function()
-        -- Runs once a Muxlet satisfying MUXLET_VERSION is loaded and ready.
-        -- Every field below is optional — omit any you don't have an opinion
-        -- on yet (see Mux.configureHost for the full list and defaults).
-        Mux.configureHost({
-            suppressWelcome    = true,   -- you're showing your own onboarding, not Muxlet's
-            autoStart          = false,  -- your onboarding decides when Mux.fullStart() runs
-            quietStart         = true,   -- you're printing your own "started" message
-            checkForUpdates    = false,  -- you pin a Muxlet version; don't offer drift from it
-            includePrereleases = false,  -- only relevant if checkForUpdates is left true
-            defaultWorkspace   = "myPackageWorkspace",  -- must already be registered
-        })
+    Mux.bootHost({
+        requiredMuxletVersion = MUXLET_VERSION,
+        requiredMuxletUrl     = MUXLET_URL,
+        pinMuxletVersion      = true,  -- exact pin: also downgrades if you ever walk the
+                                       -- version back (e.g. a release broke you) — set
+                                       -- false instead for ordinary "at least this" floor
+                                       -- semantics if you don't need that.
 
-        -- The rest of your package's real startup goes here: register
-        -- content/workspaces, decide (from your own settings) whether to
-        -- call Mux.fullStart() now or wait for the user.
-    end)
+        -- Every field below is optional — omit any you don't have an opinion
+        -- on yet (see Mux.bootHost's doc comment in update.lua for the full list).
+        suppressWelcome    = true,   -- you're showing your own onboarding, not Muxlet's
+        autoStart          = false,  -- your onboarding decides when Mux.fullStart() runs
+        quietStart         = true,   -- you're printing your own "started" message
+        checkForUpdates    = false,  -- you pin a Muxlet version; don't offer drift from it
+        includePrereleases = false,  -- only relevant if checkForUpdates is left true
+        defaultWorkspace   = "myPackageWorkspace",  -- must already be registered
+
+        onReady = function()
+            -- Runs once a Muxlet satisfying MUXLET_VERSION is loaded and ready —
+            -- synchronously, right now, if already satisfied; otherwise once
+            -- Mux.bootHost's own reinstall finishes and its fresh muxletReady
+            -- re-invokes the handler above, which calls Mux.bootHost again.
+            --
+            -- The rest of your package's real startup goes here: register
+            -- content/workspaces, decide (from your own settings) whether to
+            -- call Mux.fullStart() now or wait for the user.
+        end,
+    })
 end
 
 registerAnonymousEventHandler("muxletReady", onMuxletReady)
+
+-- Recover if Muxlet ever disappears mid-session (manual uninstall, a
+-- conflicting package, a user poking around Package Manager, etc.) — a
+-- handler Muxlet registers on itself can't reliably outlive its own
+-- uninstall, so this has to live in your package, not Muxlet's.
+registerAnonymousEventHandler("sysUninstallPackage", function(_, name)
+    if name ~= "Muxlet" then return end
+    if MUXLET_URL then installPackage(MUXLET_URL) end
+end)
 
 if Mux and Mux._ready then
     onMuxletReady()                                  -- Muxlet already ready this session
@@ -75,17 +95,27 @@ because `Mux` isn't ready yet.
 
 The `MUXLET_URL` nil-check guards against a bad build (your package's build
 step failed to inject the URL) — without it, `installPackage(nil)` fails with
-a confusing native error instead of a clear one. `Mux.ensureVersion` has the
-same guard built in for the upgrade path, so it's only needed here for the
-"never installed" path, which runs before `Mux` exists.
+a confusing native error instead of a clear one. `Mux.bootHost` has the same
+guard built in for the upgrade/downgrade path, so it's only needed here for
+the "never installed" and "disappeared mid-session" paths, both of which run
+before `Mux` exists or without it (an uninstalled Muxlet leaves nothing to
+call into).
 
-`Mux.ensureVersion` handles keeping the *version* correct (installing or
-upgrading in place) every time `onMuxletReady` fires — including the retry
-after it triggers an upgrade, since the freshly installed Muxlet raises its
-own `muxletReady`, which your handler receives again. `Mux.configureHost`
-(called from inside the callback, once the version is confirmed) bundles the
-startup choices that go along with owning your own onboarding — see its doc
-comment in `update.lua` for the full field list, or
+Two things above genuinely can't move into Muxlet, no matter how much of the
+version logic does: installing Muxlet the very first time it's completely
+absent, and noticing it vanish mid-session. Both require code that runs
+independently of whether Muxlet's own Lua currently exists — which is exactly
+what your package's own top-level bootstrap and `sysUninstallPackage` handler
+are for. Keep both even though `Mux.bootHost` handles everything past that.
+
+`Mux.bootHost` handles keeping the *version* correct (installing, upgrading,
+or — with `pinMuxletVersion = true` — downgrading in place) every time
+`onMuxletReady` fires, including the retry after it triggers a reinstall,
+since the freshly (re)installed Muxlet raises its own `muxletReady`, which
+your handler receives again. It also applies every `Mux.configureHost` option
+(bundled startup choices for owning your own onboarding) once the version is
+confirmed, before calling `onReady` — see its doc comment in `update.lua` for
+the full field list, or
 [below](#reusing-muxlets-update-system-for-your-own-package) for the
 update-specific fields (`updateRepo` and friends) in more depth.
 
@@ -94,11 +124,12 @@ update-specific fields (`updateRepo` and friends) in more depth.
 Muxlet's own update checker — GitHub Releases polling, a changelog dialog with
 collapsible per-version sections, prerelease handling, download-and-reinstall —
 can check *your* package's repo instead of building your own. Opt in through
-the same `Mux.configureHost` call from the bootstrap block above:
+the same `Mux.bootHost` call from the bootstrap block above:
 
 ```lua
-Mux.configureHost({
-  -- ...suppressWelcome/autoStart/quietStart/etc. from the bootstrap example...
+Mux.bootHost({
+  -- ...suppressWelcome/autoStart/quietStart/pinMuxletVersion/onReady/etc. from
+  -- the bootstrap example...
 
   updateRepo            = "yourname/your-package",  -- REQUIRED to opt in
   requiredMuxletVersion  = MUXLET_VERSION,            -- optional; same constant
@@ -127,10 +158,14 @@ Also pass `requiredMuxletVersion`/`requiredMuxletUrl` (the exact two values
 you already computed for the bootstrap block above) and the update dialog
 gains a second tab showing what that Muxlet version bump actually changes.
 Clicking **Update Now** then upgrades Muxlet first — reusing
-`Mux.ensureVersion`, the same primitive that powers your one-time boot gate —
-before installing your own update. One click; the user never has to
-separately go update Muxlet first. Omit both fields and the dialog only ever
-shows your package's own content: single tab, no bump logic at all.
+`Mux.ensureVersion`, the same primitive `Mux.bootHost` calls for your one-time
+boot gate — before installing your own update. One click; the user never has
+to separately go update Muxlet first. Omit both fields and the dialog only
+ever shows your package's own content: single tab, no bump logic at all. This
+tab only ever offers an *upgrade* (it targets whatever `requiredMuxletVersion`
+names, same as the boot gate) — `pinMuxletVersion`'s downgrade behavior is
+enforced automatically by the boot gate itself on every `muxletReady`, not
+through this interactive dialog.
 
 ### Settings placement
 
@@ -141,12 +176,14 @@ pass them explicitly so the new rows land alongside your existing settings
 instead of spawning new ones — this is exactly what fed2-tools does:
 
 ```lua
-Mux.configureHost({
+Mux.bootHost({
   updateRepo              = "tmtocloud/fed2-tools",
   requiredMuxletVersion    = F2T_REQUIRED_MUXLET,
   requiredMuxletUrl        = MUXLET_URL,
+  pinMuxletVersion         = true,                 -- exact pin, not just a floor
   updateSettingsNamespace  = "f2t",               -- reuse fed2-tools' own namespace
   updateSettingsTab        = "Fed2-Tools/Update",  -- own top-level tab, dedicated Update sub-tab
+  onReady                  = f2tInit,
 })
 ```
 

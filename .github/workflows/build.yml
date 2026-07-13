@@ -188,18 +188,22 @@ jobs:
           echo "$SUMMARY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Delete pre-release for this version
+      - name: Delete all pre-releases
         if: steps.version.outputs.is_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          if gh release view "$VERSION" &>/dev/null; then
-            gh release delete "$VERSION" --yes --cleanup-tag
-            echo "Deleted pre-release $VERSION and its tag"
-          else
-            echo "No pre-release found for $VERSION, nothing to delete"
-          fi
+          # A production release supersedes every pre-release that came before it,
+          # not just one matching this exact version number — mfile can jump ahead
+          # mid-development (e.g. a 2.1.1 pre-release whose scope grew into 2.2.0),
+          # so only pruning an exact-version match left those orphaned forever.
+          # At most one pre-release should exist at a time; wipe them all here.
+          PRERELEASES=$(gh release list --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease) | .tagName')
+          for tag in $PRERELEASES; do
+            gh release delete "$tag" --yes --cleanup-tag
+            echo "Deleted pre-release $tag and its tag"
+          done
 
       - name: Create tagged release
         if: steps.version.outputs.is_release == 'true'
