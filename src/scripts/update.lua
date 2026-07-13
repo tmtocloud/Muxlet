@@ -145,10 +145,12 @@ end
 
 -- ── Reinstall primitive (shared by the updater and devmode) ───────────────────
 --
--- Delete every file Muxlet persists (the whole Muxlet_persistent directory) so the
+-- Delete every file Muxlet persists (everything inside Muxlet_persistent) so the
 -- next load behaves like a brand-new profile: default settings, no saved
 -- workspaces/themes/rules, welcome dialog shown again. Best-effort; missing dir is
--- fine. Kept flat (no recursion) because Muxlet only writes files there.
+-- fine. Kept flat (no recursion) because Muxlet only writes files there. The
+-- directory itself is left in place (settings.lua recreates it on load anyway) —
+-- only its contents need to go.
 function Mux._wipePersistentDir()
     local dir = Mux._persistentDir
     if not dir then return end
@@ -159,7 +161,6 @@ function Mux._wipePersistentDir()
                 os.remove(dir .. "/" .. entry)
             end
         end
-        if lfs.rmdir then lfs.rmdir(dir) end
     end)
 end
 
