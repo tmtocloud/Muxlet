@@ -64,6 +64,14 @@ local MUXLET_REPO = "tmtocloud/Muxlet"
 local function releasesUrl(repo)  return "https://api.github.com/repos/" .. repo .. "/releases?per_page=30" end
 local function releasesPage(repo) return "https://github.com/" .. repo .. "/releases" end
 
+-- Echoed right before resetProfile() runs after a successful install (see
+-- Mux._reinstallPackage's doc comment for why a reset is needed at all).
+-- resetProfile()'s own widget-teardown safety net is a fairly recent Mudlet
+-- fix — an informational nudge rather than a confirmation popup, since the
+-- alternative (leaving stale Lua state behind) is worse on any Mudlet version.
+local RESET_NOTICE = "<yellow>[Muxlet]<reset> Resetting Lua state to finish applying the update. "
+    .. "If anything looks off afterward, make sure Mudlet itself is up to date.\n"
+
 -- ── Host registration (optional) ──────────────────────────────────────────────
 --
 -- Set by Mux.configureHost when a hosting package opts in via opts.updateRepo.
@@ -161,10 +169,22 @@ end
 -- Uninstalling the very script that is executing frees it mid-run and crashes
 -- Mudlet — that is the long-standing "mux reload crashes" bug. From a runtime
 -- timer the triggering alias has already returned, so the teardown is safe.
---   opts.wipe  delete persisted state between uninstall and install (fresh profile)
+--   opts.wipe       delete persisted state between uninstall and install (fresh profile)
+--   opts.resetAfter call resetProfile() after a successful reinstall (the update flow
+--                   wants this; devmode's "mux reload" doesn't — a dev mid-session
+--                   probably has other state they don't want silently reset).
+--
+-- Why resetAfter is needed at all: installPackage/uninstallPackage only add/remove
+-- that package's own Trigger/Timer/Alias/Script/Key XML subtree (verified against
+-- Mudlet's own source) — they never clear registerAnonymousEventHandler's handler
+-- map, never touch plain Lua global tables, and never reset the Lua VM. Stale
+-- handlers/globals from the old code can legitimately survive a reinstall, which
+-- is exactly the "needs a full profile close/reopen to behave correctly" problem —
+-- resetProfile() is the one thing in Mudlet that actually clears all of that.
 function Mux._reinstallPackage(path, opts)
     opts = opts or {}
     local doWipe = opts.wipe and true or false
+    local resetAfter = opts.resetAfter and true or false
     local wipeFn = Mux._wipePersistentDir   -- capture before teardown
     tempTimer(0, function()
         if table.contains(getPackages(), "Muxlet") then
@@ -178,6 +198,10 @@ function Mux._reinstallPackage(path, opts)
         local ok, err = installPackage(path)
         if ok then
             cecho("\n<green>[Muxlet]<reset> Update installed. Run <cyan>mux version<reset> to confirm the new build.\n")
+            if resetAfter then
+                cecho(RESET_NOTICE)
+                pcall(resetProfile)
+            end
         else
             cecho(string.format(
                 "\n<red>[Muxlet]<reset> Reinstall failed (%s). Install manually from <cyan>%s<reset>\n",
@@ -463,17 +487,30 @@ local _APPROX_TEXT_W = 470   -- ≈ dialog content width minus row padding
 
 local function estimateRichHeight(html, width)
     width = width or _APPROX_TEXT_W
-    local charsPerLine = math.max(24, math.floor(width / 6.4))
+    -- 5.4 px/char (was 6.4): real proportional-font wrapping packs noticeably
+    -- more characters per line than a flat average-width guess, and this repo's
+    -- commit-message-derived bullets run long (100-250+ chars is common) — at
+    -- the old ratio, the per-line wrap-count overestimate compounded across a
+    -- dense changelog body into a large, very visible blank gap before the
+    -- footer (nothing to do with the earlier trailing-blank-line fix below).
+    local charsPerLine = math.max(24, math.floor(width / 5.4))
     local lines = 0
     for seg in (html .. "<br>"):gmatch("(.-)<br>") do
         local plain = seg:gsub("<[^>]->", "")
         plain = plain:gsub("&nbsp;", " "):gsub("&amp;", "&"):gsub("&lt;", "<"):gsub("&gt;", ">")
-        lines = lines + math.max(1, math.ceil(math.max(1, #plain) / charsPerLine))
+        if plain:match("^%s*$") then
+            -- Blank-line separators render at mdToHtml's dedicated 6px font-size,
+            -- not a full text line — counting them as a full line here is exactly
+            -- the same class of overestimate as the wrap-count one above.
+            lines = lines + 0.4
+        else
+            lines = lines + math.max(1, math.ceil(#plain / charsPerLine))
+        end
     end
     -- +17 (one line) of trailing breathing room below the last line of text,
     -- not the 5+ lines that came from un-trimmed trailing blank lines in the
     -- source body, and not zero either.
-    return math.max(22, lines * 17 + 17)
+    return math.max(22, math.ceil(lines * 17) + 17)
 end
 
 local function ensureRichWidget()
@@ -565,18 +602,23 @@ local function installFromRelease(cand)
         if isHost then
             if host.install then
                 pcall(host.install, pkg)
+                Mux._echo(RESET_NOTICE)
+                pcall(resetProfile)
             else
                 local pkgName = host.packageName
                 if pkgName and table.contains(getPackages(), pkgName) then pcall(uninstallPackage, pkgName) end
                 local ok, err = installPackage(pkg)
-                if not ok then
+                if ok then
+                    Mux._echo(RESET_NOTICE)
+                    pcall(resetProfile)
+                else
                     Mux._echo(string.format(
                         "\n<red>[Muxlet]<reset> Install failed (%s). Install manually from <cyan>%s<reset>\n",
                         tostring(err or "unknown error"), pkg))
                 end
             end
         else
-            Mux._reinstallPackage(pkg)
+            Mux._reinstallPackage(pkg, { resetAfter = true })
         end
     end)
 
