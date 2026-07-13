@@ -993,9 +993,14 @@ end
 -- Register the two toggles + "Check for updates now" button under a given
 -- settings namespace — the same trio Muxlet's own "muxupdate" namespace has
 -- (those live in settings.lua/below; this is only for a registered host's own
--- namespace, which Muxlet has no way to know ahead of time).
-local function registerHostSettingsRows(ns)
+-- namespace, which Muxlet has no way to know ahead of time). `tab`, if given,
+-- anchors the namespace to an existing settings tab (first-registered-key-wins,
+-- same rule Mux.settings.register always uses) — pass it when the host already
+-- has its own settings living somewhere and wants this row to land there too,
+-- instead of spawning a new tab named after the namespace.
+local function registerHostSettingsRows(ns, tab)
     Mux.settings.register(ns, "update_check_enabled", {
+        tab         = tab,
         label       = "Check for updates on startup",
         description = "When Mudlet opens, quietly check this repo's releases and offer any newer build.",
         default     = false,
@@ -1062,8 +1067,22 @@ end
 --   opts.updateSettingsNamespace (string)   Namespace for the check-enabled/
 --                                  prereleases/check-now rows. Default: same
 --                                  as updateLabel. Pass an existing namespace
---                                  (e.g. "f2t") to land them on an existing tab
---                                  instead of a new one.
+--                                  (e.g. "f2t") so they render alongside that
+--                                  namespace's other settings.
+--   opts.updateSettingsTab       (string)   Anchors updateSettingsNamespace to
+--                                  a tab (only matters/takes effect if that
+--                                  namespace has no other registered settings
+--                                  already anchoring one — e.g. pass an
+--                                  existing top-level tab like "Fed2-Tools" to
+--                                  land Update as a sub-tab there). Default:
+--                                  "<updateLabel>/Update", mirroring Muxlet's
+--                                  own "Muxlet/Update" shape — a package with
+--                                  no other settings still gets a properly
+--                                  nested tab instead of a flat one. Muxlet's
+--                                  own "Muxlet/Update" tab steps aside once a
+--                                  host is registered (see tabHierarchy() in
+--                                  settings.lua) — this moves it, doesn't
+--                                  duplicate it.
 function Mux.configureHost(opts)
     opts = opts or {}
     if opts.suppressWelcome ~= nil then
@@ -1088,6 +1107,12 @@ function Mux.configureHost(opts)
     if opts.updateRepo then
         local label = opts.updateLabel or opts.updateRepo:match("/(.+)$") or opts.updateRepo
         local ns    = opts.updateSettingsNamespace or label
+        -- Mirrors Muxlet's own "Muxlet/Update" shape by default: a dedicated
+        -- "Update" sub-tab nested under the host's own parent tab, even if the
+        -- host has no other settings registered anywhere yet. Muxlet's own
+        -- Update tab steps aside (see tabHierarchy() in settings.lua) once
+        -- Mux._hostUpdate is set below, so this is a move, not a duplicate.
+        local tab = opts.updateSettingsTab or (label .. "/Update")
         Mux._hostUpdate = {
             repo                  = opts.updateRepo,
             label                 = label,
@@ -1098,7 +1123,7 @@ function Mux.configureHost(opts)
             requiredMuxletVersion = opts.requiredMuxletVersion,
             requiredMuxletUrl     = opts.requiredMuxletUrl,
         }
-        registerHostSettingsRows(ns)
+        registerHostSettingsRows(ns, tab)
     end
 end
 

@@ -571,23 +571,29 @@ local function tabHierarchy()
 
     -- Descend the slash-path, creating intermediate nodes, attaching ns at the leaf.
     for ns in pairs(Mux.settings._registry) do
-        local path = Mux.settings._tabPaths[ns] or ns
-        local node = root
-        for part in path:gmatch("[^/]+") do
-            node._map[part] = node._map[part] or { label = part, children = {}, _map = {} }
-            local child = node._map[part]
-            -- track insertion into the parent's children list once
-            if not child._linked then
-                child._linked = true
-                node.children[#node.children + 1] = child
+        -- Muxlet's own "Muxlet/Update" tab steps aside once a host has
+        -- registered its own update settings elsewhere (Mux.configureHost's
+        -- updateSettingsNamespace/updateSettingsTab, see update.lua) — the tab
+        -- moves to the host's own parent tab rather than appearing twice.
+        if ns ~= "muxupdate" or not Mux._hostUpdate then
+            local path = Mux.settings._tabPaths[ns] or ns
+            local node = root
+            for part in path:gmatch("[^/]+") do
+                node._map[part] = node._map[part] or { label = part, children = {}, _map = {} }
+                local child = node._map[part]
+                -- track insertion into the parent's children list once
+                if not child._linked then
+                    child._linked = true
+                    node.children[#node.children + 1] = child
+                end
+                node = child
             end
-            node = child
+            -- Accumulate all namespaces sharing this path into nsList.
+            -- ns order values control section sequence within the form, not the
+            -- tab's position in its parent bar — do not propagate to node.order.
+            node.nsList = node.nsList or {}
+            table.insert(node.nsList, ns)
         end
-        -- Accumulate all namespaces sharing this path into nsList.
-        -- ns order values control section sequence within the form, not the
-        -- tab's position in its parent bar — do not propagate to node.order.
-        node.nsList = node.nsList or {}
-        table.insert(node.nsList, ns)
     end
 
     -- Convert single-namespace leaves to ns for backward compatibility.
