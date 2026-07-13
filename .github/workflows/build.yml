@@ -145,22 +145,21 @@ jobs:
         id: release_notes
         env:
           INPUT_RELEASE_NOTES: ${{ inputs.release_notes }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # "delta" = just this run's new note; "summary" = what the release body
+          # becomes (delta prepended onto whatever notes the release already has,
+          # so re-tagging v2.1.0 to add a fix never loses earlier notes).
           if [[ "${{ steps.version.outputs.is_dispatch_release }}" == "true" && -n "$INPUT_RELEASE_NOTES" ]]; then
-            echo "summary<<EOF" >> $GITHUB_OUTPUT
-            printf '%s\n' "$INPUT_RELEASE_NOTES" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            DELTA="$INPUT_RELEASE_NOTES"
           elif [[ "${{ steps.version.outputs.is_dispatch_release }}" == "true" ]]; then
             # Auto-generate from git log since the last production tag
             PREV_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
             if [[ -n "$PREV_TAG" ]]; then
-              SUMMARY=$(git log "${PREV_TAG}..HEAD" --pretty=format:'- %s' | head -30)
+              DELTA=$(git log "${PREV_TAG}..HEAD" --pretty=format:'- %s' | head -30)
             else
-              SUMMARY=$(git log --pretty=format:'- %s' -30)
+              DELTA=$(git log --pretty=format:'- %s' -30)
             fi
-            echo "summary<<EOF" >> $GITHUB_OUTPUT
-            echo "$SUMMARY" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
           else
             # Tag push: read the annotated tag message
             TAG="${GITHUB_REF_NAME}"
@@ -168,15 +167,26 @@ jobs:
             git fetch --no-tags origin "+refs/tags/$TAG:refs/tags/$TAG"
             if git cat-file -t "$TAG" 2>/dev/null | grep -q '^tag$'; then
               echo "✓ Annotated tag detected"
-              SUMMARY=$(git tag -l --format='%(contents)' "$TAG")
+              DELTA=$(git tag -l --format='%(contents)' "$TAG")
             else
               echo "⚠ Not seeing annotated tag object, falling back"
-              SUMMARY=$(git log -1 --pretty=%B "$TAG^{commit}")
+              DELTA=$(git log -1 --pretty=%B "$TAG^{commit}")
             fi
-            echo "summary<<EOF" >> $GITHUB_OUTPUT
-            echo "$SUMMARY" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
           fi
+
+          PREV_BODY=$(gh release view "${{ steps.version.outputs.release_name }}" --json body --jq .body 2>/dev/null || true)
+          if [[ -n "$PREV_BODY" ]]; then
+            SUMMARY="${DELTA}"$'\n\n---\n\n'"${PREV_BODY}"
+          else
+            SUMMARY="$DELTA"
+          fi
+
+          echo "delta<<EOF" >> $GITHUB_OUTPUT
+          echo "$DELTA" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "summary<<EOF" >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Delete pre-release for this version
         if: steps.version.outputs.is_release == 'true'
@@ -209,6 +219,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.MUDLET_REPO_PAT }}
           RELEASE_SUMMARY: ${{ steps.release_notes.outputs.summary }}
+          RELEASE_DELTA: ${{ steps.release_notes.outputs.delta }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           OWNER="$GITHUB_REPOSITORY_OWNER"
@@ -224,30 +235,56 @@ jobs:
 
           cd mudlet-repo
 
-          # Sync fork main with upstream before branching
-          git remote add upstream https://github.com/Mudlet/mudlet-package-repository.git
-          git fetch upstream main
-          git checkout main
-          git reset --hard upstream/main
-          git push origin main --force
-
-          # Create a versioned branch so each release gets its own PR
-          git checkout -b "$BRANCH"
-
-          # Copy package using the canonical name (no version suffix in filename)
-          cp "$GITHUB_WORKSPACE/build/Muxlet.mpackage" "packages/Muxlet.mpackage"
-
-          git add "packages/Muxlet.mpackage"
-          git commit -m "Update Muxlet to v${VERSION}"
-          git push origin "$BRANCH"
-
-          # Open a PR against the upstream Mudlet repo (skip if one already exists)
-          EXISTING=$(gh pr list \
+          # Re-pushing the same version tag (e.g. to address MPR review feedback) means
+          # the branch/PR from a prior run of this version may already be open. Detect
+          # that first: an open PR gets a fixup commit on its existing branch instead of
+          # main being reset and a fresh branch/PR being created underneath it, which
+          # would orphan the open PR's history and make the branch push non-fast-forward.
+          # --head takes a bare branch name here, not "owner:branch" (that form silently
+          # matches nothing).
+          EXISTING_PR=$(gh pr list \
             --repo Mudlet/mudlet-package-repository \
-            --head "${OWNER}:${BRANCH}" \
-            --json number --jq 'length')
+            --head "$BRANCH" --state open \
+            --json number --jq '.[0].number // empty')
 
-          if [ "$EXISTING" -eq 0 ]; then
+          if [ -n "$EXISTING_PR" ]; then
+            echo "Open PR #$EXISTING_PR already tracks $BRANCH — pushing a fixup commit."
+            git fetch origin "$BRANCH"
+            git checkout -B "$BRANCH" "origin/$BRANCH"
+
+            cp "$GITHUB_WORKSPACE/build/Muxlet.mpackage" "packages/Muxlet.mpackage"
+            git add "packages/Muxlet.mpackage"
+
+            if git diff --cached --quiet; then
+              echo "Package unchanged; nothing to push."
+            else
+              git commit -m "Update Muxlet package (v${VERSION})"
+              git push origin "$BRANCH"
+              {
+                printf 'Pushed an updated build (re-run of the v%s release workflow).\n\n' "$VERSION"
+                printf '%s\n' "$RELEASE_DELTA"
+              } > /tmp/pr_comment.md
+              gh pr comment "$EXISTING_PR" --repo Mudlet/mudlet-package-repository \
+                --body-file /tmp/pr_comment.md
+            fi
+          else
+            # Sync fork main with upstream before branching
+            git remote add upstream https://github.com/Mudlet/mudlet-package-repository.git
+            git fetch upstream main
+            git checkout main
+            git reset --hard upstream/main
+            git push origin main --force
+
+            # Create a versioned branch so each release gets its own PR
+            git checkout -b "$BRANCH"
+
+            # Copy package using the canonical name (no version suffix in filename)
+            cp "$GITHUB_WORKSPACE/build/Muxlet.mpackage" "packages/Muxlet.mpackage"
+
+            git add "packages/Muxlet.mpackage"
+            git commit -m "Update Muxlet to v${VERSION}"
+            git push origin "$BRANCH"
+
             {
               printf '## Muxlet v%s\n\n' "$VERSION"
               printf 'Release Notes:\n%s\n\n' "$RELEASE_SUMMARY"

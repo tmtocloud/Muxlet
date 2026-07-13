@@ -1331,6 +1331,7 @@ end
 
 local function luaKey(key)
     if isIdentifier(key) then return key end
+    if type(key) == "number" then return "[" .. tostring(key) .. "]" end
     return string.format("[%q]", key)
 end
 

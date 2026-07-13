@@ -597,7 +597,8 @@ function Mux.exportWorkspace(name)
     lines[#lines + 1] = "Mux.registerWorkspace(" .. string.format("%q", name) .. ", " .. Mux._serializeLua(def, 0) .. ")"
     lines[#lines + 1] = ""
 
-    local outPath = Mux._writeExportFile(name .. "-workspace-export.lua", table.concat(lines, "\n"))
+    local safe = name:gsub("[^%w_%-]", "_")
+    local outPath = Mux._writeExportFile(safe .. "-workspace-export.lua", table.concat(lines, "\n"))
     if outPath then
         Mux._echo(string.format(
             "\n<green>[Muxlet]<reset> Exported workspace '<cyan>%s<reset>' to:\n  <white>%s<reset>\n",
