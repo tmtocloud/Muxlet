@@ -249,8 +249,10 @@ jobs:
 
           if [ -n "$EXISTING_PR" ]; then
             echo "Open PR #$EXISTING_PR already tracks $BRANCH — pushing a fixup commit."
+            # The clone is shallow/single-branch (implied by --depth=1), so it never
+            # populates refs/remotes/origin/$BRANCH — only FETCH_HEAD is usable here.
             git fetch origin "$BRANCH"
-            git checkout -B "$BRANCH" "origin/$BRANCH"
+            git checkout -B "$BRANCH" FETCH_HEAD
 
             cp "$GITHUB_WORKSPACE/build/Muxlet.mpackage" "packages/Muxlet.mpackage"
             git add "packages/Muxlet.mpackage"
