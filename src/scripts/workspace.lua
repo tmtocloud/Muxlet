@@ -715,72 +715,83 @@ function Mux.deleteWorkspace(name)
     Mux._echo(string.format("\n<green>[Muxlet]<reset> Workspace '<cyan>%s<reset>' deleted.\n", name))
 end
 
--- Tab restoration shared between embedded and floating panes.
--- Deferred 0.1 s so pane geometry resolves before tab widgets are built.
-local function restoreTabsOnPane(p, node)
+-- Tab restoration shared between embedded and floating panes. The recursive
+-- (nested sub-tab) case runs synchronously within its parent's own pass rather
+-- than deferring another 0.1s: deferring per nesting level let a parent's
+-- activateTab (hiding its non-active top-level tabs, e.g. a "Company" tab
+-- hosting Overview/Financials sub-tabs while Price Checker is the active
+-- sibling) fire BEFORE the nested sub-tabs finished building and settling
+-- their own hidden state, leaving them stuck genuinely shown until the user
+-- manually switched tabs (which re-runs the hide cascade correctly).
+local function restoreTabsBody(p, node)
     local savedTabs     = node.tabs
     local activeTabName = node.activeTabName
-    tempTimer(0.1, function()
-        p:enableTabs({ noDefaultTab = true })
-        for _, tabDef in ipairs(savedTabs) do
-            local tab = p:addTab(tabDef.name)
-            if tab then
-                -- Restore condition-hidden state (MuxTab:_conditionHide, tabs.lua). If the
-                -- tab also carries rules (restored below), evaluating them immediately
-                -- re-derives this from current live conditions and may override it — this
-                -- is just the correct starting point for a tab hidden with no rule driving it.
-                if tabDef.visible == false and tab._conditionHide then
-                    tab:_conditionHide()
+    p:enableTabs({ noDefaultTab = true })
+    for _, tabDef in ipairs(savedTabs) do
+        local tab = p:addTab(tabDef.name)
+        if tab then
+            -- Restore condition-hidden state (MuxTab:_conditionHide, tabs.lua). If the
+            -- tab also carries rules (restored below), evaluating them immediately
+            -- re-derives this from current live conditions and may override it — this
+            -- is just the correct starting point for a tab hidden with no rule driving it.
+            if tabDef.visible == false and tab._conditionHide then
+                tab:_conditionHide()
+            end
+            -- Individual capability flags; backward-compat: old saves only have `locked`.
+            -- If the new flags are present use them; otherwise derive from old locked field.
+            if tabDef.renamable ~= nil or tabDef.closeable ~= nil or tabDef.movable ~= nil then
+                tab.renamable   = tabDef.renamable   ~= false
+                tab.closeable   = tabDef.closeable   ~= false
+                tab.movable     = tabDef.movable     ~= false
+                if tabDef.contentable ~= nil then
+                    tab.contentable = tabDef.contentable ~= false
                 end
-                -- Individual capability flags; backward-compat: old saves only have `locked`.
-                -- If the new flags are present use them; otherwise derive from old locked field.
-                if tabDef.renamable ~= nil or tabDef.closeable ~= nil or tabDef.movable ~= nil then
-                    tab.renamable   = tabDef.renamable   ~= false
-                    tab.closeable   = tabDef.closeable   ~= false
-                    tab.movable     = tabDef.movable     ~= false
-                    if tabDef.contentable ~= nil then
-                        tab.contentable = tabDef.contentable ~= false
-                    end
-                elseif tabDef.locked then
-                    tab.renamable   = false
-                    tab.closeable   = false
-                    tab.movable     = false
-                    tab.contentable = false
-                end
-                if tabDef.tabsLocked                then tab.tabsLocked       = true  end
-                if tabDef.propertiesButton == false then tab.propertiesButton = false end
-                if tabDef.nameAlign                 then tab.nameAlign        = tabDef.nameAlign end
-                if tabDef.tokens then
-                    tab._tokens = {}
-                    for k, v in pairs(tabDef.tokens) do tab._tokens[k] = v end
-                    if tab.applyTheme then pcall(function() tab:applyTheme() end) end
-                end
-                local savedContent = tabDef.activeContent or tabDef._activeContent
-                if savedContent and Mux._content and Mux._content[savedContent] then
-                    if Mux._applyContent then
-                        pcall(Mux._applyContent, tab, savedContent, true)
-                        if Mux._restoreContent then Mux._restoreContent(tab, tabDef.contentState) end
-                    end
-                end
-                -- Restore persisted (non-preset) rules; migrate legacy connection
-                -- awareness into the overlay-rule pair.
-                if (tabDef.rules or tabDef.connectionAware) and Mux._migrateLegacyRules then
-                    Mux._migrateLegacyRules(tab, { rules = tabDef.rules, connectionAware = tabDef.connectionAware })
-                end
-                if tabDef.tabs and #tabDef.tabs > 0 then
-                    restoreTabsOnPane(tab, tabDef)
+            elseif tabDef.locked then
+                tab.renamable   = false
+                tab.closeable   = false
+                tab.movable     = false
+                tab.contentable = false
+            end
+            if tabDef.tabsLocked                then tab.tabsLocked       = true  end
+            if tabDef.propertiesButton == false then tab.propertiesButton = false end
+            if tabDef.nameAlign                 then tab.nameAlign        = tabDef.nameAlign end
+            if tabDef.tokens then
+                tab._tokens = {}
+                for k, v in pairs(tabDef.tokens) do tab._tokens[k] = v end
+                if tab.applyTheme then pcall(function() tab:applyTheme() end) end
+            end
+            local savedContent = tabDef.activeContent or tabDef._activeContent
+            if savedContent and Mux._content and Mux._content[savedContent] then
+                if Mux._applyContent then
+                    pcall(Mux._applyContent, tab, savedContent, true)
+                    if Mux._restoreContent then Mux._restoreContent(tab, tabDef.contentState) end
                 end
             end
-        end
-        if activeTabName then
-            for _, tab in ipairs(p._tabs or {}) do
-                if tab.name == activeTabName then
-                    p:activateTab(tab.id)
-                    break
-                end
+            -- Restore persisted (non-preset) rules; migrate legacy connection
+            -- awareness into the overlay-rule pair.
+            if (tabDef.rules or tabDef.connectionAware) and Mux._migrateLegacyRules then
+                Mux._migrateLegacyRules(tab, { rules = tabDef.rules, connectionAware = tabDef.connectionAware })
+            end
+            if tabDef.tabs and #tabDef.tabs > 0 then
+                restoreTabsBody(tab, tabDef)
             end
         end
-    end)
+    end
+    if activeTabName then
+        for _, tab in ipairs(p._tabs or {}) do
+            if tab.name == activeTabName then
+                p:activateTab(tab.id)
+                break
+            end
+        end
+    end
+end
+
+-- Deferred 0.1 s so pane geometry resolves before tab widgets are built.
+-- Only the top-level (pane) entry point defers; nested sub-tab hosts recurse
+-- synchronously via restoreTabsBody (see comment above).
+local function restoreTabsOnPane(p, node)
+    tempTimer(0.1, function() restoreTabsBody(p, node) end)
 end
 
 buildNode = function(node, parentContainer, paneMap, paneSpace)
