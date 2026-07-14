@@ -197,6 +197,10 @@ function Mux.applyWorkspace(name)
                                 tostring(rc and rc.path), tostring(v)))
                         end
                         Mux._evaluateRules(p, true)
+                        Mux._echo(string.format(
+                            "\n<yellow>[mux diag] after evaluateRules: _conditionHidden=%s outer.hidden=%s content.auto_hidden=%s\n",
+                            tostring(p._conditionHidden), tostring(p.outer and p.outer.hidden),
+                            tostring(p.content and p.content.auto_hidden)))
                     end
                     -- Apply restored content HERE: floating panes are rebuilt after
                     -- the embedded content-apply pass below has already run, so their
@@ -209,6 +213,12 @@ function Mux.applyWorkspace(name)
                             Mux._warn("applyWorkspace: content '%s' not registered for floating pane '%s'",
                                 p._pendingContent, p.id)
                         end
+                        Mux._echo(string.format(
+                            "\n<yellow>[mux diag] after applyContent: _conditionHidden=%s outer.hidden=%s content.auto_hidden=%s slot.hidden=%s slot.auto_hidden=%s\n",
+                            tostring(p._conditionHidden), tostring(p.outer and p.outer.hidden),
+                            tostring(p.content and p.content.auto_hidden),
+                            tostring(p._contentSlot and p._contentSlot.hidden),
+                            tostring(p._contentSlot and p._contentSlot.auto_hidden)))
                         p._pendingContent = nil
                         p._pendingContentState = nil
                     end
