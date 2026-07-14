@@ -2066,10 +2066,18 @@ function Mux._recomputeAllLocks()
 end
 
 function MuxPane:show()
+    if self.id == "pane_6" and Mux._echo then
+        Mux._echo(string.format("\n<yellow>[mux diag] MuxPane:show() called on %s\n%s\n",
+            self.id, debug and debug.traceback and debug.traceback("", 2) or "(no traceback)"))
+    end
     self.outer:show()
 end
 
 function MuxPane:hide()
+    if self.id == "pane_6" and Mux._echo then
+        Mux._echo(string.format("\n<yellow>[mux diag] MuxPane:hide() called on %s\n%s\n",
+            self.id, debug and debug.traceback and debug.traceback("", 2) or "(no traceback)"))
+    end
     self.outer:hide()
 end
 

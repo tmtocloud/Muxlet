@@ -111,6 +111,15 @@ function MuxTab:init(opts)
         local th = Mux.activeTheme()
         host:_echoTabLabel(label, tabObj.name, host._activeTabId == tabObj.id, false, th, tabObj.nameAlign, false, tabObj)
     end)
+    -- host.content may itself sit inside a hidden ancestor (e.g. host is a
+    -- sub-tab-hosting tab that isn't the currently active top-level tab).
+    -- Geyser's plain :add always shows a freshly created widget regardless of
+    -- its parent's hidden state (see Mux.reassertHidden), so a label built here
+    -- would otherwise leak visible AND CLICKABLE over whatever tab actually is
+    -- showing -- unlike content.lua's slot/tab-content builds, nothing else
+    -- catches this for the tab label specifically.
+    Mux.reassertHidden(label, host.content)
+
     self.label     = label
     self.content   = content
     self.contentBg = contentBg
