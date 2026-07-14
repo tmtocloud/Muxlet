@@ -303,6 +303,24 @@ function Mux._applyContent(target, contentName, force)
     -- by the tab/pane show-hide code, never by this function), so re-hide the
     -- slot to match. See Mux.reassertHidden for why this is needed.
     Mux.reassertHidden(slot, realContent)
+    -- DIAGNOSTIC (temp): the reassert above marks the slot/children hidden at the
+    -- Geyser bookkeeping level, but they can apparently still be visible on screen
+    -- for a hidden pane on session start. Re-assert one tick later, after Qt/Geyser
+    -- has settled, to see whether a deferred native hide fixes what an immediate
+    -- one doesn't.
+    if target._conditionHidden then
+        tempTimer(0, function()
+            if target._conditionHidden and target.outer then
+                if Mux._echo then
+                    Mux._echo(string.format(
+                        "\n<yellow>[mux diag] deferred re-hide %s: outer.hidden=%s (before)\n",
+                        tostring(target.id), tostring(target.outer.hidden)))
+                end
+                target.outer:hide()
+                if slot then Mux.reassertHidden(slot, realContent) end
+            end
+        end)
+    end
 
     -- Auto-fit: if apply set _autoFitHeight and the pane is floating (and the
     -- pane's Auto-Fit to Content permission is on), resize to fit content.
