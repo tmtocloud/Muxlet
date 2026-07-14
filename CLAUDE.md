@@ -333,7 +333,7 @@ src/scripts/welcome.lua            — first-run welcome dialog (registered inte
 src/scripts/workspace.lua          — registerWorkspace mechanics, applyWorkspace, saveWorkspace, auto-save, exportWorkspace (dependency-aware — bundles referenced conditions/actions), exportAll; the built-in "default" workspace lives in library/workspaces/
 src/scripts/properties.lua         — Mux.showPaneProperties, Mux.showTabProperties, mux_properties content
 src/scripts/conditional.lua        — rule engine (Mux._conditionValue, rule evaluation), condition/action-op registries (registerCondition, registerActionOp), declarative condition/action store (createDeclarativeCondition/Action, rules.json), exportCondition/exportAction (+ "all" variants). Built-in conditions live in library/conditions/.
-src/scripts/devmode.lua            — local-build auto-reload and `mux reload` helpers
+src/scripts/devmode.lua            — local-build auto-reload (stamp watcher; no manual reload command)
 src/scripts/library/                — everything registered through the mechanics above, one file per item (mirrors the registries: content types register via Mux.registerContent, themes via Mux.registerTheme, actions/steps via Mux.registerAction/registerActionOp, conditions via Mux.registerCondition, workspaces via Mux.registerWorkspace). Loads last (see scripts.json) since registration never depends on other registered items, only on its own engine having loaded.
   library/content/                 — gmcp.lua, buttons.lua, capture.lua
   library/themes/                  — dark.lua, light.lua

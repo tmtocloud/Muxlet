@@ -90,7 +90,6 @@ local _HELP_GROUPS = {
     { group = "Diagnostics", cmds = {
         { "mux debug [on|off]",         "toggle debug output" },
         { "mux version",                "show version and check for updates" },
-        { "mux reload [wipe]",          "reinstall from local build (dev)" },
     } },
 }
 

@@ -166,14 +166,19 @@ end
 
 -- Reinstall Muxlet from a local .mpackage. CRITICAL: this is deferred to a
 -- runtime tempTimer(0) so the uninstall does NOT run while a package-owned
--- alias/script (e.g. the "mux" alias that called us) is still on the Lua stack.
--- Uninstalling the very script that is executing frees it mid-run and crashes
--- Mudlet — that is the long-standing "mux reload crashes" bug. From a runtime
--- timer the triggering alias has already returned, so the teardown is safe.
+-- alias/script/timer callback (e.g. the devmode auto-watcher that calls this)
+-- is still on the Lua stack. Uninstalling the very script that is executing
+-- frees it mid-run and crashes Mudlet — that is the long-standing "reload
+-- crashes Mudlet" bug. From a runtime timer the triggering caller has already
+-- returned, so the teardown is safe.
 --   opts.wipe       delete persisted state between uninstall and install (fresh profile)
---   opts.resetAfter call resetProfile() after a successful reinstall (the update flow
---                   wants this; devmode's "mux reload" doesn't — a dev mid-session
---                   probably has other state they don't want silently reset).
+--   opts.resetAfter call resetProfile() after a successful reinstall
+--
+-- Both the update flow and devmode's auto-reload pass resetAfter = true, so a
+-- local rebuild takes effect exactly like an accepted update: no restart
+-- needed. This is safe because resetProfile() resets Lua state only — it
+-- doesn't close the game connection, and everything Muxlet persists
+-- (workspaces, settings, etc.) survives it, so no session state is lost.
 --
 -- Why resetAfter is needed at all: installPackage/uninstallPackage only add/remove
 -- that package's own Trigger/Timer/Alias/Script/Key XML subtree (verified against

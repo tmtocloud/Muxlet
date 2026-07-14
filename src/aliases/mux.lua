@@ -85,7 +85,6 @@ if sub == "help" then
   <white>Diagnostics<reset>
   mux debug [on|off]           — toggle debug output
   mux version                  — show version and check for updates
-  mux reload [wipe]            — reinstall from local build (dev); 'wipe' resets all state
 
   <grey>Panes and tabs are edited from the UI (titlebar buttons, right-click
   menus, the Properties dialog). For scripted setup, use the Mux.* API and
@@ -258,11 +257,6 @@ elseif sub == "version" then
     local verLabel = Mux._versionLabel and Mux._versionLabel() or tostring(Mux._version)
     Mux._echo(string.format("\n<cyan>[Muxlet]<reset> Version: <white>%s<reset>\n", verLabel))
     Mux.checkForUpdates(false)
-
--- ── mux reload ───────────────────────────────────────────────────────────────
-elseif sub == "reload" then
-    local wipe = words[2] and words[2]:lower() == "wipe"
-    Mux.devmodeReload(wipe)
 
 -- ── mux debug ────────────────────────────────────────────────────────────────
 elseif sub == "debug" then

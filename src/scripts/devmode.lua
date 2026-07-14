@@ -1,21 +1,24 @@
--- Muxlet — Dev Mode: local build auto-reload and manual reload helpers
+-- Muxlet — Dev Mode: local build auto-reload
 --
--- Auto-reload: `muddlet --profile <name>` deploys the freshly built package into
--- the profile directory and writes a SINGLE stamp file:
+-- `muddlet --profile <name>` deploys the freshly built package into the profile
+-- directory and writes a SINGLE stamp file:
 --     Muxlet-rebuild.stamp   contents: "<unix-ts>"   or   "<unix-ts> wipe"
 -- A recursive 30-second timer watches the stamp. When it changes, Muxlet
--- reinstalls itself from the deployed package. A trailing "wipe" marker (written
--- by `muddlet --wipe`) additionally deletes all persisted Muxlet state first, so
--- the reload comes up exactly like a brand-new profile.
+-- reinstalls itself from the deployed package — the same reinstall+resetProfile
+-- sequence the update system uses when a user accepts an update (see
+-- Mux._reinstallPackage in update.lua), so a local rebuild takes effect without
+-- restarting Mudlet, exactly like a real update does. A trailing "wipe" marker
+-- (written by `muddlet --wipe`) additionally deletes all persisted Muxlet state
+-- first, so the reload comes up exactly like a brand-new profile.
 --
--- Manual reload:
---   mux reload         — reinstall from the deployed local build (keeps state)
---   mux reload wipe    — reinstall AND wipe all persisted state (fresh profile)
+-- resetProfile() resets Lua state only — it does not close the game connection,
+-- and Muxlet's persisted state (workspaces, settings, etc.) survives it, so
+-- nothing is actually lost on an auto-reload.
 --
 -- The actual reinstall runs through Mux._reinstallPackage (update.lua), which
 -- defers the uninstall+install out of the current call stack. That is what stops
--- "mux reload" from crashing Mudlet: uninstalling the package while the "mux"
--- alias that triggered it is still on the Lua stack frees the running script
+-- the reload from crashing Mudlet: uninstalling the package while the timer
+-- callback that triggered it is still on the Lua stack frees the running script
 -- mid-execution.
 
 local STAMP_FILE = "/Muxlet-rebuild.stamp"
@@ -38,13 +41,16 @@ end
 local function doReload(wipe)
     local pkgPath = getMudletHomeDir() .. "/Muxlet.mpackage"
     if Mux._reinstallPackage then
-        Mux._reinstallPackage(pkgPath, { wipe = wipe })
+        -- resetAfter matches the real update flow (Mux.checkForUpdates) exactly,
+        -- so a local rebuild reloads the same way an accepted update does.
+        Mux._reinstallPackage(pkgPath, { wipe = wipe, resetAfter = true })
     else
         -- Fallback if update.lua's primitive is somehow unavailable: still defer
         -- out of the current stack so we don't crash on self-uninstall.
         tempTimer(0, function()
             if table.contains(getPackages(), "Muxlet") then pcall(uninstallPackage, "Muxlet") end
             installPackage(pkgPath)
+            pcall(resetProfile)
         end)
     end
 end
@@ -79,25 +85,6 @@ local function muxDevmodeCheck()
         stamp, wipe and ", wipe" or ""))
     doReload(wipe)
     -- No reschedule: the freshly installed package starts its own timer on load.
-end
-
--- Called by "mux reload [wipe]".
-function Mux.devmodeReload(wipe)
-    local pkgPath = getMudletHomeDir() .. "/Muxlet.mpackage"
-    local f = io.open(pkgPath, "r")
-    if not f then
-        Mux._echo("\n<red>[Muxlet]<reset> No deployed build found in profile directory.\n")
-        Mux._echo("\n<yellow>[Muxlet]<reset> Run: ./muddlet --profile <name>\n")
-        return
-    end
-    f:close()
-
-    if wipe then
-        Mux._echo("\n<yellow>[Muxlet]<reset> Wiping all Muxlet state — reloading as a fresh profile...\n")
-    else
-        Mux._echo("\n<yellow>[Muxlet]<reset> Reloading Muxlet...\n")
-    end
-    doReload(wipe)
 end
 
 -- Stop the watcher. Called from the uninstall teardown so the old timer can't keep
