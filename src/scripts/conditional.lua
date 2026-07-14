@@ -162,6 +162,15 @@ local function conditionValue(cond, subject)
         return true
     elseif t == "gmcp_exists" then
         local v = gmcpAt(cond.path)
+        if cond.path == "gmcp.room.info.players" and Mux._echo then
+            local extra = ""
+            if type(v) == "table" then
+                extra = string.format(" #v=%d next=%s", #v, tostring(next(v)))
+            end
+            Mux._echo(string.format(
+                "\n<yellow>[mux diag] gmcp_exists check: v=%s type=%s%s\n",
+                tostring(v), type(v), extra))
+        end
         if v == nil then return false end
         if type(v) == "table" then return next(v) ~= nil end
         return true

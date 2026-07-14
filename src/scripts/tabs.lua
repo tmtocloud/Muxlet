@@ -595,6 +595,42 @@ function Mux._surfaceForbidsTabs(surface)
     return def ~= nil and def.noTabs == true
 end
 
+-- TEMP DIAGNOSTIC (remove once the tab-bar leak is found): dumps hidden/
+-- auto_hidden state for a surface's own content/tabBar/tabViewport plus every
+-- tab (recursively into sub-tab hosts). Call from the Mudlet command line as
+-- e.g.  lua Mux._dumpTabState(Mux._panes.pane_5)
+-- or find the pane by name via Mux._tabHosts if you don't have a direct ref.
+local function _dumpW(w, label, indent)
+    if not w then
+        Mux._echo(string.format("%s%s: <nil>\n", indent, label))
+        return
+    end
+    Mux._echo(string.format("%s%s: name=%s hidden=%s auto_hidden=%s container=%s\n",
+        indent, label, tostring(w.name), tostring(w.hidden), tostring(w.auto_hidden),
+        tostring(w.container and w.container.name)))
+end
+
+function Mux._dumpTabState(surface, indent)
+    indent = indent or ""
+    if not surface then Mux._echo(indent .. "<nil surface>\n"); return end
+    Mux._echo(string.format("%s== %s (%s) activeTabId=%s ==\n",
+        indent, tostring(surface.name or surface.id), tostring(surface._gid),
+        tostring(surface._activeTabId)))
+    _dumpW(surface.content, "content", indent .. "  ")
+    _dumpW(surface._tabBar, "tabBar", indent .. "  ")
+    _dumpW(surface._tabBarBox, "tabBarBox", indent .. "  ")
+    _dumpW(surface._tabViewport, "tabViewport", indent .. "  ")
+    for _, tab in ipairs(surface._tabs or {}) do
+        Mux._echo(string.format("%s  -- tab '%s' (id=%s) active=%s --\n",
+            indent, tostring(tab.name), tostring(tab.id), tostring(surface._activeTabId == tab.id)))
+        _dumpW(tab.label, "label", indent .. "    ")
+        _dumpW(tab.content, "content", indent .. "    ")
+        if tab._tabsEnabled then
+            Mux._dumpTabState(tab, indent .. "    ")
+        end
+    end
+end
+
 function MuxSurface:enableTabs(opts)
     opts = opts or {}
     -- Some content (the Mudlet console) can't be containerized into a tab viewport;
