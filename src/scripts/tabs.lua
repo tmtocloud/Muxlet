@@ -843,13 +843,33 @@ end
 
 function MuxSurface:_activateTabObj(tab)
     local theme = Mux.activeTheme()
+    if Mux.debug then
+        Mux._log("_activateTabObj: self=%s(%s) -> tab=%s(%s)  self.content[hidden=%s auto_hidden=%s container=%s]",
+            tostring(self.name or self.id), tostring(self._gid),
+            tostring(tab.name), tostring(tab.id),
+            tostring(self.content and self.content.hidden), tostring(self.content and self.content.auto_hidden),
+            tostring(self.content and self.content.container and self.content.container.name))
+    end
     if self._activeTabId and self._activeTabId ~= tab.id then
         local cur = self:_findTab(self._activeTabId)
         if cur then
+            if Mux.debug then
+                Mux._log("  hiding cur=%s  BEFORE[hidden=%s auto_hidden=%s]",
+                    tostring(cur.name), tostring(cur.content.hidden), tostring(cur.content.auto_hidden))
+            end
             cur.label:setStyleSheet(self:_tabCssFor(cur, false))
             self:_echoTabLabel(cur.label, cur.name, false, false, theme, cur.nameAlign, false, cur)
             cur.content:hide()
+            if Mux.debug then
+                Mux._log("  hiding cur=%s  AFTER [hidden=%s auto_hidden=%s]",
+                    tostring(cur.name), tostring(cur.content.hidden), tostring(cur.content.auto_hidden))
+            end
+        elseif Mux.debug then
+            Mux._log("  cur NOT FOUND for self._activeTabId=%s", tostring(self._activeTabId))
         end
+    elseif Mux.debug then
+        Mux._log("  skipped hide-cur branch: self._activeTabId=%s tab.id=%s",
+            tostring(self._activeTabId), tostring(tab.id))
     end
     self._activeTabId = tab.id
     -- When the activated tab itself hosts sub-tabs, use a borderless-bottom style so
@@ -859,7 +879,15 @@ function MuxSurface:_activateTabObj(tab)
         tab._tabBar:setStyleSheet(Mux.css("subTabBar", tab) or theme.subTabBarCss or theme.tabBarCss or "")
     end
     self:_echoTabLabel(tab.label, tab.name, true, false, theme, tab.nameAlign, false, tab)
+    if Mux.debug then
+        Mux._log("  showing tab=%s  BEFORE[hidden=%s auto_hidden=%s]",
+            tostring(tab.name), tostring(tab.content.hidden), tostring(tab.content.auto_hidden))
+    end
     tab.content:show()
+    if Mux.debug then
+        Mux._log("  showing tab=%s  AFTER [hidden=%s auto_hidden=%s]",
+            tostring(tab.name), tostring(tab.content.hidden), tostring(tab.content.auto_hidden))
+    end
     -- self (the host) may itself be a sub-tab-hosting tab that isn't the
     -- currently active top-level tab. Showing the newly-activated tab's
     -- content above doesn't know that -- re-hide it to match self.content's
