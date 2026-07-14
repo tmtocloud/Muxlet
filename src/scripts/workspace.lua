@@ -105,6 +105,16 @@ function Mux.applyWorkspace(name)
         Mux._err("applyWorkspace: unknown workspace '%s'", name)
         return {}
     end
+    Mux._echo(string.format(
+        "\n<yellow>[mux diag] applyWorkspace('%s') call #%d, floatingPanes=%d, pane_6 rules=%s\n",
+        tostring(name), (Mux._diagApplyCount or 0) + 1, #(def.floatingPanes or {}),
+        (function()
+            for _, fp in ipairs(def.floatingPanes or {}) do
+                if fp.id == "pane_6" then return tostring(fp.rules and #fp.rules or 0) .. " rules" end
+            end
+            return "pane_6 not found"
+        end)()))
+    Mux._diagApplyCount = (Mux._diagApplyCount or 0) + 1
     Mux._activeWorkspaceName = name
     Mux._running = true
 
