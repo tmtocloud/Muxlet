@@ -105,16 +105,6 @@ function Mux.applyWorkspace(name)
         Mux._err("applyWorkspace: unknown workspace '%s'", name)
         return {}
     end
-    Mux._echo(string.format(
-        "\n<yellow>[mux diag] applyWorkspace('%s') call #%d, floatingPanes=%d, pane_6 rules=%s\n",
-        tostring(name), (Mux._diagApplyCount or 0) + 1, #(def.floatingPanes or {}),
-        (function()
-            for _, fp in ipairs(def.floatingPanes or {}) do
-                if fp.id == "pane_6" then return tostring(fp.rules and #fp.rules or 0) .. " rules" end
-            end
-            return "pane_6 not found"
-        end)()))
-    Mux._diagApplyCount = (Mux._diagApplyCount or 0) + 1
     Mux._activeWorkspaceName = name
     Mux._running = true
 
@@ -195,22 +185,7 @@ function Mux.applyWorkspace(name)
                     -- set before Mux._applyContent ever shows anything, so a pane whose
                     -- rule says "start hidden" never flashes/sticks visible first.
                     if p.rules and #p.rules > 0 and Mux._evaluateRules then
-                        -- Diagnostic: echoes each rule's resolved condition and computed
-                        -- value right before evaluation, so a fresh restore's rule state
-                        -- is visible in the console.
-                        for _, r in ipairs(p.rules) do
-                            local rc = Mux._resolveCond and Mux._resolveCond(r.cond) or r.cond
-                            local v  = Mux._conditionValue and Mux._conditionValue(r.cond, p)
-                            Mux._echo(string.format(
-                                "\n<yellow>[mux diag] pane %s rule %s type=%s path=%s value=%s\n",
-                                tostring(p.id), tostring(r.id), tostring(rc and rc.type),
-                                tostring(rc and rc.path), tostring(v)))
-                        end
                         Mux._evaluateRules(p, true)
-                        Mux._echo(string.format(
-                            "\n<yellow>[mux diag] after evaluateRules: _conditionHidden=%s outer.hidden=%s content.auto_hidden=%s\n",
-                            tostring(p._conditionHidden), tostring(p.outer and p.outer.hidden),
-                            tostring(p.content and p.content.auto_hidden)))
                     end
                     -- Apply restored content HERE: floating panes are rebuilt after
                     -- the embedded content-apply pass below has already run, so their
@@ -223,12 +198,6 @@ function Mux.applyWorkspace(name)
                             Mux._warn("applyWorkspace: content '%s' not registered for floating pane '%s'",
                                 p._pendingContent, p.id)
                         end
-                        Mux._echo(string.format(
-                            "\n<yellow>[mux diag] after applyContent: _conditionHidden=%s outer.hidden=%s content.auto_hidden=%s slot.hidden=%s slot.auto_hidden=%s\n",
-                            tostring(p._conditionHidden), tostring(p.outer and p.outer.hidden),
-                            tostring(p.content and p.content.auto_hidden),
-                            tostring(p._contentSlot and p._contentSlot.hidden),
-                            tostring(p._contentSlot and p._contentSlot.auto_hidden)))
                         p._pendingContent = nil
                         p._pendingContentState = nil
                     end
