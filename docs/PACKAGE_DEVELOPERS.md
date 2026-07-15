@@ -332,7 +332,7 @@ titlebarElements = {
     priority = 100,                 -- higher folds into the right-click menu last
     icon     = "⚙",                 -- glyph, or a function(ctx) -> glyph
     tooltip  = "Clock settings",
-    iconable = true,                -- false = never a titlebar icon, menu-only
+    iconable = true,                -- false = never a titlebar icon; always in the menu instead
     visible  = function(ctx) return true end,   -- optional; default visible
     onClick  = function(ctx, event) openClockSettings(ctx.tab or ctx.pane) end,
 
@@ -348,9 +348,12 @@ titlebarElements = {
 Resolve the surface that actually owns the content with `ctx.tab or ctx.pane` — that
 is the value to pass to your own settings dialog and to `serialize`/`restore`.
 
+An `iconable` (default true) element's menu row only ever appears once its icon
+folds off the bar (overflow/compact) or on a tab (no titlebar at all) — never
+redundantly alongside a visible icon; this is automatic, not something a content
+def opts into per element.
+
 Advanced, menu-only fields (see `library/content/buttons.lua` for a real example):
-`menuFallbackOnly` (this element's `menuText` doesn't by itself force the right-click
-menu open — only reachable once the menu is showing for another reason),
 `menuKeepOpen` (bool, or `function(ctx) -> bool`; keep the menu open after this row
 runs, e.g. so a submenu stays reachable), and `menuSubmenu(ctx) -> items|nil` (a
 dynamic list of `{ text, fn, keepOpen? }` rows nested under this one).

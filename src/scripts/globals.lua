@@ -647,15 +647,16 @@ function Mux._showContextMenu(pane, globalX, globalY)
     -- These have no icon in the bar right now, so content among them is menu-only.
     for _, spec in ipairs(pane._foldedElements or {}) do addSpec(spec, true) end
 
-    -- 2) Content elements that carry a menu row: always present (deduped against any
-    -- already folded in above), so content settings are reachable here even when
-    -- their icon is showing in the bar.
+    -- 2) Menu-only content elements (iconable=false): no titlebar icon exists for
+    -- these, so the menu is their only path in and they always appear here (the
+    -- menu is already forced open for them via hasMenuExtra in pane.lua). Iconable
+    -- content elements are NOT repeated here — they fold into the menu the same
+    -- way builtins do (item 1 above), so a visible icon never gets a redundant
+    -- menu row alongside it.
     if ctx.content and ctx.content.titlebarElements then
-        local foldedSet = {}
-        for _, s in ipairs(pane._foldedElements or {}) do foldedSet[s.id] = true end
         local extra = {}
         for _, s in ipairs(ctx.content.titlebarElements) do
-            if s.menuText and not foldedSet[s.id] then
+            if s.menuText and s.iconable == false then
                 local ok, vis = pcall(s.visible or function() return true end, ctx)
                 if ok and vis then extra[#extra + 1] = s end
             end
@@ -663,10 +664,7 @@ function Mux._showContextMenu(pane, globalX, globalY)
         table.sort(extra, function(a, b) return (a.menuOrder or 500) < (b.menuOrder or 500) end)
         if #extra > 0 and #items > 0 then items[#items + 1] = { sep = true } end
         lastGroup = nil
-        -- These elements still show an icon in the bar, so they are NOT menu-only:
-        -- the row mirrors the icon (e.g. buttons "Edit buttons" fans the titlebar
-        -- cascade), rather than taking over with a submenu.
-        for _, s in ipairs(extra) do addSpec(s, false) end
+        for _, s in ipairs(extra) do addSpec(s, true) end
     end
 
     if #items > 0 then

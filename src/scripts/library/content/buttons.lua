@@ -540,11 +540,10 @@ Mux.registerContent("mux_buttons", {
                 return editingHere(ctx) and "🔧  Editing — click to finish" or "🔧  Edit buttons"
             end,
             menuGroup = "info", menuOrder = 95,
-            -- The wrench icon already reaches this directly whenever it's visible
-            -- on the titlebar, so this row must not itself force the right-click
-            -- menu open on a full-size, non-compact pane - it's a fallback for
-            -- tabs/compact/folded only (see menuFallbackOnly in pane.lua).
-            menuFallbackOnly = true,
+            -- iconable defaults true (this row has a titlebar icon), so this row only
+            -- reaches the menu once the wrench itself folds off the bar (overflow/
+            -- compact) or on a tab (no titlebar at all) — never redundantly
+            -- alongside a visible icon.
             run = function(ctx) toggleButtonsEdit(ctx) end,
             -- On a tab there is no titlebar cascade, so Add / Grid-settings live in a
             -- right-click SUBMENU off this row, and clicking the row toggles edit mode

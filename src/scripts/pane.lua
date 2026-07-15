@@ -346,6 +346,32 @@ function MuxPane:setReactiveActions(trueId, falseId)
     Mux._scheduleAutoSave()
 end
 
+-- Re-applies collapsed (minimized) geometry without touching the saved
+-- pre-minimize state (_savedFloatH / _savedMinimizeRatio) — unlike
+-- toggleMinimize's collapse branch, this can run repeatedly while already
+-- minimized. Needed because a condition-hide/show cycle reflows the split
+-- weights (or re-shows the float) without knowing about minimize at all, so
+-- a minimized pane popping back into view would otherwise land at full size.
+function MuxPane:_reassertMinimizedGeometry()
+    if not self.minimized then return end
+    local theme = Mux.activeTheme()
+    if self.floating or self.overlay then
+        local minH = theme.titlebarHeight + borderInset * 2
+        self.outer:resize(self.floatW, minH)
+        self.outer:reposition()
+    elseif self._split then
+        local split    = self._split
+        local handlePx = theme.handleSize or 3
+        local boxH     = split.box:get_height()
+        local minPx    = theme.titlebarHeight + borderInset * 2
+        local dyn      = boxH - handlePx
+        local minR     = (dyn > 0) and Mux._clamp(minPx / dyn, 0.01, 0.25) or 0.05
+        local newR     = (self._slotSide == "a") and minR or (1 - minR)
+        split:_setRatio(Mux._clamp(newR, 0.01, 0.99))
+    end
+    if self.content then self.content:hide() end
+end
+
 -- "Show self" reactive action: reveal the pane; if embedded, restore its slot's
 -- weight so the layout returns to normal.
 function MuxPane:_conditionShow()
@@ -362,6 +388,7 @@ function MuxPane:_conditionShow()
     -- floats-then-dialogs convention so any open dialog stays on top.
     if self.floating and Mux.raiseFloatingPanes then Mux.raiseFloatingPanes() end
     self:_reflowConditionLayout()
+    self:_reassertMinimizedGeometry()
 end
 
 -- "Hide self" reactive action: hide the pane; if embedded, collapse its slot so the
@@ -1037,14 +1064,11 @@ end
 --   submenu(ctx) -> items | nil                   (dynamic submenu)
 --   danger     bool                               (destructive styling)
 --   menuOrder  sequence within the menu; menuGroup keys separator insertion
---   iconable   default true; false = menu-only, always in the menu, forces it
---   menuFallbackOnly  default false; true = this element's menuText does NOT
---              by itself force the right-click menu open (see hasMenuExtra
---              below) — its row is only reachable once the menu is already
---              showing for another reason (overflow, compact, or a sibling
---              element). Use this when a titlebar icon already reaches the
---              same action directly, so right-click doesn't offer a
---              permanent redundant path to it.
+--   iconable   default true; false = menu-only: no titlebar icon exists, so it
+--              always appears in the menu and forces the right-click menu open
+--              (see hasMenuExtra below). true elements reach the menu only once
+--              their icon folds off the bar (overflow/compact) — same rule as
+--              builtins — so a visible icon never gets a redundant menu row.
 local TB_GROUP_RANK = { window = 1, tiling = 2, info = 1, content = 2, console = 3 }  -- right: lower = nearer edge
 
 -- Builtin pane elements. Each definition is the single source of truth for both
@@ -1311,13 +1335,14 @@ function MuxPane:_syncButtons(force)
     local ctx          = self:_elementCtx()
     local left, right, all = self:_collectTbElements(ctx)   -- visible iconable; no Geyser calls
 
-    -- Any content element with a menu row forces the right-click context menu to
-    -- exist — even when its icon is visible in the bar — so content settings are
-    -- always reachable from it.
+    -- A menu-only content element (iconable=false) has no titlebar icon at all, so
+    -- the right-click menu must be forced open for it to be reachable. Iconable
+    -- elements don't force it — they reach the menu the normal way, once folded
+    -- (see _foldedElements below), same as builtins.
     local hasMenuExtra = false
     if ctx.content and ctx.content.titlebarElements then
         for _, s in ipairs(ctx.content.titlebarElements) do
-            if s.menuText and not BUILTIN_TB_IDS[s.id] and not s.menuFallbackOnly then
+            if s.menuText and s.iconable == false and not BUILTIN_TB_IDS[s.id] then
                 local ok, vis = pcall(s.visible or function() return true end, ctx)
                 if ok and vis then hasMenuExtra = true; break end
             end
