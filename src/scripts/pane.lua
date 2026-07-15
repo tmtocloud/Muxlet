@@ -389,6 +389,12 @@ function MuxPane:_conditionShow()
     if self.floating and Mux.raiseFloatingPanes then Mux.raiseFloatingPanes() end
     self:_reflowConditionLayout()
     self:_reassertMinimizedGeometry()
+    -- An anchored pane may have drifted _atAnchor=false (a plain drag) or just
+    -- sat out the hide with no live tracking; snap it back to its anchor spec
+    -- explicitly rather than relying on the passive _reanchorAll cascade, which
+    -- only re-derives panes already marked _atAnchor. See returnToAnchor's docs
+    -- — re-show has always been documented as a caller of it, just never wired.
+    if self.anchor then self:returnToAnchor() end
 end
 
 -- "Hide self" reactive action: hide the pane; if embedded, collapse its slot so the
