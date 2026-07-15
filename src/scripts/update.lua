@@ -64,13 +64,11 @@ local MUXLET_REPO = "tmtocloud/Muxlet"
 local function releasesUrl(repo)  return "https://api.github.com/repos/" .. repo .. "/releases?per_page=30" end
 local function releasesPage(repo) return "https://github.com/" .. repo .. "/releases" end
 
--- Echoed right before resetProfile() runs after a successful install (see
--- Mux._reinstallPackage's doc comment for why a reset is needed at all).
--- resetProfile()'s own widget-teardown safety net is a fairly recent Mudlet
--- fix — an informational nudge rather than a confirmation popup, since the
--- alternative (leaving stale Lua state behind) is worse on any Mudlet version.
-local RESET_NOTICE = "<yellow>[Muxlet]<reset> Resetting Lua state to finish applying the update. "
-    .. "If anything looks off afterward, make sure Mudlet itself is up to date.\n"
+-- A reinstall never resets the Lua VM, so stale globals/handlers from the old
+-- code can survive until the profile is closed and reopened. Mux._promptRestartRequired
+-- (see below) offers that as a choice rather than forcing it.
+local RESTART_NOTICE = "A newer version was just installed. The new code is already active, "
+    .. "but for a fully clean UI, close and reopen this profile when convenient."
 
 -- ── Host registration (optional) ──────────────────────────────────────────────
 --
@@ -164,33 +162,76 @@ function Mux._wipePersistentDir()
     end)
 end
 
+-- ── Restart-required prompt ───────────────────────────────────────────────────
+--
+-- Offers a profile close/reopen after a reinstall, rather than forcing one via
+-- resetProfile(). The new code is already active immediately after install;
+-- restarting only buys a clean UI (no stale widgets from the prior session).
+local _restartPromptPending = nil
+
+Mux.registerContent("mux_restart_required_confirm", {
+    name     = "Restart Required",
+    internal = true,
+    apply = function(target)
+        if target.contentBg then target.contentBg:echo(""); target.contentBg:hide() end
+        if not _restartPromptPending then return end
+        local pending = _restartPromptPending
+        _restartPromptPending = nil
+        local dlg, message = pending.dlg, pending.message
+
+        local cw = target.content:get_width()
+        if cw < 50 then cw = (target.floatW or 380) - 4 end
+        local body = Geyser.Label:new({
+            name = target._gid .. "_body", x = 10, y = 10, width = cw - 20, height = 54,
+        }, target.content)
+        body:setStyleSheet(Mux.dialogCss.body)
+        body:rawEcho(message)
+
+        local btnClose = Geyser.Label:new({
+            name = target._gid .. "_close", x = 20, y = 72, width = 165, height = 34,
+        }, target.content)
+        btnClose:setStyleSheet(Mux.dialogCss.buttonPrimary)
+        btnClose:rawEcho("<center>Close Profile</center>")
+        Mux.wireDialogButton(btnClose, Mux.dialogCss.buttonPrimary, Mux.dialogCss.buttonPrimaryHover)
+        btnClose:setClickCallback(function()
+            dlg:close()
+            closeProfile()
+        end)
+
+        local btnLater = Geyser.Label:new({
+            name = target._gid .. "_later", x = 195, y = 72, width = 165, height = 34,
+        }, target.content)
+        btnLater:setStyleSheet(Mux.dialogCss.button)
+        btnLater:rawEcho("<center>Close Later</center>")
+        Mux.wireDialogButton(btnLater, Mux.dialogCss.button, Mux.dialogCss.buttonHover)
+        btnLater:setClickCallback(function() dlg:close() end)
+        target._autoFitHeight = 116
+    end,
+    remove = function(_) end,
+})
+
+function Mux._promptRestartRequired(message)
+    local dlg = Mux.createDialog({
+        title       = "Restart Recommended",
+        width       = 380, height = 170,
+        closeable   = false,
+        contextMenu = false,
+    })
+    _restartPromptPending = { dlg = dlg, message = message or RESTART_NOTICE }
+    Mux._applyContent(dlg, "mux_restart_required_confirm")
+end
+
 -- Reinstall Muxlet from a local .mpackage. CRITICAL: this is deferred to a
 -- runtime tempTimer(0) so the uninstall does NOT run while a package-owned
 -- alias/script/timer callback (e.g. the devmode auto-watcher that calls this)
 -- is still on the Lua stack. Uninstalling the very script that is executing
--- frees it mid-run and crashes Mudlet — that is the long-standing "reload
--- crashes Mudlet" bug. From a runtime timer the triggering caller has already
--- returned, so the teardown is safe.
---   opts.wipe       delete persisted state between uninstall and install (fresh profile)
---   opts.resetAfter call resetProfile() after a successful reinstall
---
--- Both the update flow and devmode's auto-reload pass resetAfter = true, so a
--- local rebuild takes effect exactly like an accepted update: no restart
--- needed. This is safe because resetProfile() resets Lua state only — it
--- doesn't close the game connection, and everything Muxlet persists
--- (workspaces, settings, etc.) survives it, so no session state is lost.
---
--- Why resetAfter is needed at all: installPackage/uninstallPackage only add/remove
--- that package's own Trigger/Timer/Alias/Script/Key XML subtree (verified against
--- Mudlet's own source) — they never clear registerAnonymousEventHandler's handler
--- map, never touch plain Lua global tables, and never reset the Lua VM. Stale
--- handlers/globals from the old code can legitimately survive a reinstall, which
--- is exactly the "needs a full profile close/reopen to behave correctly" problem —
--- resetProfile() is the one thing in Mudlet that actually clears all of that.
+-- frees it mid-run and crashes Mudlet.
+--   opts.wipe          delete persisted state between uninstall and install (fresh profile)
+--   opts.promptRestart show the restart-recommended dialog after a successful reinstall
 function Mux._reinstallPackage(path, opts)
     opts = opts or {}
     local doWipe = opts.wipe and true or false
-    local resetAfter = opts.resetAfter and true or false
+    local promptRestart = opts.promptRestart and true or false
     local wipeFn = Mux._wipePersistentDir   -- capture before teardown
     tempTimer(0, function()
         if table.contains(getPackages(), "Muxlet") then
@@ -204,10 +245,7 @@ function Mux._reinstallPackage(path, opts)
         local ok, err = installPackage(path)
         if ok then
             cecho("\n<green>[Muxlet]<reset> Update installed. Run <cyan>mux version<reset> to confirm the new build.\n")
-            if resetAfter then
-                cecho(RESET_NOTICE)
-                pcall(resetProfile)
-            end
+            if promptRestart then Mux._promptRestartRequired() end
         else
             cecho(string.format(
                 "\n<red>[Muxlet]<reset> Reinstall failed (%s). Install manually from <cyan>%s<reset>\n",
@@ -658,15 +696,13 @@ local function installFromRelease(cand)
         if isHost then
             if host.install then
                 pcall(host.install, pkg)
-                Mux._echo(RESET_NOTICE)
-                pcall(resetProfile)
+                Mux._promptRestartRequired()
             else
                 local pkgName = host.packageName
                 if pkgName and table.contains(getPackages(), pkgName) then pcall(uninstallPackage, pkgName) end
                 local ok, err = installPackage(pkg)
                 if ok then
-                    Mux._echo(RESET_NOTICE)
-                    pcall(resetProfile)
+                    Mux._promptRestartRequired()
                 else
                     Mux._echo(string.format(
                         "\n<red>[Muxlet]<reset> Install failed (%s). Install manually from <cyan>%s<reset>\n",
@@ -674,7 +710,7 @@ local function installFromRelease(cand)
                 end
             end
         else
-            Mux._reinstallPackage(pkg, { resetAfter = true })
+            Mux._reinstallPackage(pkg, { promptRestart = true })
         end
     end)
 
