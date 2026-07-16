@@ -182,13 +182,13 @@ Mux.registerContent("mux_restart_required_confirm", {
         local cw = target.content:get_width()
         if cw < 50 then cw = (target.floatW or 380) - 4 end
         local body = Geyser.Label:new({
-            name = target._gid .. "_body", x = 10, y = 10, width = cw - 20, height = 54,
+            name = target._gid .. "_body", x = 10, y = 10, width = cw - 20, height = 68,
         }, target.content)
         body:setStyleSheet(Mux.dialogCss.body)
         body:rawEcho(message)
 
         local btnClose = Geyser.Label:new({
-            name = target._gid .. "_close", x = 20, y = 72, width = 165, height = 34,
+            name = target._gid .. "_close", x = 20, y = 86, width = 165, height = 34,
         }, target.content)
         btnClose:setStyleSheet(Mux.dialogCss.buttonPrimary)
         btnClose:rawEcho("<center>Close Profile</center>")
@@ -199,13 +199,13 @@ Mux.registerContent("mux_restart_required_confirm", {
         end)
 
         local btnLater = Geyser.Label:new({
-            name = target._gid .. "_later", x = 195, y = 72, width = 165, height = 34,
+            name = target._gid .. "_later", x = 195, y = 86, width = 165, height = 34,
         }, target.content)
         btnLater:setStyleSheet(Mux.dialogCss.button)
         btnLater:rawEcho("<center>Close Later</center>")
         Mux.wireDialogButton(btnLater, Mux.dialogCss.button, Mux.dialogCss.buttonHover)
         btnLater:setClickCallback(function() dlg:close() end)
-        target._autoFitHeight = 116
+        target._autoFitHeight = 130
     end,
     remove = function(_) end,
 })

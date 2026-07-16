@@ -159,6 +159,10 @@ function MuxPane:init(opts)
             connectionAware = opts.connectionAware,
         })
     end
+    -- Restored condition-hidden state (manual toggle via mux.toggleTarget/etc — see
+    -- workspace.lua serializeNode). Applied once the pane is fully placed (below),
+    -- before any rules evaluate, so a self-targeting rule still has final say.
+    self._pendingHidden = opts.hidden or false
     local inset   = self.bordered and borderInset or 0
     self.header = Geyser.Container:new({
         name   = self._gid .. "_header",
@@ -304,11 +308,21 @@ function MuxPane:init(opts)
     Mux._log("MuxPane created: %s", self.id)
     -- Reactive rules: register + evaluate once (deferred a tick so the pane is fully
     -- built and any embedding has happened). Migration already registered the subject;
-    -- this just forces the initial evaluation against current signals.
-    if self.rules and #self.rules > 0 then
-        if Mux._registerRuleSubject then Mux._registerRuleSubject(self) end
+    -- this just forces the initial evaluation against current signals. A restored
+    -- manual hide (self._pendingHidden, see workspace.lua) is applied first so a
+    -- self-targeting rule still gets final say on the live-current signal state.
+    -- (Workspace restore of floating panes applies both of these itself, earlier
+    -- and synchronously, to avoid a visible flash -- this redundant deferred pass
+    -- covers embedded panes and any pane built outside workspace restore.)
+    if self.rules and #self.rules > 0 or self._pendingHidden then
+        if Mux._registerRuleSubject and self.rules and #self.rules > 0 then
+            Mux._registerRuleSubject(self)
+        end
         tempTimer(0, function()
-            if Mux._evaluateRules then Mux._evaluateRules(self, true) end
+            if self._pendingHidden and self._conditionHide then self:_conditionHide() end
+            if self.rules and #self.rules > 0 and Mux._evaluateRules then
+                Mux._evaluateRules(self, true)
+            end
         end)
     end
     if _t0 then
@@ -381,6 +395,7 @@ function MuxPane:_conditionShow()
     Mux._log("_conditionShow %s (was hidden=%s)", tostring(self.id), tostring(self._conditionHidden))
     self._conditionHidden = false
     self:show()
+    if Mux._scheduleAutoSave then Mux._scheduleAutoSave() end
     -- A pane popping up on its own (e.g. Local Players on a room-entry rule)
     -- implicitly raises itself in Qt's stacking via show(), which can bury an
     -- open dialog/dropdown it doesn't even visually overlap — Mudlet's
@@ -404,6 +419,7 @@ function MuxPane:_conditionHide()
     self._conditionHidden = true
     self:hide()
     self:_reflowConditionLayout()
+    if Mux._scheduleAutoSave then Mux._scheduleAutoSave() end
 end
 
 -- Re-weight every ancestor split from this pane to the tree root so collapsed

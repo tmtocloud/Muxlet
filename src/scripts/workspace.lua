@@ -175,6 +175,14 @@ function Mux.applyWorkspace(name)
                     p.convertible = true
                     p:_detachToFloat()
                     p.convertible = savedConvertible
+                    -- Restore a manually-toggled hidden state (mux.toggleTarget/etc, see
+                    -- serializeNode) BEFORE any rules run, so a rule targeting this pane's
+                    -- own visibility (e.g. a reactive "hide when condition unmet" rule)
+                    -- still gets the final say based on current live signals rather than
+                    -- the frozen save-time snapshot.
+                    if p._pendingHidden and p._conditionHide then
+                        p:_conditionHide()
+                    end
                     -- Resolve this pane's rules (e.g. a "hide when condition unmet" rule)
                     -- BEFORE content is applied below. MuxPane:init already deferred its
                     -- own first evaluation by a tick (tempTimer(0,...), so the pane is
@@ -303,6 +311,12 @@ local function serializeNode(obj)
         showTitlebar    = obj.titlebarVisible,
         mainConsoleHost = obj.mainConsoleHost or false,
     }
+    -- Condition-hidden state (manual toggle via mux.toggleTarget/hideTarget/etc,
+    -- or a reactive rule currently evaluating false). Restored before rule
+    -- evaluation on load (see buildNode/applyWorkspace), so a pane whose rules
+    -- target its own visibility still gets the live-correct state -- this only
+    -- "sticks" for panes with no self-targeting rule, i.e. manually toggled ones.
+    if obj._conditionHidden then node.hidden = true end
     if not obj.contentable       then node.contentable       = false end
     if not obj.resizable         then node.resizable         = false end
     if not obj.titlebarHideable  then node.titlebarHideable  = false end
@@ -843,6 +857,7 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             actionFalse      = node.actionFalse or "mux.hideSelf",
             rules            = node.rules,
             connectionAware  = node.connectionAware,
+            hidden           = node.hidden,
         })
         p._paneSpace = paneSpace
         if node.addable ~= nil then p.addable = node.addable end
