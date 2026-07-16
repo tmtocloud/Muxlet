@@ -326,6 +326,7 @@ local function serializeNode(obj)
     if not obj.convertible       then node.convertible       = false end
     if not obj.movable           then node.movable            = false end
     if not obj.closeable         then node.closeable          = false end
+    if not obj.confirmClose      then node.confirmClose       = false end
     if not obj.minimizable       then node.minimizable        = false end
     if not obj.splittable        then node.splittable         = false end
     if not obj.swappable         then node.swappable          = false end
@@ -832,6 +833,7 @@ buildNode = function(node, parentContainer, paneMap, paneSpace)
             convertible      = node.convertible ~= false,
             movable          = node.movable ~= false,
             closeable        = node.closeable ~= false,
+            confirmClose     = node.confirmClose ~= false,
             minimizable      = node.minimizable ~= false,
             zoomable         = node.zoomable ~= false,
             contextMenu      = node.contextMenu ~= false,

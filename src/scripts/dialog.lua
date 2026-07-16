@@ -89,6 +89,8 @@ Mux.dialogCss = {
         color: rgba(198,210,238,255);
         font-size: 13px;
         padding: 0 14px;
+        qproperty-alignment: 'AlignLeft|AlignTop';
+        qproperty-wordWrap: true;
     ]],
 
     subtext = [[
