@@ -184,7 +184,8 @@ Mux.registerContent("mux_restart_required_confirm", {
         local body = Geyser.Label:new({
             name = target._gid .. "_body", x = 10, y = 10, width = cw - 20, height = 68,
         }, target.content)
-        body:setStyleSheet(Mux.dialogCss.body)
+        body:setStyleSheet(Mux.dialogCss.body
+            .. "qproperty-alignment: 'AlignLeft|AlignTop'; qproperty-wordWrap: true;")
         body:rawEcho(message)
 
         local btnClose = Geyser.Label:new({
@@ -649,9 +650,10 @@ end
 -- own updateInstall override or a plain install/uninstall on updatePackageName.
 local function installFromRelease(cand)
     if not cand then return end
-    local isHost = cand.target == "host"
-    local host   = isHost and Mux._hostUpdate or nil
-    local repo   = isHost and host and host.repo or MUXLET_REPO
+    local isHost      = cand.target == "host"
+    local host        = isHost and Mux._hostUpdate or nil
+    local repo        = isHost and host and host.repo or MUXLET_REPO
+    local displayName = isHost and host.label or "Muxlet"
 
     local url
     for _, a in ipairs(cand.assets or {}) do
@@ -670,8 +672,9 @@ local function installFromRelease(cand)
     end
 
     Mux._echo(string.format(
-        "\n<yellow>[Muxlet]<reset> Downloading %s <cyan>%s<reset>...\n",
-        cand.kind == "prerelease" and "pre-release" or "release", cand.tag or "?"))
+        "\n<yellow>[Muxlet]<reset> Downloading %s %s <cyan>%s<reset>...\n",
+        displayName, cand.kind == "prerelease" and "pre-release" or "release",
+        releaseLabel(cand.version, cand.kind, cand.sha)))
 
     local pkg = getMudletHomeDir() .. "/" .. (isHost and "Mux_host_update.mpackage" or "Muxlet_update.mpackage")
 
@@ -692,7 +695,7 @@ local function installFromRelease(cand)
         st.remindSkip   = 0
         saveUpdateState()
 
-        Mux._echo("\n<yellow>[Muxlet]<reset> Installing update...\n")
+        Mux._echo(string.format("\n<yellow>[Muxlet]<reset> Installing %s update...\n", displayName))
         if isHost then
             if host.install then
                 pcall(host.install, pkg)
@@ -1096,6 +1099,50 @@ end
 -- muxletReady, which re-invokes your handler, which calls Mux.ensureVersion
 -- again; this time the version check passes and callback runs.
 --
+-- A bare (no "v") requiredVersion names a pre-release tag, per this file's own
+-- tag-shape convention, but a caller (e.g. a host's build script) may pin to
+-- one without knowing its commit sha. Resolved here via a single-release
+-- lookup by tag — cheaper than paging the whole releases list — purely so the
+-- upgrade/downgrade log line can show the same "version-sha" shape as every
+-- other pre-release label. cb(sha) runs with nil if the tag or its commit
+-- identity can't be found (network error, unlisted tag, etc.) — callers treat
+-- that as "log without a sha," not a hard failure.
+local function resolveMuxletTagSha(tag, cb)
+    local tmp = getMudletHomeDir() .. "/mux_release_tag.json"
+
+    local function cleanup()
+        if Mux._tagShaDlHandler then killAnonymousEventHandler(Mux._tagShaDlHandler); Mux._tagShaDlHandler = nil end
+        if Mux._tagShaDlErrHandler then
+            killAnonymousEventHandler(Mux._tagShaDlErrHandler); Mux._tagShaDlErrHandler = nil
+        end
+    end
+    cleanup()
+
+    Mux._tagShaDlHandler = registerAnonymousEventHandler("sysDownloadDone", function(_, filename)
+        if filename ~= tmp then return end
+        cleanup()
+        local file = io.open(tmp, "r")
+        if not file then cb(nil); return end
+        local content = file:read("*a"); file:close()
+        local r = yajl.to_value(content)
+        if type(r) ~= "table" then cb(nil); return end
+        local sha = extractCommitSha(r.body)
+        if not sha then
+            local tc = r.target_commitish
+            if type(tc) == "string" and tc:match("^%x%x%x%x%x%x%x+$") then sha = tc end
+        end
+        cb(sha)
+    end)
+
+    Mux._tagShaDlErrHandler = registerAnonymousEventHandler("sysDownloadError", function(_, filename)
+        if filename ~= tmp then return end
+        cleanup()
+        cb(nil)
+    end)
+
+    downloadFile(tmp, "https://api.github.com/repos/" .. MUXLET_REPO .. "/releases/tags/" .. tag)
+end
+
 -- This is also what powers the transparent Muxlet bump in the hosted update
 -- dialog's "Update Now" (see Mux.showUpdateDialog) — the one-time boot gate and
 -- the live "you also need a newer Muxlet" case are the same operation.
@@ -1114,13 +1161,25 @@ function Mux.ensureVersion(requiredVersion, url, callback, exact)
     end
 
     local verb = Mux._versionIsNewer(requiredVersion, Mux._version) and "Upgrading" or "Downgrading"
-    Mux._echo(string.format(
-        "\n<yellow>[Muxlet]<reset> %s Muxlet %s -> %s...\n", verb, tostring(Mux._version), requiredVersion))
 
-    if table.contains(getPackages(), "Muxlet") then
-        uninstallPackage("Muxlet")
+    local function proceed(targetLabel)
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> %s Muxlet %s -> %s...\n", verb, tostring(Mux._version), targetLabel))
+        if table.contains(getPackages(), "Muxlet") then
+            uninstallPackage("Muxlet")
+        end
+        installPackage(url)
     end
-    installPackage(url)
+
+    -- Already carries a sha, or is a "v"-prefixed production pin — nothing to
+    -- resolve, log it as given.
+    if shaOf(requiredVersion) or tostring(requiredVersion):match("^v") then
+        proceed(requiredVersion)
+    else
+        resolveMuxletTagSha(requiredVersion, function(sha)
+            proceed(sha and (requiredVersion .. "-" .. sha:sub(1, 7)) or requiredVersion)
+        end)
+    end
 end
 
 -- Mux.bootHost(opts)
