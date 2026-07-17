@@ -123,7 +123,6 @@ function MuxPane:init(opts)
         height  = "100%",
         fillBg  = 1,
     }, self.outer)
-    self.frame:setStyleSheet(theme.paneOuterCss or "")
     self.frame:setClickCallback(function(event)
         if Mux._movingTab then Mux._cancelTabMove(); return end
         if Mux.raisePane then Mux.raisePane(self) end
@@ -216,6 +215,10 @@ function MuxPane:init(opts)
     -- consoleBorders: pane manages setBorderSizes so the Mudlet native console is
     -- visible in the content area. contentBg is hidden; onReposition auto-wired.
     self.consoleBorders   = opts.consoleBorders or false
+    -- Frame CSS depends on bordered/transparentFrame/consoleBorders, all now set;
+    -- paint here rather than at frame creation above, so a workspace-restored
+    -- bordered=false pane doesn't flash (and stick with) the default bordered look.
+    self.frame:setStyleSheet(self:_baseFrameCss())
     -- insertable: when false, excluded from drag-to-split insertion zone detection.
     self.insertable         = opts.insertable ~= false
     -- autoFit: when false, Mux.requestAutoFit(target, ...) is a no-op for this
@@ -1985,11 +1988,7 @@ end
 function MuxPane:_enableConsoleBorders()
     self.consoleBorders = true
     if self.frame then
-        self.frame:setStyleSheet([[
-            background-color: transparent;
-            border: 2px solid rgba(255, 255, 255, 0.38);
-            border-radius: 3px;
-        ]])
+        self.frame:setStyleSheet(self:_baseFrameCss())
         if enableClickthrough then enableClickthrough(self.frame.name) end
     end
     if self.contentBg then self.contentBg:hide() end
