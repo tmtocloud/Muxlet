@@ -212,14 +212,22 @@ Mux.registerContent("mux_restart_required_confirm", {
 })
 
 function Mux._promptRestartRequired(message)
-    local dlg = Mux.createDialog({
-        title       = "Restart Recommended",
-        width       = 380, height = 170,
-        closeable   = false,
-        contextMenu = false,
-    })
-    _restartPromptPending = { dlg = dlg, message = message or RESTART_NOTICE }
-    Mux._applyContent(dlg, "mux_restart_required_confirm")
+    -- Every caller reaches this in the same tick installPackage() returns, but
+    -- the freshly loaded package's own bootstrap (settings.lua's tempTimer(0)
+    -- theme apply / Mux._ready / muxletReady) is itself deferred a tick and
+    -- hasn't run yet. Building the dialog immediately here races that
+    -- bootstrap and can wire its titlebar/footer against half-settled state.
+    -- Deferring one tick queues us behind that already-scheduled timer.
+    tempTimer(0, function()
+        local dlg = Mux.createDialog({
+            title       = "Restart Recommended",
+            width       = 380, height = 170,
+            closeable   = false,
+            contextMenu = false,
+        })
+        _restartPromptPending = { dlg = dlg, message = message or RESTART_NOTICE }
+        Mux._applyContent(dlg, "mux_restart_required_confirm")
+    end)
 end
 
 -- Reinstall Muxlet from a local .mpackage. CRITICAL: this is deferred to a
