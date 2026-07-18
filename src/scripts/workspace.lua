@@ -264,6 +264,20 @@ function Mux.applyWorkspace(name)
         Mux._scheduleAutoSave()
     end)
 
+    -- A profile that finishes loading before the host window reaches its final
+    -- OS-level size (e.g. Mudlet maximizing to the monitor a moment after launch)
+    -- settles this workspace's geometry against a stale, too-small width. Content
+    -- that measures pixel geometry in apply() (or the reposition pass above) is
+    -- left stuck with it, since resize() only otherwise fires on live drag/resize.
+    -- One more relayout pass once the window has had time to settle self-corrects
+    -- it, mirroring the floating-pane anchor follow-up earlier in this function.
+    tempTimer(0.3, function()
+        local wasIR = Mux._inResize
+        Mux._inResize = true
+        Mux._notifyAllReposition()
+        Mux._inResize = wasIR
+    end)
+
     Mux._log("Applied workspace: %s (%d panes)", name, tableCount(paneMap))
     return paneMap
 end
