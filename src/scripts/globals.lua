@@ -970,17 +970,55 @@ end
 -- Wrapped in a named function so fullStart() can re-register after fullStop() kills it.
 Mux._inResize = Mux._inResize or false
 
+-- The actual pane-space/reposition pass a native window resize triggers. Split
+-- out from the event handler so both the per-frame coalesced call and the
+-- trailing settle call below share one implementation.
+function Mux._runWindowResizePass()
+    -- setBorderSizes can itself fire sysWindowResizeEvent; guard against recursion.
+    if Mux._inResize then return end
+    Mux._inResize = true
+    for _, ps in pairs(Mux._paneSpaces) do
+        if ps._onWindowResize then ps:_onWindowResize() end
+    end
+    Mux._notifyAllReposition()
+    Mux._inResize = false
+end
+
 function Mux._registerResizeHandler()
     if Mux._resizeHandler then return end
     Mux._resizeHandler = registerAnonymousEventHandler("sysWindowResizeEvent", function()
-        -- setBorderSizes can itself fire sysWindowResizeEvent; guard against recursion.
         if Mux._inResize then return end
-        Mux._inResize = true
-        for _, ps in pairs(Mux._paneSpaces) do
-            if ps._onWindowResize then ps:_onWindowResize() end
+
+        -- Dragging the real Mudlet window (or the maximize/restore animation) fires
+        -- this once per frame, far faster than a full pane/content reposition can
+        -- complete. Mux._resizing gates the same adaptive debounce split-handle and
+        -- pane-corner drags already rely on (Mux._relayoutContent, MuxPane:_syncButtons),
+        -- so per-frame work here gets just as cheap as those paths instead of running
+        -- the full pipeline, uncapped, on every single event.
+        Mux._resizing = true
+
+        -- Coalesce same-frame duplicate events into one live pass per tick — same
+        -- pattern as MuxSplit:_requestRatio — so cost is capped to "once per frame"
+        -- no matter how many raw events land in that frame.
+        if not Mux._resizeReposScheduled then
+            Mux._resizeReposScheduled = true
+            tempTimer(0, function()
+                Mux._resizeReposScheduled = false
+                Mux._runWindowResizePass()
+            end)
         end
-        Mux._notifyAllReposition()
-        Mux._inResize = false
+
+        -- There's no mouse-release to mark the end of a window resize, so settle on
+        -- a trailing idle timer instead: each new event pushes it back, and once the
+        -- drag/animation actually stops it fires once, clears Mux._resizing, and runs
+        -- one final forced pass so anything skipped live (button overflow, deferred
+        -- heavy content resize hooks) settles at the final geometry.
+        if Mux._resizeSettleTimer then killTimer(Mux._resizeSettleTimer) end
+        Mux._resizeSettleTimer = tempTimer(0.15, function()
+            Mux._resizeSettleTimer = nil
+            Mux._resizing = false
+            Mux._runWindowResizePass()
+        end)
     end)
 end
 
