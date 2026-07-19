@@ -49,7 +49,12 @@ end
 -- where panes across the whole workspace may have moved. For a localized ratio
 -- change during a handle drag, use MuxSplit:_notifyReposition() instead, which
 -- only walks the affected subtree.
-function Mux._notifyAllReposition()
+--
+-- skipExtras skips the reanchor/raise passes below (both O(panes), and neither
+-- needs to track every intermediate frame of a live drag — only the final
+-- settled geometry). Used by the window-resize live pass; every other caller
+-- leaves it nil and gets the full behavior.
+function Mux._notifyAllReposition(skipExtras)
     for _, p in pairs(Mux._panes) do
         if p.onReposition then p.onReposition(p) end
         -- Floating dialogs/panes don't sit in the split tree, so a structural change
@@ -62,6 +67,7 @@ function Mux._notifyAllReposition()
         end
         if Mux._relayoutContent then Mux._relayoutContent(p) end
     end
+    if skipExtras then return end
     if Mux._reanchorAll then Mux._reanchorAll() end
     -- Keep floating panes above embedded ones after any structural layout change.
     -- raise() is z-order only; conditionally-hidden floating panes stay hidden.
@@ -973,21 +979,40 @@ Mux._inResize = Mux._inResize or false
 -- The actual pane-space/reposition pass a native window resize triggers. Split
 -- out from the event handler so both the per-frame coalesced call and the
 -- trailing settle call below share one implementation.
-function Mux._runWindowResizePass()
+--
+-- isLive=true (the per-frame coalesced call) skips Mux._reanchorAll/raiseFloatingPanes
+-- via _notifyAllReposition's skipExtras — those are O(panes) and only need to run once,
+-- on the final settle, not on every intermediate frame of a live drag.
+--
+-- Timing is accumulated into Mux._resizePass* whenever Mux.debug is on, and reported
+-- as one summary line per resize gesture by the settle timer below — this is what
+-- actually tells us whether a slow resize is "too many passes" (coalescing not
+-- working) or "each pass is too expensive" (needs cheaper per-frame work), instead
+-- of guessing.
+function Mux._runWindowResizePass(isLive)
     -- setBorderSizes can itself fire sysWindowResizeEvent; guard against recursion.
     if Mux._inResize then return end
     Mux._inResize = true
+    local t0 = Mux.debug and os.clock() or nil
     for _, ps in pairs(Mux._paneSpaces) do
         if ps._onWindowResize then ps:_onWindowResize() end
     end
-    Mux._notifyAllReposition()
+    Mux._notifyAllReposition(isLive)
     Mux._inResize = false
+    if t0 then
+        local ms = (os.clock() - t0) * 1000
+        Mux._resizePassCount   = (Mux._resizePassCount or 0) + 1
+        Mux._resizePassMsTotal = (Mux._resizePassMsTotal or 0) + ms
+        Mux._resizePassMsMax   = math.max(Mux._resizePassMsMax or 0, ms)
+    end
 end
 
 function Mux._registerResizeHandler()
     if Mux._resizeHandler then return end
     Mux._resizeHandler = registerAnonymousEventHandler("sysWindowResizeEvent", function()
         if Mux._inResize then return end
+
+        Mux._resizeEventCount = (Mux._resizeEventCount or 0) + 1
 
         -- Dragging the real Mudlet window (or the maximize/restore animation) fires
         -- this once per frame, far faster than a full pane/content reposition can
@@ -1004,20 +1029,30 @@ function Mux._registerResizeHandler()
             Mux._resizeReposScheduled = true
             tempTimer(0, function()
                 Mux._resizeReposScheduled = false
-                Mux._runWindowResizePass()
+                Mux._runWindowResizePass(true)
             end)
         end
 
         -- There's no mouse-release to mark the end of a window resize, so settle on
         -- a trailing idle timer instead: each new event pushes it back, and once the
         -- drag/animation actually stops it fires once, clears Mux._resizing, and runs
-        -- one final forced pass so anything skipped live (button overflow, deferred
-        -- heavy content resize hooks) settles at the final geometry.
+        -- one final forced pass (reanchor/raise included) so anything skipped live
+        -- settles at the final geometry.
         if Mux._resizeSettleTimer then killTimer(Mux._resizeSettleTimer) end
         Mux._resizeSettleTimer = tempTimer(0.15, function()
             Mux._resizeSettleTimer = nil
             Mux._resizing = false
-            Mux._runWindowResizePass()
+            Mux._runWindowResizePass(false)
+            if Mux.debug then
+                Mux._echo(string.format(
+                    "\n<grey>[mux perf] window resize: %d events -> %d passes, total=%.0fms max=%.0fms<reset>\n",
+                    Mux._resizeEventCount or 0, Mux._resizePassCount or 0,
+                    Mux._resizePassMsTotal or 0, Mux._resizePassMsMax or 0))
+            end
+            Mux._resizeEventCount  = 0
+            Mux._resizePassCount   = 0
+            Mux._resizePassMsTotal = 0
+            Mux._resizePassMsMax   = 0
         end)
     end)
 end
