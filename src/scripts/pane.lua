@@ -2024,6 +2024,16 @@ end
 -- Called automatically via onReposition for consoleBorders panes.
 function MuxPane:updateConsoleBorders()
     if not self.consoleBorders then return end
+    -- setBorderSizes is a synchronous call into Mudlet's own console widget
+    -- (Host::setBorders / TConsole::resizeEvent) and is expensive enough that
+    -- calling it every frame of a live native-window resize is what made a whole
+    -- window drag take seconds (measured ~3s per call). Mux._windowResizeLive is
+    -- set only around Mux._runWindowResizePass's per-frame live pass, so this skips
+    -- there and settles once the drag actually stops (the trailing settle pass runs
+    -- this same function with the flag clear). Split-handle/pane-corner drags never
+    -- set this flag, so they're unaffected — they already pay this cost once, on
+    -- release, by design (see split.lua's console-touching-drag comments).
+    if Mux._windowResizeLive then return end
     local theme = Mux.activeTheme()
     local bi = 2
     local tb = self.titlebarVisible and theme.titlebarHeight or 0

@@ -242,10 +242,22 @@ end
 function Mux._applyGeometry(win)
     if not win or not win.name then return end
     -- ScrollBox overwrites its own get_x/get_y to a constant 0 after its first
-    -- reposition() (so its children measure relative to its internal window);
-    -- reading that here would move the scrollbox itself to (0,0). Its own
-    -- reposition() (already run by the caller) positions it correctly.
-    if win.type ~= "userwindow" and win.type ~= "scrollBox" then
+    -- reposition() (so its children measure relative to its internal window), so
+    -- this function can no longer read its true position the normal way. Its
+    -- custom Geyser.ScrollBox:reposition() override is the only code path that
+    -- still knows how to recompute and natively apply that position — calling it
+    -- here re-syncs the scrollbox's real Qt geometry (and, via its own internal
+    -- loop, its children's) instead of leaving it stale. Skipping this (as a
+    -- previous version did, assuming some caller's stock reposition() already ran)
+    -- left embedded-pane scrollboxes with stale native geometry after a suppressed
+    -- fast-path resize (Mux._suppressReposition skips reposition() entirely), since
+    -- split-drag resizing is the only path that uses this fast path instead of a
+    -- stock reposition() call.
+    if win.type == "scrollBox" then
+        if win.reposition then win:reposition() end
+        return
+    end
+    if win.type ~= "userwindow" then
         moveWindow(win.name, win:get_x(), win:get_y())
         resizeWindow(win.name, win:get_width(), win:get_height())
     end
@@ -980,24 +992,37 @@ Mux._inResize = Mux._inResize or false
 -- out from the event handler so both the per-frame coalesced call and the
 -- trailing settle call below share one implementation.
 --
--- isLive=true (the per-frame coalesced call) skips Mux._reanchorAll/raiseFloatingPanes
--- via _notifyAllReposition's skipExtras — those are O(panes) and only need to run once,
--- on the final settle, not on every intermediate frame of a live drag.
+-- isLive=true (the per-frame coalesced call) skips two things that measured ~3s
+-- EACH in practice, both of which are native setBorderSizes() calls into Mudlet's
+-- own console widget (see Host::setBorders / TConsole::resizeEvent — a synchronous
+-- call, not queued, so its cost lands entirely inside this function's timing):
+--   1. The MuxPaneSpace border-contribution loop below (each paneSpace's
+--      _updateBorderContribution ends in its own Mux._applyBorders() call).
+--   2. MuxPane:updateConsoleBorders(), chained into onReposition for the pane
+--      hosting the native console, gated on Mux._windowResizeLive.
+-- Both are exactly the kind of per-frame-during-a-drag cost split.lua's own
+-- comments already call out as "fine once, on release, but ruinous per-frame"
+-- for a console-touching split drag — the same tradeoff applies here: skip live,
+-- pay it once on the trailing settle pass (isLive=false) instead.
+-- isLive=true also skips Mux._reanchorAll/raiseFloatingPanes via _notifyAllReposition's
+-- skipExtras — those are O(panes) and only need to run once, on the final settle.
 --
 -- Timing is accumulated into Mux._resizePass* whenever Mux.debug is on, and reported
 -- as one summary line per resize gesture by the settle timer below — this is what
--- actually tells us whether a slow resize is "too many passes" (coalescing not
--- working) or "each pass is too expensive" (needs cheaper per-frame work), instead
--- of guessing.
+-- actually told us the above two calls were the cost, instead of guessing.
 function Mux._runWindowResizePass(isLive)
     -- setBorderSizes can itself fire sysWindowResizeEvent; guard against recursion.
     if Mux._inResize then return end
     Mux._inResize = true
     local t0 = Mux.debug and os.clock() or nil
-    for _, ps in pairs(Mux._paneSpaces) do
-        if ps._onWindowResize then ps:_onWindowResize() end
+    Mux._windowResizeLive = isLive
+    if not isLive then
+        for _, ps in pairs(Mux._paneSpaces) do
+            if ps._onWindowResize then ps:_onWindowResize() end
+        end
     end
     Mux._notifyAllReposition(isLive)
+    Mux._windowResizeLive = false
     Mux._inResize = false
     if t0 then
         local ms = (os.clock() - t0) * 1000
