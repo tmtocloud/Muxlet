@@ -254,7 +254,19 @@ function Mux._applyGeometry(win)
     -- split-drag resizing is the only path that uses this fast path instead of a
     -- stock reposition() call.
     if win.type == "scrollBox" then
+        -- TEMP DEBUG (who-pane embedded-resize investigation): confirm this branch
+        -- actually runs during a split-drag and log what reposition() computes.
+        if Mux.debug then
+            Mux._log("applyGeometry scrollBox %s -> reposition() [pre: x=%s y=%s w=%s h=%s]",
+                tostring(win.name), tostring(win:get_x()), tostring(win:get_y()),
+                tostring(win:get_width()), tostring(win:get_height()))
+        end
         if win.reposition then win:reposition() end
+        if Mux.debug then
+            Mux._log("applyGeometry scrollBox %s <- reposition() done [post: x=%s y=%s w=%s h=%s]",
+                tostring(win.name), tostring(win:get_x()), tostring(win:get_y()),
+                tostring(win:get_width()), tostring(win:get_height()))
+        end
         return
     end
     if win.type ~= "userwindow" then
