@@ -2042,11 +2042,27 @@ function MuxPane:updateConsoleBorders()
     local py = self.outer:get_y()
     local pw = self.outer:get_width()
     local ph = self.outer:get_height()
-    local top    = py + bi + tb
-    local left   = px + bi
-    local right  = sw - (px + pw) + bi
-    local bottom = sh - (py + ph) + bi
-    setBorderSizes(math.max(0, top), math.max(0, right), math.max(0, bottom), math.max(0, left))
+    local top    = math.max(0, py + bi + tb)
+    local left   = math.max(0, px + bi)
+    local right  = math.max(0, sw - (px + pw) + bi)
+    local bottom = math.max(0, sh - (py + ph) + bi)
+
+    -- setBorderSizes is a synchronous call into Mudlet's own console widget and
+    -- measured ~3s on its own in a busy session (see the comment above). This
+    -- function is chained into onReposition, so it re-runs on every full
+    -- reposition — most of which don't actually move the console pane (e.g. an
+    -- unrelated pane's condition-rule show/hide elsewhere in the tree). Skip the
+    -- native call when the computed borders match what's already applied, the
+    -- same cache-and-skip already used for content resize hooks (content.lua's
+    -- _lastContentW/H check).
+    if self._lastBorderT == top and self._lastBorderR == right
+        and self._lastBorderB == bottom and self._lastBorderL == left then
+        return
+    end
+    self._lastBorderT, self._lastBorderR = top, right
+    self._lastBorderB, self._lastBorderL = bottom, left
+
+    setBorderSizes(top, right, bottom, left)
     Mux._log("updateConsoleBorders: t=%d r=%d b=%d l=%d", top, right, bottom, left)
 end
 
