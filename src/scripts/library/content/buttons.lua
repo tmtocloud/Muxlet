@@ -155,8 +155,12 @@ render = function(target)
     if not (C and C.get_width) then return end
     local cfg = configFor(target.id)
     local g   = target._gid
-    local W   = C:get_width();  if W < 50 then W = 300 end
-    local H   = C:get_height(); if H < 30 then H = 120 end
+    -- Only substitute a placeholder size when the container hasn't been laid
+    -- out yet (0/nil). A real-but-small pane (e.g. a thin button strip) must
+    -- keep its true size here, or "fill" sizing balloons rows past it and the
+    -- buttons visually bleed into whatever sits below/beside the pane.
+    local W   = C:get_width();  if not W or W <= 0 then W = 300 end
+    local H   = C:get_height(); if not H or H <= 0 then H = 120 end
     clearWidgets(st)
     st.gen = (st.gen or 0) + 1
     local gen = st.gen
