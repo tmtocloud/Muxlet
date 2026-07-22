@@ -212,13 +212,7 @@ Mux.registerContent("mux_restart_required_confirm", {
 })
 
 function Mux._promptRestartRequired(message)
-    -- Every caller reaches this in the same tick installPackage() returns, but
-    -- the freshly loaded package's own bootstrap (settings.lua's tempTimer(0)
-    -- theme apply / Mux._ready / muxletReady) is itself deferred a tick and
-    -- hasn't run yet. Building the dialog immediately here races that
-    -- bootstrap and can wire its titlebar/footer against half-settled state.
-    -- Deferring one tick queues us behind that already-scheduled timer.
-    tempTimer(0, function()
+    local function build()
         local dlg = Mux.createDialog({
             title       = "Restart Recommended",
             width       = 380, height = 170,
@@ -227,7 +221,31 @@ function Mux._promptRestartRequired(message)
         })
         _restartPromptPending = { dlg = dlg, message = message or RESTART_NOTICE }
         Mux._applyContent(dlg, "mux_restart_required_confirm")
-    end)
+    end
+
+    -- Every caller reaches this in the same tick installPackage() returns, but a
+    -- reinstall tears down and rebuilds the whole workspace over the following
+    -- ticks (settings.lua's own tempTimer(0) theme apply / Mux._ready /
+    -- muxletReady, often chained into a host's own afterLogin-gated fullStart).
+    -- Both this dialog's initial placement (MuxDialog:init) and its post-apply
+    -- auto-fit (Mux._applyContent -> computeAutoFit) key off getMainWindowSize(),
+    -- which can report a transient/wrong size anywhere in that window -- a bad
+    -- reading there is what produces the occasional tiny, corner-pinned dialog.
+    -- A single hardcoded tick isn't a reliable enough wait, so instead poll until
+    -- two consecutive ticks agree on the window size, and only build against a
+    -- settled reading. Capped so a size that (should never, but) never repeats
+    -- can't hang the dialog forever.
+    local function waitForStableSize(triesLeft, lastW, lastH)
+        tempTimer(0, function()
+            local w, h = getMainWindowSize()
+            if triesLeft <= 0 or (w and w > 0 and w == lastW and h == lastH) then
+                build()
+            else
+                waitForStableSize(triesLeft - 1, w, h)
+            end
+        end)
+    end
+    waitForStableSize(30, nil, nil)
 end
 
 -- Reinstall Muxlet from a local .mpackage. CRITICAL: this is deferred to a
