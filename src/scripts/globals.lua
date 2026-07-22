@@ -131,7 +131,7 @@ function Mux._class(parent)
     if parent then
         setmetatable(cls, { __index = parent })
     end
-    function cls:new(opts)
+    function cls.new(_, opts)
         local inst = setmetatable({}, cls)
         if inst.init then inst:init(opts) end
         return inst
@@ -204,16 +204,37 @@ end
 -- commits all four sides in a single setBorderSizes call to avoid ordering issues.
 Mux._borders = Mux._borders or { top = 0, right = 0, bottom = 0, left = 0 }
 
+-- setBorderSizes has two independent writers: Mux._applyBorders() (docked-zone/
+-- screen-zone contributions, below) and MuxPane:updateConsoleBorders() (the
+-- console-hosting pane's own split-tree geometry, in pane.lua). Both skip the
+-- native call when redundant, so they have to share ONE "what's actually
+-- applied" cache rather than each keeping a private one — otherwise whichever
+-- writer runs second can see its own value already matches ITS last call and
+-- skip, even though the OTHER writer clobbered the native state in between.
+-- That left setBorderSizes(0,0,0,0) stuck after a screen-zone reposition
+-- (unconditional, uncached) ran after updateConsoleBorders had already cached
+-- a cache-hit for the correct value — most visible loading a profile already
+-- maximized, where init timers fire in a different order than a live drag.
+Mux._lastAppliedBorders = Mux._lastAppliedBorders or nil
+
+function Mux._setNativeBorders(top, right, bottom, left)
+    local last = Mux._lastAppliedBorders
+    if last and last.top == top and last.right == right
+        and last.bottom == bottom and last.left == left then
+        return
+    end
+    setBorderSizes(top, right, bottom, left)
+    Mux._lastAppliedBorders = { top = top, right = right, bottom = bottom, left = left }
+    Mux._log("setBorderSizes(t=%d r=%d b=%d l=%d)", top, right, bottom, left)
+end
+
 function Mux._applyBorders()
-    setBorderSizes(
+    Mux._setNativeBorders(
         Mux._borders.top,
         Mux._borders.right,
         Mux._borders.bottom,
         Mux._borders.left
     )
-    Mux._log("setBorderSizes(t=%d r=%d b=%d l=%d)",
-        Mux._borders.top, Mux._borders.right,
-        Mux._borders.bottom, Mux._borders.left)
 end
 
 -- Runs fn() with Geyser's per-constraint-change reposition suppressed. Geyser's
@@ -296,6 +317,23 @@ Mux._contextMenu = Mux._contextMenu or {
         rowLabels  = {},
         visible    = false,
     },
+}
+
+-- Fallback CSS/colors for context-menu rows when the active theme doesn't define
+-- its own. Shared between showSubmenu() and Mux._showItemMenu() (submenu vs.
+-- top-level menu use the identical fallback set).
+local DEFAULT_MENU_CSS = {
+    item = "background-color:rgba(0,0,0,0);border:none;border-radius:7px;" ..
+        "padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    itemHover = "background-color:rgba(120,160,255,0.18);border:none;border-radius:7px;" ..
+        "padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    danger = "background-color:rgba(0,0,0,0);border:none;border-radius:7px;" ..
+        "padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    dangerHover = "background-color:rgba(216,72,72,0.26);border:none;border-radius:7px;" ..
+        "padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';",
+    sep = "background-color:transparent;border:none;border-top:1px solid rgba(255,255,255,0.07);",
+    text = "rgba(220, 222, 235, 0.95)",
+    dangerText = "rgba(232, 120, 120, 0.95)",
 }
 
 local function ensureMenuRows(count)
@@ -387,13 +425,13 @@ local function showSubmenu(submenuItems, parentMenuX, parentRowY)
     submenu.panel:show()
     submenu.panel:raiseAll()
 
-    local itemCss      = theme.contextMenuItemCss        or "background-color:rgba(0,0,0,0);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
-    local itemHoverCss = theme.contextMenuItemHoverCss   or "background-color:rgba(120,160,255,0.18);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
-    local dangerCss    = theme.contextMenuDangerCss      or "background-color:rgba(0,0,0,0);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
-    local dangerHover  = theme.contextMenuDangerHoverCss or "background-color:rgba(216,72,72,0.26);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
-    local sepCss       = theme.contextMenuSepCss         or "background-color:transparent;border:none;border-top:1px solid rgba(255,255,255,0.07);"
-    local textColor    = theme.contextMenuTextColor       or "rgba(220, 222, 235, 0.95)"
-    local dangerColor  = theme.contextMenuDangerTextColor or "rgba(232, 120, 120, 0.95)"
+    local itemCss      = theme.contextMenuItemCss        or DEFAULT_MENU_CSS.item
+    local itemHoverCss = theme.contextMenuItemHoverCss   or DEFAULT_MENU_CSS.itemHover
+    local dangerCss    = theme.contextMenuDangerCss      or DEFAULT_MENU_CSS.danger
+    local dangerHover  = theme.contextMenuDangerHoverCss or DEFAULT_MENU_CSS.dangerHover
+    local sepCss       = theme.contextMenuSepCss         or DEFAULT_MENU_CSS.sep
+    local textColor    = theme.contextMenuTextColor       or DEFAULT_MENU_CSS.text
+    local dangerColor  = theme.contextMenuDangerTextColor or DEFAULT_MENU_CSS.dangerText
 
     local rowY = submenuY
     for index, item in ipairs(submenuItems) do
@@ -485,13 +523,13 @@ function Mux._showItemMenu(globalX, globalY, items)
 
     ensureMenuRows(#items)
 
-    local itemCss      = theme.contextMenuItemCss        or "background-color:rgba(0,0,0,0);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
-    local itemHoverCss = theme.contextMenuItemHoverCss   or "background-color:rgba(120,160,255,0.18);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
-    local dangerCss    = theme.contextMenuDangerCss      or "background-color:rgba(0,0,0,0);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
-    local dangerHover  = theme.contextMenuDangerHoverCss or "background-color:rgba(216,72,72,0.26);border:none;border-radius:7px;padding-left:14px;qproperty-alignment:'AlignVCenter|AlignLeft';"
-    local sepCss       = theme.contextMenuSepCss         or "background-color:transparent;border:none;border-top:1px solid rgba(255,255,255,0.07);"
-    local textColor    = theme.contextMenuTextColor       or "rgba(220, 222, 235, 0.95)"
-    local dangerColor  = theme.contextMenuDangerTextColor or "rgba(232, 120, 120, 0.95)"
+    local itemCss      = theme.contextMenuItemCss        or DEFAULT_MENU_CSS.item
+    local itemHoverCss = theme.contextMenuItemHoverCss   or DEFAULT_MENU_CSS.itemHover
+    local dangerCss    = theme.contextMenuDangerCss      or DEFAULT_MENU_CSS.danger
+    local dangerHover  = theme.contextMenuDangerHoverCss or DEFAULT_MENU_CSS.dangerHover
+    local sepCss       = theme.contextMenuSepCss         or DEFAULT_MENU_CSS.sep
+    local textColor    = theme.contextMenuTextColor       or DEFAULT_MENU_CSS.text
+    local dangerColor  = theme.contextMenuDangerTextColor or DEFAULT_MENU_CSS.dangerText
 
     local rowY = menuY + padY
     for index, item in ipairs(items) do
@@ -858,7 +896,8 @@ function Mux._showContentLibrary(pane)
     -- in scripts.json, so Mux.ui.registerWidget isn't available at this file's own
     -- load time — only once something actually opens the dialog at runtime.
     if Mux.ui and Mux.ui.registerWidget and not (Mux.ui._widgets and Mux.ui._widgets["mux_contentLibraryRow"]) then
-        Mux.ui.registerWidget("mux_contentLibraryRow", _buildContentLibraryRow, { layout = "block", rowHeight = LIB_ROW_H })
+        Mux.ui.registerWidget("mux_contentLibraryRow", _buildContentLibraryRow,
+            { layout = "block", rowHeight = LIB_ROW_H })
     end
 
     -- Bucket by group; sort content within each bucket alphabetically (matches
@@ -1409,7 +1448,8 @@ end
 
 function Mux._showTitlebarIconStack(x, y, w, h, items)
     local theme   = Mux.activeTheme()
-    local btnCss  = theme.btnCss or "background-color: rgba(40,46,72,240); border: 1px solid rgba(100,160,255,0.35); border-radius: 3px;"
+    local btnCss  = theme.btnCss
+        or "background-color: rgba(40,46,72,240); border: 1px solid rgba(100,160,255,0.35); border-radius: 3px;"
     local textCol = theme.btnTextColor or "#aaaabb"
     -- Colour each glyph to the titlebar resting colour; the cascade applies btnCss
     -- (which carries any :hover rule) as the box style.

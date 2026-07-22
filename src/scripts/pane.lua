@@ -123,7 +123,7 @@ function MuxPane:init(opts)
         height  = "100%",
         fillBg  = 1,
     }, self.outer)
-    self.frame:setClickCallback(function(event)
+    self.frame:setClickCallback(function()
         if Mux._movingTab then Mux._cancelTabMove(); return end
         if Mux.raisePane then Mux.raisePane(self) end
     end)
@@ -195,7 +195,7 @@ function MuxPane:init(opts)
         fillBg = 1,
     }, self.content)
     self.contentBg:setStyleSheet(theme.contentCss or "")
-    self.contentBg:setClickCallback(function(event)
+    self.contentBg:setClickCallback(function()
         if Mux._movingTab then Mux._cancelTabMove(); return end
         if Mux.raisePane then Mux.raisePane(self) end
     end)
@@ -392,9 +392,6 @@ end
 -- "Show self" reactive action: reveal the pane; if embedded, restore its slot's
 -- weight so the layout returns to normal.
 function MuxPane:_conditionShow()
-    if not self._conditionHidden and self.outer and self.outer.get_x then
-        -- already visible; still ensure layout is consistent
-    end
     Mux._log("_conditionShow %s (was hidden=%s)", tostring(self.id), tostring(self._conditionHidden))
     self._conditionHidden = false
     self:show()
@@ -720,7 +717,7 @@ function MuxPane:_buildTitlebar(theme)
 
     -- Double-click embeds a floating pane into the nearest ghost slot.
     -- For embedded panes, double-click just sets focus.
-    self.titlebar:setDoubleClickCallback(function(event)
+    self.titlebar:setDoubleClickCallback(function()
         -- An anchored pane double-clicks back to its anchor, ahead of any dock
         -- behaviour — applies whether or not the pane is convertible.
         if self.anchor then self:returnToAnchor(); return end
@@ -1101,20 +1098,22 @@ local TB_GROUP_RANK = { window = 1, tiling = 2, info = 1, content = 2, console =
 local BUILTIN_TB = {
     -- right · window cluster
     { id="close",  side="right", group="window", order=1, priority=100,
-      get=function(p) return p.closeBtn end,    visible=function(c) return c.pane.closeable and not Mux._isLastEmbeddedPane(c.pane) end,
+      get=function(p) return p.closeBtn end,
+      visible=function(c) return c.pane.closeable and not Mux._isLastEmbeddedPane(c.pane) end,
       menuText="✕  Close Pane", danger=true, menuGroup="window", menuOrder=10,
       run=function(c) c.pane:_confirmClose() end },
     { id="add",    side="left", group="info", order=4, priority=100,
       get=function(p) return p.addPaneBtn end,  visible=function(c) return c.pane.addable end,
       menuText="+  Add Floating Pane", menuGroup="info", menuOrder=95,
-      run=function(c) Mux._addFloatingPane() end },
+      run=function() Mux._addFloatingPane() end },
     { id="min",    side="right", group="window", order=2, priority=90,
       get=function(p) return p.minBtn end,       visible=function(c) return c.pane:_minBtnVisible() end,
       menuText="–  Minimize", menuGroup="window", menuOrder=20,
       run=function(c) c.pane:toggleMinimize() end },
     { id="zoom",   side="right", group="window", order=3, priority=70,
       get=function(p) return p.zoomBtn end,
-      visible=function(c) local p=c.pane; return p.zoomable and (p._split or p.floating or p._zoomed) and true or false end,
+      visible=function(c) local p=c.pane
+        return p.zoomable and (p._split or p.floating or p._zoomed) and true or false end,
       menuText=function(c) return c.pane._zoomed and "⧉  Unzoom" or "□  Zoom" end,
       menuGroup="window", menuOrder=30, run=function(c) c.pane:zoom() end },
     -- right · tiling cluster
@@ -1125,7 +1124,9 @@ local BUILTIN_TB = {
       run=function(c) if c.pane._split then c.pane._split:swapSlots() end end },
     { id="anchor", side="right", group="tiling", order=1, priority=50,
       get=function(p) return p.anchorBtn end,
-      visible=function(c) local p=c.pane; return p.floating and p.anchorable and (p.showAnchorElement ~= false) and not p._zoomed and true or false end,
+      visible=function(c) local p=c.pane
+        return p.floating and p.anchorable and (p.showAnchorElement ~= false)
+            and not p._zoomed and true or false end,
       menuText="⚓  Anchor", menuGroup="tiling", menuOrder=40,
       submenu=function(c) if c.pane.anchor then return {
           { text="Return to anchor", fn=function() c.pane:returnToAnchor() end },
@@ -1145,10 +1146,12 @@ local BUILTIN_TB = {
     -- left · info cluster
     { id="properties", side="left", group="info", order=2, priority=110,
       get=function(p) return p.infoBtn end,
-      visible=function(c) local p=c.pane; return p.contextMenu and p.infoBtn and (p.showSettingsInMenu or p.propertiesButton) and true or false end,
+      visible=function(c) local p=c.pane
+        return p.contextMenu and p.infoBtn and (p.showSettingsInMenu or p.propertiesButton) and true or false end,
       menuText=function(c) return c.pane.showSettingsInMenu and "⚙  Settings" or "≡  Properties" end,
       menuGroup="info", menuOrder=80,
-      run=function(c) if c.pane.showSettingsInMenu then Mux.settings.toggle() else Mux.showPaneProperties(c.pane) end end },
+      run=function(c)
+        if c.pane.showSettingsInMenu then Mux.settings.toggle() else Mux.showPaneProperties(c.pane) end end },
     { id="content",    side="left", group="info", order=3, priority=80,
       get=function(p) return p.contentBtn end,
       visible=function(c) return c.pane:_contentEnabled() end,
@@ -1193,7 +1196,8 @@ function MuxPane:_makeTbButton(spec)
     end
     echo(false)
     if spec.tooltip then btn:setToolTip(spec.tooltip) end
-    btn:setOnEnter(function() btn:setStyleSheet(Mux.activeTheme()[hoverKey] or Mux.activeTheme().btnCss); echo(true) end)
+    btn:setOnEnter(function()
+        btn:setStyleSheet(Mux.activeTheme()[hoverKey] or Mux.activeTheme().btnCss); echo(true) end)
     btn:setOnLeave(function() btn:setStyleSheet(Mux.activeTheme().btnCss or ""); echo(false) end)
     if spec.onClick then
         btn:setClickCallback(function(event) spec.onClick(self:_elementCtx(), event) end)
@@ -2017,7 +2021,7 @@ function MuxPane:_disableConsoleBorders()
     end
     if disableClickthrough and self.frame then pcall(disableClickthrough, self.frame.name) end
     if self.contentBg then pcall(function() self.contentBg:show() end) end
-    if setBorderSizes then setBorderSizes(0, 0, 0, 0) end
+    if Mux._setNativeBorders then Mux._setNativeBorders(0, 0, 0, 0) end
 end
 
 -- Recalculates setBorderSizes so the Mudlet native console tracks the content area.
@@ -2052,18 +2056,12 @@ function MuxPane:updateConsoleBorders()
     -- function is chained into onReposition, so it re-runs on every full
     -- reposition — most of which don't actually move the console pane (e.g. an
     -- unrelated pane's condition-rule show/hide elsewhere in the tree). Skip the
-    -- native call when the computed borders match what's already applied, the
-    -- same cache-and-skip already used for content resize hooks (content.lua's
-    -- _lastContentW/H check).
-    if self._lastBorderT == top and self._lastBorderR == right
-        and self._lastBorderB == bottom and self._lastBorderL == left then
-        return
-    end
-    self._lastBorderT, self._lastBorderR = top, right
-    self._lastBorderB, self._lastBorderL = bottom, left
-
-    setBorderSizes(top, right, bottom, left)
-    Mux._log("updateConsoleBorders: t=%d r=%d b=%d l=%d", top, right, bottom, left)
+    -- native call when the computed borders match what's already applied.
+    -- Mux._setNativeBorders shares its "already applied" cache with
+    -- Mux._applyBorders (the other setBorderSizes writer, in globals.lua) — a
+    -- private per-pane cache here would go stale whenever that other writer
+    -- changed the native state without this pane's own geometry changing.
+    Mux._setNativeBorders(top, right, bottom, left)
 end
 
 -- The capabilities the last remaining embedded pane must surrender so the workspace
@@ -2416,7 +2414,8 @@ function MuxPane:_buildCornerHandles(theme)
             local deltaY = event.globalY - drag.startY
             local minW, minH = 120, 60
 
-            local newX, newY, newW, newH = drag.paneX, drag.paneY, drag.paneW, drag.paneH
+            local newX, newY = drag.paneX, drag.paneY
+            local newW, newH
 
             if dx < 0 then
                 local clampedDx = math.min(deltaX, drag.paneW - minW)

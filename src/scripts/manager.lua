@@ -552,7 +552,7 @@ function Mux.fullStop(quiet)
 
     Mux._closeContextMenu()
     Mux._clearWorkspace()
-    setBorderSizes(0, 0, 0, 0)
+    Mux._setNativeBorders(0, 0, 0, 0)
 
 
     Mux.settings.load()
