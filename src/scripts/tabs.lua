@@ -797,17 +797,13 @@ function MuxTab:_conditionHide()
     if not host then return end
     local _, idx = host:_findTab(self.id)
     if not idx then return end
-    -- Hide this tab's own content unconditionally rather than only as a side
-    -- effect of the active-tab handoff below. Content visibility must be a
-    -- direct function of _conditionHidden -- not contingent on activeTabId
-    -- still pointing at self by the time this rule happens to fire, which
-    -- isn't guaranteed when several sibling tabs' rules react to the same
-    -- GMCP event in an unspecified order.
+    -- Set the guard before _activateTabObj below, which can reenter this function.
+    self._conditionHidden = true
     self.content:hide()
     if host._activeTabId == self.id then
         local nextTab = nil
         for _, t in ipairs(host._tabs) do
-            if t.id ~= self.id then nextTab = t; break end
+            if t.id ~= self.id and not t._conditionHidden then nextTab = t; break end
         end
         if nextTab then
             host:_activateTabObj(nextTab)
@@ -825,7 +821,6 @@ function MuxTab:_conditionHide()
     table.insert(host._hiddenTabs, self)
     host:_relayoutTabLabels()
     if host._isSubTabHost then host:_resizeSubTabBar() end
-    self._conditionHidden = true
     -- That was the last visible tab in this host: nothing left to show, so
     -- collapse the host itself the same way a directly condition-gated pane
     -- (or parent sub-tab) would, instead of leaving an empty bar over an
