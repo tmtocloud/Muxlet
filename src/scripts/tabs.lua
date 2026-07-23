@@ -865,7 +865,10 @@ function MuxTab:_conditionShow()
     self._conditionHidden = false
     host:_relayoutTabLabels()
     if host._isSubTabHost then host:_resizeSubTabBar() end
-    if not host._activeTabId then host:_activateTabObj(self) end
+    -- Also activate if activeTabId is stale (points at a removed tab), not just nil.
+    if not host._activeTabId or not host:_findTab(host._activeTabId) then
+        host:_activateTabObj(self)
+    end
     Mux._scheduleAutoSave()
 end
 
