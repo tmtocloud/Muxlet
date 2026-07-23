@@ -211,6 +211,15 @@ Mux.registerContent("mux_restart_required_confirm", {
     remove = function(_) end,
 })
 
+-- Singleton key for the dialog itself: devmode's local-build watcher and the
+-- update system can each independently reach this function around the same
+-- reinstall (e.g. a build landing on disk while "Update Now" is also running),
+-- and with no dedup a second call created a second dialog instance stacked on
+-- the first. Mux.createDialog's singleton re-raises the existing one instead —
+-- what looked like a mispositioned/corrupted dialog was actually an older
+-- instance peeking out from behind the newer one on top of it.
+local RESTART_DIALOG_KEY = "mux_restart_required"
+
 function Mux._promptRestartRequired(message)
     local function build()
         local dlg = Mux.createDialog({
@@ -218,6 +227,7 @@ function Mux._promptRestartRequired(message)
             width       = 380, height = 170,
             closeable   = false,
             contextMenu = false,
+            singleton   = RESTART_DIALOG_KEY,
         })
         _restartPromptPending = { dlg = dlg, message = message or RESTART_NOTICE }
         Mux._applyContent(dlg, "mux_restart_required_confirm")

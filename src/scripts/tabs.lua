@@ -797,6 +797,13 @@ function MuxTab:_conditionHide()
     if not host then return end
     local _, idx = host:_findTab(self.id)
     if not idx then return end
+    -- Hide this tab's own content unconditionally rather than only as a side
+    -- effect of the active-tab handoff below. Content visibility must be a
+    -- direct function of _conditionHidden -- not contingent on activeTabId
+    -- still pointing at self by the time this rule happens to fire, which
+    -- isn't guaranteed when several sibling tabs' rules react to the same
+    -- GMCP event in an unspecified order.
+    self.content:hide()
     if host._activeTabId == self.id then
         local nextTab = nil
         for _, t in ipairs(host._tabs) do
@@ -806,7 +813,6 @@ function MuxTab:_conditionHide()
             host:_activateTabObj(nextTab)
         else
             host._activeTabId = nil
-            self.content:hide()
         end
     end
     host._tabBarBox:remove(self.label)
@@ -820,6 +826,14 @@ function MuxTab:_conditionHide()
     host:_relayoutTabLabels()
     if host._isSubTabHost then host:_resizeSubTabBar() end
     self._conditionHidden = true
+    -- That was the last visible tab in this host: nothing left to show, so
+    -- collapse the host itself the same way a directly condition-gated pane
+    -- (or parent sub-tab) would, instead of leaving an empty bar over an
+    -- empty pane. _conditionShow undoes this once a tab reappears.
+    if #host._tabs == 0 and host._conditionHide and not host._conditionHidden then
+        host._autoHiddenEmpty = true
+        host:_conditionHide()
+    end
     Mux._scheduleAutoSave()
 end
 
@@ -827,6 +841,13 @@ function MuxTab:_conditionShow()
     if not self._conditionHidden then return end
     local host = self.pane
     if not host then return end
+    -- Undo the empty-host collapse from _conditionHide, but only when THIS
+    -- cascade caused it (_autoHiddenEmpty) -- a host hidden by its own separate
+    -- rule must stay hidden until that rule says otherwise.
+    if host._conditionHidden and host._autoHiddenEmpty and host._conditionShow then
+        host._autoHiddenEmpty = nil
+        host:_conditionShow()
+    end
     if host._hiddenTabs then
         for i, t in ipairs(host._hiddenTabs) do
             if t.id == self.id then table.remove(host._hiddenTabs, i); break end

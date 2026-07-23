@@ -451,7 +451,19 @@ function Mux._migrateLegacyRules(subject, src)
         end
         subject._connectionAware = true
     end
-    if #subject.rules > 0 then Mux._registerRuleSubject(subject) end
+    if #subject.rules > 0 then
+        Mux._registerRuleSubject(subject)
+        -- Registration only wires future GMCP events; without an initial forced
+        -- pass, a subject whose gating field never happens to update again after
+        -- this point (e.g. a GMCP key that's simply absent for this account) would
+        -- sit in its default-shown state forever, never finding out it should hide.
+        -- Deferred a tick so migration-time callers (mid-construction) finish first.
+        tempTimer(0, function()
+            if subject.rules and #subject.rules > 0 then
+                Mux._evaluateRules(subject, true)
+            end
+        end)
+    end
 end
 
 -- Serializable copy of a subject's rules (runtime fields stripped). Skips the
