@@ -795,8 +795,7 @@ function MuxTab:_conditionHide()
     if self._conditionHidden then return end
     local host = self.pane
     if not host then return end
-    local _, idx = host:_findTab(self.id)
-    if not idx then return end
+    if not host:_findTab(self.id) then return end
     -- Set the guard before _activateTabObj below, which can reenter this function.
     self._conditionHidden = true
     self.content:hide()
@@ -811,6 +810,11 @@ function MuxTab:_conditionHide()
             host._activeTabId = nil
         end
     end
+    -- Re-find the index now, not before activateTabObj above. A reentrant call
+    -- for a sibling can remove entries from host._tabs in between, shifting
+    -- positions and making an earlier-captured index stale.
+    local _, idx = host:_findTab(self.id)
+    if not idx then return end
     host._tabBarBox:remove(self.label)
     self.label:hide()
     table.remove(host._tabs, idx)
