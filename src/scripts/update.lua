@@ -182,14 +182,21 @@ Mux.registerContent("mux_restart_required_confirm", {
         local cw = target.content:get_width()
         if cw < 50 then cw = (target.floatW or 380) - 4 end
         local body = Geyser.Label:new({
-            name = target._gid .. "_body", x = 10, y = 10, width = cw - 20, height = 68,
+            name = target._gid .. "_rr_body", x = 10, y = 10, width = cw - 20, height = 68,
         }, target.content)
         body:setStyleSheet(Mux.dialogCss.body
             .. "qproperty-alignment: 'AlignLeft|AlignTop'; qproperty-wordWrap: true;")
         body:rawEcho(message)
 
+        -- Named "_rr_close", NOT "_close" -- pane.lua's own titlebar close button
+        -- is unconditionally created as `self._gid .. "_close"` regardless of the
+        -- pane's closeable option (that only controls its later visibility), so
+        -- reusing that exact suffix here silently hijacked the native close-icon
+        -- widget instead of creating an independent one in the body: this button's
+        -- style/text landed on that tiny titlebar slot (a small green "Clo" square
+        -- top-right) while nothing rendered where it was actually meant to appear.
         local btnClose = Geyser.Label:new({
-            name = target._gid .. "_close", x = 20, y = 86, width = 165, height = 34,
+            name = target._gid .. "_rr_close", x = 20, y = 86, width = 165, height = 34,
         }, target.content)
         btnClose:setStyleSheet(Mux.dialogCss.buttonPrimary)
         btnClose:rawEcho("<center>Close Profile</center>")
@@ -200,7 +207,7 @@ Mux.registerContent("mux_restart_required_confirm", {
         end)
 
         local btnLater = Geyser.Label:new({
-            name = target._gid .. "_later", x = 195, y = 86, width = 165, height = 34,
+            name = target._gid .. "_rr_later", x = 195, y = 86, width = 165, height = 34,
         }, target.content)
         btnLater:setStyleSheet(Mux.dialogCss.button)
         btnLater:rawEcho("<center>Close Later</center>")
@@ -1416,6 +1423,14 @@ end
 -- before the timer fires is still picked up correctly.
 local function muxStartupUpdateCheck()
     tempTimer(15, function()
+        -- MUDDLET_DEV_MODE (set by muddlet's injected devmode.lua, if present
+        -- anywhere in this profile) means at least one installed package is a
+        -- dirty local build -- its version string always looks "behind" the
+        -- real release it was built on top of, so the automatic check would
+        -- nag every session for no reason. Manual "Check for updates now"
+        -- still works; only this silent startup path is skipped.
+        if MUDDLET_DEV_MODE then return end
+
         local ns = primaryNamespace()
         if not Mux.settings.get(ns, "update_check_enabled") then return end
 

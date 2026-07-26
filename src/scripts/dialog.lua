@@ -382,6 +382,19 @@ function MuxDialog:fitContent(contentH)
         if self.outer then self.outer:resize(self.floatW or self.outer:get_width(), h) end
         if self._autoPositioned and not self._userMoved then
             self.floatY = _dialogCenteredY(h, self._posSlot, sh)
+            -- One-shot recheck: sh here can be shrunk by the command line's height at
+            -- the instant a command opened this dialog; settles once, doesn't chase.
+            local this = self
+            tempTimer(0.2, function()
+                if not (this and this.outer and this._autoPositioned and not this._userMoved) then return end
+                local _, settledSh = getMainWindowSize()
+                local y = _dialogCenteredY(this.floatH, this._posSlot, settledSh)
+                if math.abs((this.floatY or 0) - y) >= 2 then
+                    this.floatY = y
+                    this.outer:move(this.floatX or 0, y)
+                    if this.outer.reposition then this.outer:reposition() end
+                end
+            end)
         else
             local y = self.floatY or 0
             if y + h > (sh or 0) then self.floatY = math.max(0, (sh or 0) - h) end
@@ -445,9 +458,9 @@ function MuxDialog:mountForm(specs, formOpts)
     -- compute it from the dialog's own float position + chrome (as the settings
     -- dialog does). Content authors get correct popups with no per-dialog code.
     opts.getContentScreenPos = formOpts.getContentScreenPos or function()
-        local theme  = Mux.activeTheme() or {}
-        local bi     = 2
-        local titleH = (this.titlebarVisible ~= false) and (theme.titlebarHeight or 22) or 0
+        local posTheme = Mux.activeTheme() or {}
+        local bi       = 2
+        local titleH   = (this.titlebarVisible ~= false) and (posTheme.titlebarHeight or 22) or 0
         return (this.floatX or 0) + bi, (this.floatY or 0) + bi + titleH
     end
 
