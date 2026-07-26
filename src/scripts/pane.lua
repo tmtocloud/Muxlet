@@ -409,7 +409,15 @@ function MuxPane:_conditionShow()
     -- explicitly rather than relying on the passive _reanchorAll cascade, which
     -- only re-derives panes already marked _atAnchor. See returnToAnchor's docs
     -- — re-show has always been documented as a caller of it, just never wired.
-    if self.anchor then self:returnToAnchor() end
+    -- returnToAnchor snaps to this pane's own raw anchor geometry only (via
+    -- _applyAnchor) — it doesn't know about siblings sharing its anchor line, so a
+    -- follow-up _reanchorAll is needed to re-settle priority order now that this
+    -- pane is back in the mix; otherwise it can land right on top of a
+    -- higher-priority sibling that a moment ago correctly gave it a wide berth.
+    if self.anchor then
+        self:returnToAnchor()
+        if Mux._reanchorAll then Mux._reanchorAll() end
+    end
 end
 
 -- "Hide self" reactive action: hide the pane; if embedded, collapse its slot so the
