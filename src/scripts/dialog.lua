@@ -380,6 +380,21 @@ end
 function MuxDialog:fitContent(contentH)
     self._contentH = contentH or self._contentH or 0
     local _, sh   = getMainWindowSize()
+    -- TEMP DIAGNOSTIC, remove after use: passive snapshots, no typing involved.
+    if self.name == "Welcome to f2ce-tools" then
+        local this = self
+        cecho(string.format(
+            "\n<magenta>[diag] fitContent sh=%d floatY(before)=%s<reset>\n", sh, tostring(self.floatY)))
+        for _, delay in ipairs({0.5, 2, 5}) do
+            tempTimer(delay, function()
+                if this and this.outer then
+                    local _, laterSh = getMainWindowSize()
+                    cecho(string.format(
+                        "\n<magenta>[diag +%.1fs] sh=%d floatY=%d<reset>\n", delay, laterSh, this.floatY or -1))
+                end
+            end)
+        end
+    end
     local theme   = Mux.activeTheme() or {}
     local titleH  = (self.titlebarVisible ~= false) and (theme.titlebarHeight or 22) or 0
     local chrome  = titleH + 2 * 2 + 8           -- titlebar + border inset + footer pad
