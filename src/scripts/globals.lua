@@ -1071,7 +1071,6 @@ function Mux._runWindowResizePass(isLive)
         for _, ps in pairs(Mux._paneSpaces) do
             if ps._onWindowResize then ps:_onWindowResize() end
         end
-        if Mux._recenterSettlingDialogs then Mux._recenterSettlingDialogs() end
     end
     Mux._notifyAllReposition(isLive)
     Mux._windowResizeLive = false

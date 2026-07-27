@@ -257,30 +257,6 @@ local function _dialogCascadePos(w, h, sw, sh)
     return x, y, k
 end
 
--- Re-centers dialogs still within their post-creation grace window (self._recenterUntil,
--- set by fitContent) against the current screen size, then lets the flag expire so a
--- dialog never chases the window for its whole lifetime — just while things are settling.
--- Called from the window-resize settle pass (globals.lua), not per-frame during a drag.
-function Mux._recenterSettlingDialogs()
-    local sw, sh = getMainWindowSize()
-    if not (sw and sh) then return end
-    local now = getEpoch()
-    for _, p in pairs(Mux._panes) do
-        if p._dialog and p._recenterUntil and p.outer then
-            if now > p._recenterUntil then
-                p._recenterUntil = nil
-            elseif p._autoPositioned and not p._userMoved and p.floatH then
-                local y = _dialogCenteredY(p.floatH, p._posSlot, sh)
-                if math.abs((p.floatY or 0) - y) >= 2 then
-                    p.floatY = y
-                    p.outer:move(p.floatX or 0, y)
-                    if p.outer.reposition then p.outer:reposition() end
-                end
-            end
-        end
-    end
-end
-
 --- Constructs the dialog. Called by MuxDialog:new(opts) via Mux._class.
 --
 -- @param  opts.title     string   titlebar label (default: "Dialog")
@@ -406,22 +382,6 @@ function MuxDialog:fitContent(contentH)
         if self.outer then self.outer:resize(self.floatW or self.outer:get_width(), h) end
         if self._autoPositioned and not self._userMoved then
             self.floatY = _dialogCenteredY(h, self._posSlot, sh)
-            -- getMainWindowSize() can read transiently wrong at this exact instant
-            -- (e.g. mid-command that opened this dialog); a same-tick recheck alone
-            -- fixes that. Mux._recenterSettlingDialogs then covers slower real
-            -- settling (package install etc.) for a short grace window afterward.
-            self._recenterUntil = getEpoch() + 5
-            local this = self
-            tempTimer(0, function()
-                if not (this and this.outer and this._autoPositioned and not this._userMoved) then return end
-                local _, freshSh = getMainWindowSize()
-                local y = _dialogCenteredY(this.floatH, this._posSlot, freshSh)
-                if math.abs((this.floatY or 0) - y) >= 2 then
-                    this.floatY = y
-                    this.outer:move(this.floatX or 0, y)
-                    if this.outer.reposition then this.outer:reposition() end
-                end
-            end)
         else
             local y = self.floatY or 0
             if y + h > (sh or 0) then self.floatY = math.max(0, (sh or 0) - h) end
