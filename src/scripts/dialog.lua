@@ -380,21 +380,6 @@ end
 function MuxDialog:fitContent(contentH)
     self._contentH = contentH or self._contentH or 0
     local _, sh   = getMainWindowSize()
-    -- TEMP DIAGNOSTIC, remove after use: passive snapshots, no typing involved.
-    if self.name == "Welcome to f2ce-tools" then
-        local this = self
-        cecho(string.format(
-            "\n<magenta>[diag] fitContent sh=%d floatY(before)=%s<reset>\n", sh, tostring(self.floatY)))
-        for _, delay in ipairs({0.5, 2, 5}) do
-            tempTimer(delay, function()
-                if this and this.outer then
-                    local _, laterSh = getMainWindowSize()
-                    cecho(string.format(
-                        "\n<magenta>[diag +%.1fs] sh=%d floatY=%d<reset>\n", delay, laterSh, this.floatY or -1))
-                end
-            end)
-        end
-    end
     local theme   = Mux.activeTheme() or {}
     local titleH  = (self.titlebarVisible ~= false) and (theme.titlebarHeight or 22) or 0
     local chrome  = titleH + 2 * 2 + 8           -- titlebar + border inset + footer pad
@@ -421,11 +406,22 @@ function MuxDialog:fitContent(contentH)
         if self.outer then self.outer:resize(self.floatW or self.outer:get_width(), h) end
         if self._autoPositioned and not self._userMoved then
             self.floatY = _dialogCenteredY(h, self._posSlot, sh)
-            -- getMainWindowSize() can still be settling (package install, command
-            -- line height change) right after creation; Mux._recenterSettlingDialogs
-            -- corrects it on real resize-settle events for a short grace window, then
-            -- stops reacting for good.
+            -- getMainWindowSize() can read transiently wrong at this exact instant
+            -- (e.g. mid-command that opened this dialog); a same-tick recheck alone
+            -- fixes that. Mux._recenterSettlingDialogs then covers slower real
+            -- settling (package install etc.) for a short grace window afterward.
             self._recenterUntil = getEpoch() + 5
+            local this = self
+            tempTimer(0, function()
+                if not (this and this.outer and this._autoPositioned and not this._userMoved) then return end
+                local _, freshSh = getMainWindowSize()
+                local y = _dialogCenteredY(this.floatH, this._posSlot, freshSh)
+                if math.abs((this.floatY or 0) - y) >= 2 then
+                    this.floatY = y
+                    this.outer:move(this.floatX or 0, y)
+                    if this.outer.reposition then this.outer:reposition() end
+                end
+            end)
         else
             local y = self.floatY or 0
             if y + h > (sh or 0) then self.floatY = math.max(0, (sh or 0) - h) end
