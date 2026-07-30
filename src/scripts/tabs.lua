@@ -829,9 +829,17 @@ function MuxTab:_conditionHide()
     -- collapse the host itself the same way a directly condition-gated pane
     -- (or parent sub-tab) would, instead of leaving an empty bar over an
     -- empty pane. _conditionShow undoes this once a tab reappears.
-    if #host._tabs == 0 and host._conditionHide and not host._conditionHidden then
+    -- Re-mark _autoHiddenEmpty even if already hidden: a workspace-restored
+    -- host starts _conditionHidden via _pendingHidden, which doesn't know
+    -- about this flag (it isn't persisted), so skip re-marking it here and a
+    -- later tab reappearing would never call host:_conditionShow(). Skip only
+    -- for hosts with their own rules, where the host's own condition (not
+    -- tab emptiness) owns its hidden state.
+    if #host._tabs == 0 and host._conditionHide and not (host.rules and #host.rules > 0) then
         host._autoHiddenEmpty = true
-        host:_conditionHide()
+        if not host._conditionHidden then
+            host:_conditionHide()
+        end
     end
     Mux._scheduleAutoSave()
 end
