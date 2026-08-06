@@ -81,6 +81,7 @@ function MuxPaneSpace:_updateBorderContribution()
     if self.zone == "float" then return end
 
     if self.zone == "screen" then
+        Mux._lastBorderCaller = "paneSpace(" .. tostring(self.id) .. " zone=screen)"
         Mux._applyBorders()
         return
     end
@@ -95,6 +96,7 @@ function MuxPaneSpace:_updateBorderContribution()
         px = math.max(px, 0)
     end
     Mux._borders[self.zone] = px
+    Mux._lastBorderCaller = "paneSpace(" .. tostring(self.id) .. " zone=" .. tostring(self.zone) .. ")"
     Mux._applyBorders()
 end
 

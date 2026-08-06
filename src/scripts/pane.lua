@@ -2069,6 +2069,7 @@ function MuxPane:updateConsoleBorders()
     -- Mux._applyBorders (the other setBorderSizes writer, in globals.lua) — a
     -- private per-pane cache here would go stale whenever that other writer
     -- changed the native state without this pane's own geometry changing.
+    Mux._lastBorderCaller = "updateConsoleBorders(" .. tostring(self.id) .. ")"
     Mux._setNativeBorders(top, right, bottom, left)
 end
 

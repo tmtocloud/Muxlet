@@ -223,12 +223,19 @@ function Mux._setNativeBorders(top, right, bottom, left)
         and last.bottom == bottom and last.left == left then
         return
     end
+    local _t0 = Mux.debug and os.clock() or nil
     setBorderSizes(top, right, bottom, left)
     Mux._lastAppliedBorders = { top = top, right = right, bottom = bottom, left = left }
-    Mux._log("setBorderSizes(t=%d r=%d b=%d l=%d)", top, right, bottom, left)
+    if _t0 then
+        Mux._log("setBorderSizes(t=%d r=%d b=%d l=%d) from=%s took %.1fms",
+            top, right, bottom, left, tostring(Mux._lastBorderCaller), (os.clock() - _t0) * 1000)
+    else
+        Mux._log("setBorderSizes(t=%d r=%d b=%d l=%d)", top, right, bottom, left)
+    end
 end
 
 function Mux._applyBorders()
+    Mux._lastBorderCaller = "applyBorders(paneSpace)"
     Mux._setNativeBorders(
         Mux._borders.top,
         Mux._borders.right,
