@@ -22,8 +22,6 @@
 MuxPaneSpace = Mux._class()
 Mux.PaneSpace = MuxPaneSpace
 
-local minBorderPx = 40   -- prevents the border from collapsing to zero
-
 function MuxPaneSpace:init(opts)
     opts = opts or {}
 
@@ -76,15 +74,17 @@ end
 
 -- "screen" zone: renders over the main console without collapsing it to 0px.
 -- Collapsing the console breaks selectCurrentLine()+appendBuffer, which breaks
--- output capture. Instead, the PaneSpace sits in front via Geyser z-order.
+-- output capture. Instead, the PaneSpace sits in front via Geyser z-order, so
+-- (like "float") it never contributes to Mux._borders and has nothing to apply —
+-- a screen-zone PaneSpace calling Mux._applyBorders() here used to just re-broadcast
+-- Mux._borders' stale/zero value (nothing else in a console-hosting workspace ever
+-- writes to it — that's MuxPane:updateConsoleBorders' job) over whatever real
+-- borders updateConsoleBorders had already set, paying a ~1s+ native setBorderSizes
+-- call for a value immediately overwritten by updateConsoleBorders right after —
+-- doubling the cost of every window resize for a zone that never even reaches the
+-- part of this function that sets Mux._borders below.
 function MuxPaneSpace:_updateBorderContribution()
-    if self.zone == "float" then return end
-
-    if self.zone == "screen" then
-        Mux._lastBorderCaller = "paneSpace(" .. tostring(self.id) .. " zone=screen)"
-        Mux._applyBorders()
-        return
-    end
+    if self.zone == "float" or self.zone == "screen" then return end
 
     local px = 0
     if self.visible then
