@@ -235,7 +235,6 @@ function Mux._setNativeBorders(top, right, bottom, left)
 end
 
 function Mux._applyBorders()
-    Mux._lastBorderCaller = "applyBorders(paneSpace)"
     Mux._setNativeBorders(
         Mux._borders.top,
         Mux._borders.right,

@@ -24,10 +24,16 @@
 -- Determine initial state synchronously from Mudlet's connection status.
 -- Default to "connected" when isConnected() is unavailable so that profiles
 -- which load while already connected do not flash the disconnected screen.
-if isConnected ~= nil then
-    Mux._connState = isConnected() and "connected" or "disconnected"
-else
-    Mux._connState = "connected"
+-- "connecting" is the one state the socket cannot report, so an in-flight
+-- connect survives a mid-session re-source (package reload, self-update) rather
+-- than being reset to "connected", which would leave the Connecting condition
+-- false for the rest of that connect with nothing to set it again.
+if Mux._connState ~= "connecting" then
+    if isConnected ~= nil then
+        Mux._connState = isConnected() and "connected" or "disconnected"
+    else
+        Mux._connState = "connected"
+    end
 end
 
 -- ── HTML builder ──────────────────────────────────────────────────────────────
@@ -272,15 +278,25 @@ end
 --
 -- sysConnectionEvent (TCP socket open) → "connecting"  shows ⟳
 -- sysProtocolEnabled with "GMCP"       → "connected"   hides overlay
---   GMCP negotiation completes within milliseconds of TCP connect on any
---   GMCP-capable game, so this is effectively instant for modern MUDs.
 -- sysDisconnectionEvent                → "disconnected" shows ⊘
 --
--- For non-GMCP games, application code should call
--- Mux.setConnectionState("connected") when the game is ready.
--- _connReadyDelay (default 30s) is a last-resort fallback for those cases.
+-- GMCP negotiates during the telnet handshake, so "connected" lands before the
+-- login prompt is even drawn: the connecting overlay goes up and comes down
+-- inside one event burst and never survives to a paint. A host whose game is
+-- not actually usable at that point (anything with a login sequence) sets
+-- connectedOnGmcp=false via Mux.configureHost and calls
+-- Mux.setConnectionState("connected") itself once the game is ready, so the
+-- overlay covers the whole dead window rather than a few milliseconds of it.
+--
+-- _connReadyDelay is the last-resort fallback for a host that takes ownership
+-- and then never signals, and for games with no GMCP at all: the overlay clears
+-- itself instead of stranding. Raise it via configureHost's connectedAfterSeconds
+-- when the ready signal waits on a human, since typing a password takes longer
+-- than the 30s default allows.
 
 Mux._connReadyDelay = Mux._connReadyDelay or 30
+-- Idempotent across re-sources: nil defaults to true, an explicit false sticks.
+Mux._connReadyOnGmcp = Mux._connReadyOnGmcp ~= false
 
 local function _cancelConnReady()
     if Mux._connReadyTimer then
@@ -311,7 +327,9 @@ if not Mux._connHandlerGmcp then
     Mux._connHandlerGmcp = registerAnonymousEventHandler(
         "sysProtocolEnabled",
         function(_, protocol)
-            if protocol == "GMCP" and Mux._connState == "connecting" then
+            if protocol ~= "GMCP" then return end
+            if not Mux._connReadyOnGmcp then return end   -- host owns the ready signal
+            if Mux._connState == "connecting" then
                 Mux.setConnectionState("connected")
             end
         end

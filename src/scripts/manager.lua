@@ -526,6 +526,7 @@ function Mux._clearWorkspace()
         Mux._idFree[prefix]     = {}
     end
     Mux._borders = { top = 0, right = 0, bottom = 0, left = 0 }
+    Mux._lastBorderCaller = "clearWorkspace"
     Mux._applyBorders()
     Mux._log("_clearWorkspace: cleared")
 end
@@ -621,9 +622,17 @@ if not Mux._unloadHandler then
             -- output-capture trigger. quiet=true suppresses the "Stopped" banner,
             -- which would be noise in the middle of a reload.
             pcall(function() if Mux.fullStop then Mux.fullStop(true) end end)
-            -- Release the updater's runtime download/install handlers.
+            -- Release the updater's runtime download/install handlers, and the
+            -- connection-state handlers. Both must be nil'd, not just killed:
+            -- their re-registration guards are "if not Mux._<name>", so a stale
+            -- non-nil field left behind means the new copy never re-registers.
+            -- For the connection handlers that failure is silent and total,
+            -- since nothing else ever sets _connState to "connecting" and the
+            -- Connecting condition is the only thing that reads it.
             for _, h in ipairs({ "_updateDlHandler", "_updateDlErrHandler",
-                                 "_updateInstallDone", "_updateInstallErr" }) do
+                                 "_updateInstallDone", "_updateInstallErr",
+                                 "_connHandlerConn", "_connHandlerGmcp",
+                                 "_connHandlerDisc" }) do
                 pcall(function()
                     if Mux[h] then killAnonymousEventHandler(Mux[h]); Mux[h] = nil end
                 end)

@@ -195,15 +195,24 @@ local function conditionValue(cond, subject)
         return at ~= nil and (os.time() - at) <= (tonumber(cond.seconds) or 5)
     elseif t == "connection_state" then
         return Mux._connState or "connected"
+    -- The three connection conditions are mutually exclusive by contract: they
+    -- drive keyed overlays that assume exactly one is met at a time. Only
+    -- "connecting" can be read off the socket, so both of the others defer to it
+    -- first. Without that, mid-connect reads as connecting AND disconnected (the
+    -- socket is not up yet), and with a host owning the ready signal it also
+    -- reads as connecting AND connected (socket up, game not usable), leaving
+    -- which overlay wins down to the order rules happen to sit in.
     elseif t == "connected" then
         -- Query Mudlet's live socket status; the cached _connState is geared to the
         -- connecting/connected/disconnected SCREEN and defaults to "connected" at load,
         -- which made this read true while actually offline.
+        if Mux._connState == "connecting" then return false end
         if isConnected then return isConnected() and true or false end
         return Mux._connState == "connected"
     elseif t == "connecting" then
         return Mux._connState == "connecting"
     elseif t == "disconnected" then
+        if Mux._connState == "connecting" then return false end
         if isConnected then return not isConnected() end
         return Mux._connState ~= "connected"
     elseif Mux._customConditionValue then

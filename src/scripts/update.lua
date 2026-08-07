@@ -1325,6 +1325,18 @@ end
 --   opts.includePrereleases (bool) true = also offer pre-release builds.
 --   opts.defaultWorkspace (string) Workspace name applied by `mux reset` / first
 --                                  Mux.fullStart(). Must already be registered.
+--   opts.connectedOnGmcp  (bool)   false = this host, not GMCP negotiation, decides
+--                                  when the game is ready; call
+--                                  Mux.setConnectionState("connected") yourself at
+--                                  that point. Set it for any game with a login
+--                                  sequence: GMCP negotiates during the telnet
+--                                  handshake, so the default (true) marks the game
+--                                  ready before the login prompt is even drawn and
+--                                  the Connecting overlay never survives a paint.
+--   opts.connectedAfterSeconds (number) Fallback that force-clears the Connecting
+--                                  state if no ready signal arrives (default 30).
+--                                  Raise it alongside connectedOnGmcp=false when
+--                                  the signal waits on a human typing a password.
 --
 --   -- Reuse Muxlet's update system for your own package too (all optional
 --   -- except updateRepo; at most one host may be registered):
@@ -1389,6 +1401,17 @@ function Mux.configureHost(opts)
     end
     if opts.defaultWorkspace ~= nil then
         Mux.settings.set("mux", "reset_workspace", opts.defaultWorkspace)
+    end
+
+    -- Runtime fields, not settings: these describe the host package's own
+    -- protocol contract, so they are re-asserted from code every boot rather
+    -- than persisted where a stale value could outlive the host that set it.
+    -- See the event-handler notes in connection.lua for what they gate.
+    if opts.connectedOnGmcp ~= nil then
+        Mux._connReadyOnGmcp = opts.connectedOnGmcp and true or false
+    end
+    if opts.connectedAfterSeconds ~= nil then
+        Mux._connReadyDelay = tonumber(opts.connectedAfterSeconds) or Mux._connReadyDelay
     end
 
     if opts.updateRepo then
