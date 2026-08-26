@@ -257,7 +257,7 @@ end
 -- Returns true if the child (MuxPane or nested MuxSplit) allows the handle to be dragged.
 -- Recurses into nested splits: if any pane in the sub-tree is non-resizable, the
 -- entire sub-tree is treated as non-resizable so ancestor handles also lock.
-function MuxSplit:_childResizable(child)
+function MuxSplit._childResizable(_self, child)
     if not child then return true end
     if child.outer then return child.resizable ~= false end          -- MuxPane
     if child.childA ~= nil then                                      -- nested MuxSplit

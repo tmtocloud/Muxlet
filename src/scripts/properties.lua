@@ -8,7 +8,6 @@
 --
 -- Requires: content.lua (Mux.registerContent, Mux._applyContent) loaded first.
 
-local propsUi        = {}
 local pendingRows    = nil   -- rows passed to the registered apply function
 local _propsEpoch    = 0     -- incremented each open to avoid widget name collisions on ID reuse
 local _pendingPrefix = nil   -- set before _applyContent so apply() uses a unique prefix
@@ -33,12 +32,10 @@ end
 -- back to the first tab. The dialog's active tab name is the group label.
 local function _captureActiveGroup(subject)
     if not (subject and subject._propertiesDialogs) then return end
-    for _, dlg in pairs(subject._propertiesDialogs) do
-        if dlg._activeTabId and dlg._findTab then
-            local t = dlg:_findTab(dlg._activeTabId)
-            if t and t.name then subject._propsActiveGroup = t.name end
-        end
-        break
+    local _, dlg = next(subject._propertiesDialogs)
+    if dlg and dlg._activeTabId and dlg._findTab then
+        local t = dlg:_findTab(dlg._activeTabId)
+        if t and t.name then subject._propsActiveGroup = t.name end
     end
 end
 
@@ -186,23 +183,6 @@ end
 -- (Capture configuration moved into the content's own settings dialog, opened from
 -- the ⚙ gear on the capture console — see library/content/capture.lua.)
 
-
--- Live screen geometry of a pane, for the read-only Properties readout. Uses the
--- actual rendered container when present (reflects drags/resizes), else the
--- stored float geometry. Includes the id so a specific pane is easy to reference.
-local function _geomString(pane)
-    local x, y, w, h
-    if pane.outer and pane.outer.get_x then
-        x, y = pane.outer:get_x(), pane.outer:get_y()
-        w, h = pane.outer:get_width(), pane.outer:get_height()
-    else
-        x, y, w, h = pane.floatX, pane.floatY, pane.floatW, pane.floatH
-    end
-    local idStr = pane.id and ("   ·   id " .. tostring(pane.id)) or ""
-    if not (x and y and w and h) then return "—" .. idStr end
-    return string.format("x %d, y %d   ·   %d × %d px%s",
-        math.floor(x), math.floor(y), math.floor(w), math.floor(h), idStr)
-end
 
 
 -- Expandable "Position & Size" section. Collapsed: a clickable heading. Expanded:

@@ -161,6 +161,11 @@ function Mux.applyWorkspace(name)
     local hasGhostLinks = Mux._pendingGhostLinks and #Mux._pendingGhostLinks > 0
     if #floatingPanes > 0 or hasGhostLinks then
         tempTimer(0.2, function()
+            -- Pass 1: build + detach every floating pane while still hidden/
+            -- un-anchored. A saved anchor only carries a stale floatX/Y snapshot,
+            -- so revealing content before pass 3 resolves the real anchor would
+            -- paint once at the wrong spot, then again once it snaps into place.
+            local built = {}
             for _, fd in ipairs(floatingPanes) do
                 local p = buildNode(fd, Geyser, paneMap, nil)
                 if p then
@@ -175,40 +180,13 @@ function Mux.applyWorkspace(name)
                     p.convertible = true
                     p:_detachToFloat()
                     p.convertible = savedConvertible
-                    -- Restore a manually-toggled hidden state (mux.toggleTarget/etc, see
-                    -- serializeNode) BEFORE any rules run, so a rule targeting this pane's
-                    -- own visibility (e.g. a reactive "hide when condition unmet" rule)
-                    -- still gets the final say based on current live signals rather than
-                    -- the frozen save-time snapshot.
+                    -- Restore a manually-toggled hidden state (mux.toggleTarget/etc,
+                    -- see serializeNode) so pass 3's rule evaluation starts from the
+                    -- right baseline.
                     if p._pendingHidden and p._conditionHide then
                         p:_conditionHide()
                     end
-                    -- Resolve this pane's rules (e.g. a "hide when condition unmet" rule)
-                    -- BEFORE content is applied below. MuxPane:init already deferred its
-                    -- own first evaluation by a tick (tempTimer(0,...), so the pane is
-                    -- fully placed first) -- but content restoration here runs earlier,
-                    -- in this same tick, and would otherwise render+show its content one
-                    -- full tick before the hide takes effect. Evaluating now (rule wiring
-                    -- from init already happened synchronously) lets _conditionHidden be
-                    -- set before Mux._applyContent ever shows anything, so a pane whose
-                    -- rule says "start hidden" never flashes/sticks visible first.
-                    if p.rules and #p.rules > 0 and Mux._evaluateRules then
-                        Mux._evaluateRules(p, true)
-                    end
-                    -- Apply restored content HERE: floating panes are rebuilt after
-                    -- the embedded content-apply pass below has already run, so their
-                    -- _pendingContent would otherwise never be applied.
-                    if p._pendingContent then
-                        if Mux._content and Mux._content[p._pendingContent] and Mux._applyContent then
-                            Mux._applyContent(p, p._pendingContent, true)
-                            if Mux._restoreContent then Mux._restoreContent(p, p._pendingContentState) end
-                        elseif Mux._warn then
-                            Mux._warn("applyWorkspace: content '%s' not registered for floating pane '%s'",
-                                p._pendingContent, p.id)
-                        end
-                        p._pendingContent = nil
-                        p._pendingContentState = nil
-                    end
+                    built[#built + 1] = p
                 end
             end
             -- Re-link each restored ghost to its now-built floating owner. With
@@ -228,12 +206,30 @@ function Mux.applyWorkspace(name)
                 end
                 Mux._pendingGhostLinks = nil
             end
-            -- Wire saved anchors for the floating panes just built. Must happen here,
-            -- not in the tempTimer(0,...) below: that timer fires first (0 < 0.2) and
-            -- would run _resolveSavedAnchors before any restored floating pane exists,
-            -- silently orphaning every _pendingAnchor set above with nothing left to
-            -- ever consume it.
+            -- Pass 2: wire saved anchors now that every floating pane exists with
+            -- real geometry. Must happen here, not in the tempTimer(0,...) below:
+            -- that timer fires first (0 < 0.2) and would run _resolveSavedAnchors
+            -- before any restored floating pane exists, silently orphaning every
+            -- _pendingAnchor set above with nothing left to ever consume it.
             if Mux._resolveSavedAnchors then Mux._resolveSavedAnchors() end
+            -- Pass 3: only now reveal (rules) and paint (content) each pane, at
+            -- its final anchor-resolved position.
+            for _, p in ipairs(built) do
+                if p.rules and #p.rules > 0 and Mux._evaluateRules then
+                    Mux._evaluateRules(p, true)
+                end
+                if p._pendingContent then
+                    if Mux._content and Mux._content[p._pendingContent] and Mux._applyContent then
+                        Mux._applyContent(p, p._pendingContent, true)
+                        if Mux._restoreContent then Mux._restoreContent(p, p._pendingContentState) end
+                    elseif Mux._warn then
+                        Mux._warn("applyWorkspace: content '%s' not registered for floating pane '%s'",
+                            p._pendingContent, p.id)
+                    end
+                    p._pendingContent = nil
+                    p._pendingContentState = nil
+                end
+            end
             Mux.raiseFloatingPanes()
             if Mux._notifyAllReposition then Mux._notifyAllReposition() end
         end)
@@ -265,13 +261,15 @@ function Mux.applyWorkspace(name)
     end)
 
     -- A profile that finishes loading before the host window reaches its final
-    -- OS-level size (e.g. Mudlet maximizing to the monitor a moment after launch)
-    -- settles this workspace's geometry against a stale, too-small width. Content
-    -- that measures pixel geometry in apply() (or the reposition pass above) is
-    -- left stuck with it, since resize() only otherwise fires on live drag/resize.
-    -- One more relayout pass once the window has had time to settle self-corrects
-    -- it, mirroring the floating-pane anchor follow-up earlier in this function.
+    -- OS-level size (e.g. Mudlet maximizing a moment after launch) can settle
+    -- this workspace's geometry against a stale, too-small width, and the real
+    -- resize event that would normally fix it gets swallowed if it lands while
+    -- one of the _inResize-guarded passes above is running (see the resize
+    -- handler in globals.lua). Only pay for a catch-up pass if that actually
+    -- happened; most startups miss nothing and skip this entirely.
     tempTimer(0.3, function()
+        if not Mux._resizeMissedDuringGuard then return end
+        Mux._resizeMissedDuringGuard = false
         local wasIR = Mux._inResize
         Mux._inResize = true
         Mux._notifyAllReposition()
@@ -606,13 +604,14 @@ function Mux.exportWorkspace(name)
         lines[#lines + 1] = Mux._themeRegisterLua(themeName, Mux._userThemes[themeName])
         lines[#lines + 1] = ""
     end
-    for _, l in ipairs(depLines("Conditions used by this workspace", sortedIds(condIds), Mux._conditions, Mux._conditionRegisterLua)) do
-        lines[#lines + 1] = l
-    end
-    for _, l in ipairs(depLines("Actions used by this workspace", sortedIds(actIds), Mux._declActions, Mux._actionRegisterLua)) do
-        lines[#lines + 1] = l
-    end
-    lines[#lines + 1] = "Mux.registerWorkspace(" .. string.format("%q", name) .. ", " .. Mux._serializeLua(def, 0) .. ")"
+    local condLines = depLines("Conditions used by this workspace", sortedIds(condIds),
+        Mux._conditions, Mux._conditionRegisterLua)
+    for _, l in ipairs(condLines) do lines[#lines + 1] = l end
+    local actLines = depLines("Actions used by this workspace", sortedIds(actIds),
+        Mux._declActions, Mux._actionRegisterLua)
+    for _, l in ipairs(actLines) do lines[#lines + 1] = l end
+    lines[#lines + 1] = "Mux.registerWorkspace(" .. string.format("%q", name) .. ", "
+        .. Mux._serializeLua(def, 0) .. ")"
     lines[#lines + 1] = ""
 
     local safe = name:gsub("[^%w_%-]", "_")
@@ -669,14 +668,16 @@ function Mux.exportAll()
     end
 
     if #themeNames == 0 and #condIds == 0 and #actIds == 0 and #wsNames == 0 then
-        Mux._echo("\n<yellow>[Muxlet]<reset> Nothing to export — no themes, declarative conditions, actions, or workspaces are registered.\n")
+        Mux._echo("\n<yellow>[Muxlet]<reset> Nothing to export — no themes, declarative conditions, "
+            .. "actions, or workspaces are registered.\n")
         return
     end
 
     local outPath = Mux._writeExportFile("muxlet-export-all.lua", table.concat(lines, "\n"))
     if outPath then
         Mux._echo(string.format(
-            "\n<green>[Muxlet]<reset> Exported %d theme(s), %d condition(s), %d action(s), %d workspace(s) to:\n  <white>%s<reset>\n",
+            "\n<green>[Muxlet]<reset> Exported %d theme(s), %d condition(s), %d action(s), "
+            .. "%d workspace(s) to:\n  <white>%s<reset>\n",
             #themeNames, #condIds, #actIds, #wsNames, outPath))
     end
 end

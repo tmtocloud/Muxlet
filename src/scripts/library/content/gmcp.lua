@@ -278,8 +278,6 @@ local INS_DEFAULT   = "char.vitals"
 local INS_HDR_H     = 30
 local POLL_INTERVAL = 1
 local BODY_LIMIT    = 40    -- max items per type group per level
-local BROWSER_THRESH_ARR = 10   -- reserved: not currently applied (see path browser below)
-local BROWSER_THRESH_OBJ = 20   -- reserved: not currently applied (see path browser below)
 
 -- Zoom table: {rowHeight, fontSize} indexed by st.zoomIdx (default = 3)
 local ZOOM = {
@@ -717,7 +715,7 @@ insDrawBody = function(st)
     local rowH     = ZOOM[st.zoomIdx][1]
     local fontSize = ZOOM[st.zoomIdx][2]
     local content  = st.bodyContent
-    local totalH   = 0
+    local totalH
 
     local val = gmcp and gmcpGet(st.path)
 

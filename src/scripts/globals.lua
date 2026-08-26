@@ -1045,6 +1045,12 @@ end
 -- Wrapped in a named function so fullStart() can re-register after fullStop() kills it.
 Mux._inResize = Mux._inResize or false
 
+-- Set when a real sysWindowResizeEvent lands while Mux._inResize is held by
+-- some other in-progress geometry pass (see the handler below). Consumed by
+-- Mux.applyWorkspace's trailing settle check so a swallowed resize still gets
+-- a catch-up pass, without paying for one on every startup that missed nothing.
+Mux._resizeMissedDuringGuard = Mux._resizeMissedDuringGuard or false
+
 -- The actual pane-space/reposition pass a native window resize triggers. Split
 -- out from the event handler so both the per-frame coalesced call and the
 -- trailing settle call below share one implementation.
@@ -1092,7 +1098,10 @@ end
 function Mux._registerResizeHandler()
     if Mux._resizeHandler then return end
     Mux._resizeHandler = registerAnonymousEventHandler("sysWindowResizeEvent", function()
-        if Mux._inResize then return end
+        if Mux._inResize then
+            Mux._resizeMissedDuringGuard = true
+            return
+        end
 
         Mux._resizeEventCount = (Mux._resizeEventCount or 0) + 1
 

@@ -49,7 +49,7 @@ end
 
 -- ── Layout (auto-flow) ──────────────────────────────────────────────────────────
 
-local function layoutRects(cfg, W, H, editing)
+local function layoutRects(cfg, W, H)
     local cols = math.max(1, cfg.cols)
     local gapX, gapY = cfg.gapX, cfg.gapY
     -- Pass 1: assign each button a grid cell (col/row/span) - independent of rowH.
@@ -125,7 +125,8 @@ local function runButton(btn)
         -- same way the rule engine does (ctxFor, conditional.lua): ctx.tab for a tab
         -- (plus its host as ctx.pane), else just ctx.pane.
         if a.targetId then
-            local obj, kind = Mux.findTarget and Mux.findTarget(a.targetId)
+            local obj, kind
+            if Mux.findTarget then obj, kind = Mux.findTarget(a.targetId) end
             if obj then
                 if kind == "tab" then ctx.tab = obj; ctx.pane = obj.pane
                 else ctx.pane = obj end
@@ -168,7 +169,7 @@ render = function(target)
     -- Locked grids never enter edit mode: the gear/edit chrome is hidden and the
     -- buttons simply run. Unlock with `mux reveal <pane id>` (content onReveal hook).
     local editing = st.editing and not cfg.locked
-    local rects = layoutRects(cfg, W, H, editing)
+    local rects = layoutRects(cfg, W, H)
     for _, rc in ipairs(rects) do
         local btn = rc.btn
         local lx, ly, lw, lh = rc.x, rc.y, rc.w, rc.h

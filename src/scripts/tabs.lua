@@ -126,7 +126,7 @@ function MuxTab:init(opts)
 end
 
 -- nameAlign is an optional 6th arg ("left", "center", "right"); defaults to "center".
-function MuxSurface:_echoTabLabel(label, name, isActive, isChosen, theme, nameAlign, hovered, scope)
+function MuxSurface._echoTabLabel(_self, label, name, isActive, isChosen, theme, nameAlign, hovered, scope)
     -- When a tab scope is passed, text/size resolve through the token cascade so a
     -- tab's local overrides show; otherwise fall back to the global theme scalars.
     local function R(key, fb) if scope then return Mux.tok(key, scope) end return fb end
@@ -552,7 +552,7 @@ local function buildTabInfrastructure(host)
     }, host.content)
     host._tabBar:setStyleSheet(theme.tabBarCss or "")
     if not host._isSubTabHost then
-        host._tabBar:setClickCallback(function(event)
+        host._tabBar:setClickCallback(function(_event)
             if Mux.raisePane then Mux.raisePane(host) end
         end)
     end
@@ -750,7 +750,7 @@ function MuxSurface:removeTab(tabId)
     self._tabBarBox:remove(tab.label)
     tab.label:hide()
     self:_relayoutTabLabels()
-    if not (self._activeTabId == tabId) then tab.content:hide() end
+    if self._activeTabId ~= tabId then tab.content:hide() end
     if tab._connScreen then tab._connScreen:hide() end
     -- Tear down the tab's reactive rules (drops it from the engine and kills any
     -- managed triggers, e.g. a capture rule's line trigger).
@@ -907,7 +907,7 @@ end
 
 -- Per-tab label stylesheet from the token cascade, honoring active/parent state so
 -- a tab's local overrides survive activate/deactivate (not just the bulk restyle).
-function MuxSurface:_tabCssFor(tab, isActive)
+function MuxSurface._tabCssFor(_self, tab, isActive)
     local el
     if isActive then
         el = (tab._isSubTabHost or tab._tabsEnabled) and "tabActiveParent" or "tabActive"

@@ -229,7 +229,7 @@ local function hsvToHex(h, s, v)
     local c = v * s
     local xx = c * (1 - math.abs((h / 60) % 2 - 1))
     local m = v - c
-    local r, g, b = 0, 0, 0
+    local r, g, b
     if     h <  60 then r, g, b = c, xx, 0
     elseif h < 120 then r, g, b = xx, c, 0
     elseif h < 180 then r, g, b = 0, c, xx
@@ -940,7 +940,7 @@ end
 
 -- ── Segmented control (inline) — N connected buttons, one highlighted ─────────
 local function w_segmented(row, c)
-    local spec, css, uid = c.spec, c.css, c.uid
+    local spec, uid = c.spec, c.uid
     local choices = spec.options or {}
     local n       = #choices
     if n == 0 then return {} end
@@ -1545,14 +1545,14 @@ function Mux.ui.iconCascade(parent, opts)
     end
     build()
 
-    function handle:show()      if not S.visible then S.visible = true; build() end end
-    function handle:hide()      if S.visible then S.visible = false; clear() end end
-    function handle:toggle()    if S.visible then handle:hide() else handle:show() end end
-    function handle:isVisible() return S.visible end
-    function handle:setItems(items)   S.items = items or {}; build() end
-    function handle:setDirection(dir) S.direction = dir or "down"; build() end
-    function handle:setOrigin(x, y)   S.x, S.y = x or S.x, y or S.y; build() end
-    function handle:raise()     for _, l in ipairs(S._labels) do pcall(function() (l.raiseAll or l.raise)(l) end) end end
-    function handle:destroy()   clear() end
+    function handle.show(_self)      if not S.visible then S.visible = true; build() end end
+    function handle.hide(_self)      if S.visible then S.visible = false; clear() end end
+    function handle.toggle(_self)    if S.visible then handle:hide() else handle:show() end end
+    function handle.isVisible(_self) return S.visible end
+    function handle.setItems(_self, items)   S.items = items or {}; build() end
+    function handle.setDirection(_self, dir) S.direction = dir or "down"; build() end
+    function handle.setOrigin(_self, x, y)   S.x, S.y = x or S.x, y or S.y; build() end
+    function handle.raise(_self)     for _, l in ipairs(S._labels) do pcall(function() (l.raiseAll or l.raise)(l) end) end end
+    function handle.destroy(_self)   clear() end
     return handle
 end

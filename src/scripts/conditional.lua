@@ -525,7 +525,7 @@ Mux._condInstallers.line_match = function(subject, rule, cond)
     rule._triggerId = id
 end
 
-Mux._condUninstallers.line_match = function(subject, rule)
+Mux._condUninstallers.line_match = function(_subject, rule)
     if rule._triggerId and killTrigger then pcall(killTrigger, rule._triggerId) end
     rule._triggerId = nil
 end

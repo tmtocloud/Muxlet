@@ -845,20 +845,6 @@ local function customRefresh(target)
     end
 end
 
-local function okBtnCss()
-    return "QLabel{ background:rgb(40,90,50); color:#bff0c0; border:1px solid rgba(90,180,90,0.5); border-radius:4px; font-weight:bold; }"
-        .. "QLabel::hover{ background:rgb(50,110,60); }"
-end
-local function delBtnCss()
-    return "QLabel{ background:rgb(70,30,30); color:#f0c0c0; border:1px solid rgba(180,90,90,0.5); border-radius:4px; font-weight:bold; }"
-        .. "QLabel::hover{ background:rgb(110,40,40); }"
-end
-
-local function neutralBtnCss()
-    return "QLabel{ background:rgb(45,45,66); color:#cdd2f0; border:1px solid rgba(255,255,255,0.18); border-radius:4px; }"
-        .. "QLabel::hover{ background:rgb(58,58,84); }"
-end
-
 -- ── Action editor (Settings → Muxlet → Actions) ───────────────────────────────
 -- A layman-friendly designer: an action is a NAME plus an ordered list of STEPS,
 -- each chosen from the operation palette (Mux.actionOps in conditional.lua). The
@@ -1458,7 +1444,7 @@ end
 local function buildThemeGeneral(target, bg)
     local ok, err = pcall(function()
         target.contentBg:hide()
-        local formHandle   -- referenced by the reset button's onClick (assigned below)
+        local formHandle   -- referenced by the onClick/onReset closures below (assigned once built)
         local specs = {}
         specs[#specs+1] = { type = "divider", label = "Theme" }
         -- Dropdown of every registered theme (not a static dark/light list).
@@ -1520,7 +1506,6 @@ local function buildThemeGeneral(target, bg)
         contentLbl:setStyleSheet(string.format("background:%s; border:none;", bg))
         target._muxContentH = totalH
 
-        local formHandle
         formHandle = Mux.ui.buildForm(contentLbl, specs, {
             width = cw - 8, prefix = "mxs_themegen",
             rowHeight = settingsFormOpts.rowHeight,
@@ -1631,10 +1616,6 @@ local function buildWindow()
         x=x, y=y, width=w, height=h,
         minimizable = true,
     })
-    local theme   = Mux.activeTheme()
-    local ui      = theme.ui or theme.settingsUi or {}
-    local bgColor = ui.bg or "rgb(18, 18, 26)"
-
     pane.floatX = x; pane.floatY = y
     pane.floatW = w; pane.floatH = h
     Mux._fitDialog = pane   -- auto-fit height to the active tab as the user navigates
