@@ -358,10 +358,12 @@ function Mux.requestAutoFit(target, height, width)
 end
 
 --- Re-applies a hidden/auto_hidden container's Qt-level hide to `container`,
---- covering any widgets just added to it. Geyser's plain :add always shows a
---- freshly created widget regardless of its parent's hidden state (see
---- GeyserGeyser.lua's Geyser:add) -- new widgets just leak visible instead of
---- inheriting the ancestor's hidden state. Content that rebuilds its own
+--- covering any widgets just added to it. Up to Mudlet 4.22, Geyser's plain :add
+--- showed a freshly created widget regardless of its parent's hidden state, so
+--- new widgets leaked visible instead of inheriting it; from 5.0 :add hides them
+--- with the parent (see GeyserGeyser.lua's Geyser:add). This stays because it is
+--- the only thing covering the older behaviour, and is a no-op on 5.0 where the
+--- widget is already hidden. Content that rebuilds its own
 --- widgets live -- independent of Mux._applyContent's own apply-time rebuild,
 --- e.g. reacting to a GMCP event or a game-line trigger -- must call this
 --- right after, or a condition-hidden (or inactive-tab-hidden) pane/tab can

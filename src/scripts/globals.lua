@@ -249,12 +249,30 @@ end
 -- fans out into O(branches^depth) repositions. Because get_x/get_width are computed
 -- from the constraint chain (not native state), callers can update constraints inside
 -- fn() and then apply native geometry once via Mux._applyGeometry. Always restores
--- set_constraints, even on error.
+-- both entry points, even on error.
+--
+-- Two of them, because which one carries the reposition depends on the Mudlet
+-- version. Up to 4.22 Geyser.Container:set_constraints delegated to the global
+-- Geyser.set_constraints, so patching the global caught everything; from 5.0 it
+-- calls calc_constraints and reposition itself, leaving the global reached only
+-- by Geyser:base_add and UserWindow. Container:move/resize both route through the
+-- method, so without the second patch every move inside fn() still walks and
+-- natively places the whole subtree. Patching both is correct on either version.
 function Mux._suppressReposition(fn)
-    local origSet = Geyser.set_constraints
+    local origSet    = Geyser.set_constraints
+    local origMethod = Geyser.Container.set_constraints
     Geyser.set_constraints = function(w, c, cc) Geyser.calc_constraints(w, c, cc) end
+    -- Mirrors 5.0's method minus its own reposition(true); the recursion into
+    -- children is what carries the new constraints down the tree.
+    Geyser.Container.set_constraints = function(self, cons)
+        Geyser.calc_constraints(self, cons or self, self.container)
+        for _, child in pairs(self.windowList) do
+            child:set_constraints(child)
+        end
+    end
     local ok, err = pcall(fn)
-    Geyser.set_constraints = origSet
+    Geyser.set_constraints          = origSet
+    Geyser.Container.set_constraints = origMethod
     if not ok then Mux._err("suppressReposition: %s", tostring(err)) end
     return ok
 end
