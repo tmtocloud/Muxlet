@@ -18,32 +18,36 @@
 
 -- Blank-line gag: after gagging a matched line, a command's output often leaves a
 -- blank line (or a couple) right after it, so the command still visibly "does
--- something". When the capture asks for it, arm a short-lived trigger that gags
--- whitespace-only lines for the next few lines and stops at the first real content.
+-- something". Always swallow those when hiding from main: arm a line-offset trigger
+-- (not a pattern trigger - Mudlet's trigger engine never fires pattern/regex triggers
+-- on a genuinely empty line, so "^\s*$" silently never matches) that inspects each of
+-- the next few lines directly and stops at the first real content.
 -- (Only trailing blanks can be removed - a blank that arrived *before* the match is
 -- already rendered and can't be reactively deleted.)
-local _bgTrig, _bgTimer
+local BLANK_GAG_LINES = 3
+local _bgTrig
 local function _disarmBlankGag()
-    if _bgTrig  and killTrigger then pcall(killTrigger, _bgTrig)  end; _bgTrig  = nil
-    if _bgTimer and killTimer   then pcall(killTimer,   _bgTimer) end; _bgTimer = nil
+    if _bgTrig and killTrigger then pcall(killTrigger, _bgTrig) end
+    _bgTrig = nil
 end
 local function _armBlankGag()
-    if not tempRegexTrigger then return end
+    if not tempLineTrigger then return end
     _disarmBlankGag()
-    local gagged = 0
-    _bgTrig = tempRegexTrigger("^\\s*$", function()
-        if deleteLine then deleteLine() end
-        gagged = gagged + 1
-        if gagged >= 3 then _disarmBlankGag() end   -- never swallow more than a couple
+    _bgTrig = tempLineTrigger(1, BLANK_GAG_LINES, function()
+        local text = getCurrentLine and getCurrentLine() or ""
+        if text:match("^%s*$") then
+            if deleteLine then deleteLine() end
+        else
+            _disarmBlankGag()   -- real content - stop consuming the remaining lines
+        end
     end)
-    -- Safety net: disarm shortly after so we never gag unrelated later blank lines.
-    if tempTimer then _bgTimer = tempTimer(0.3, _disarmBlankGag) end
 end
 
 if Mux.registerAction then
     Mux.registerAction("mux.capture.redirect", {
         name = "Redirect line here", group = "muxlet", icon = "📥", hidden = true,
-        desc = "Copy the matched console line into this pane/tab's capture view; optionally remove it (and trailing blank lines) from the main console. Added automatically by the Capture content.",
+        desc = "Copy the matched console line into this pane/tab's capture view; optionally remove it "
+            .. "(and any blank lines it leaves behind) from the main console. Added automatically by the Capture content.",
         run  = function(ctx)
             local subj = ctx and (ctx.tab or ctx.pane)
             local mc   = subj and subj._captureConsole
@@ -54,7 +58,7 @@ if Mux.registerAction then
             if appendBuffer then appendBuffer(mc.name) end      -- formatted paste
             if cap.gag then
                 if deleteLine then deleteLine() end             -- remove from main console
-                if cap.gagBlank then _armBlankGag() end         -- and any trailing blank lines
+                _armBlankGag()                                  -- and any trailing blank lines
             end
         end,
     })
@@ -81,7 +85,6 @@ local function normalizeConfig(target)
     for i, cap in ipairs(cfg.captures) do
         if cap.name == nil    then cap.name = "Capture " .. i end
         if cap.enabled == nil then cap.enabled = true end
-        if cap.gagBlank == nil then cap.gagBlank = false end
     end
     target._captureConfig = cfg
     return cfg
@@ -148,7 +151,8 @@ local function openCaptureSettings(target)
         end
         for i, cap in ipairs(cfg.captures) do
             local idx = i
-            rows[#rows+1] = { type = "divider", label = (cap.name and cap.name ~= "" and cap.name) or ("Capture " .. i) }
+            rows[#rows+1] = { type = "divider",
+                label = (cap.name and cap.name ~= "" and cap.name) or ("Capture " .. i) }
             rows[#rows+1] = { label = "Name", type = "text",
                 desc = "a label for this capture",
                 readFn = function() return cap.name or "" end,
@@ -169,13 +173,9 @@ local function openCaptureSettings(target)
                 readFn = function() return cap.mode or "substring" end,
                 writeFn = function(v) cap.mode = v; rebuild() end }
             rows[#rows+1] = { label = "Hide from main", type = "toggle",
-                desc = "also remove the matched line from the main console",
+                desc = "also remove the matched line (and any blank lines it leaves behind) from the main console",
                 readFn = function() return cap.gag or false end,
                 writeFn = function(v) cap.gag = v; light() end }
-            rows[#rows+1] = { label = "Gag blank lines", type = "toggle",
-                desc = "when hiding, also swallow blank lines that follow the match, so the command shows nothing",
-                readFn = function() return cap.gagBlank or false end,
-                writeFn = function(v) cap.gagBlank = v; light() end }
             rows[#rows+1] = { type = "button", label = "✖ Remove capture", _noReset = true,
                 onClick = function() table.remove(cfg.captures, idx); rebuild(); renderForm() end }
         end
@@ -184,7 +184,7 @@ local function openCaptureSettings(target)
             onClick = function()
                 -- New captures start inactive (like rules) so they can be set up first.
                 cfg.captures[#cfg.captures+1] = { name = "Capture " .. (#cfg.captures + 1),
-                    pattern = "", mode = "substring", gag = false, gagBlank = false, enabled = false }
+                    pattern = "", mode = "substring", gag = false, enabled = false }
                 rebuild(); renderForm()
             end }
 
@@ -207,7 +207,8 @@ end
 -- ── Content definition ────────────────────────────────────────────────────────
 Mux.registerContent("mux_capture", {
     name        = "Capture / Redirect",
-    description = "Watch the game output for text (substring, exact line, or regex) and shunt matching lines into this pane/tab — optionally hiding them from the main console. Click the ⚙ to configure captures.",
+    description = "Watch the game output for text (substring, exact line, or regex) and shunt matching lines "
+        .. "into this pane/tab — optionally hiding them from the main console. Click the ⚙ to configure captures.",
     group       = "Muxlet",
     singleton   = false,
 
@@ -253,8 +254,7 @@ Mux.registerContent("mux_capture", {
         local out = {}
         for _, c in ipairs(cfg.captures) do
             out[#out+1] = { name = c.name, pattern = c.pattern or "", mode = c.mode or "substring",
-                            gag = c.gag or false, gagBlank = c.gagBlank or false,
-                            enabled = c.enabled ~= false }
+                            gag = c.gag or false, enabled = c.enabled ~= false }
         end
         return { captures = out }
     end,
