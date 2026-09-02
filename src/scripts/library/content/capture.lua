@@ -6,9 +6,10 @@
 --
 -- The content owns its settings, like the Button Grid: a ⚙ gear on the console
 -- opens a settings dialog where you manage any number of captures (pattern, match
--- mode, and whether to hide the line from the main window). Config lives on
--- target._captureConfig = { captures = { {pattern, mode, gag}, … } } and round-trips
--- through Muxlet's content serialize/restore.
+-- mode, whether to hide the line from the main window, and an optional transform
+-- action to run instead of copying the line verbatim). Config lives on
+-- target._captureConfig = { captures = { {pattern, mode, gag, transformAction}, … } }
+-- and round-trips through Muxlet's content serialize/restore.
 
 -- ── Redirect action ───────────────────────────────────────────────────────────
 -- Runs inside the line_match trigger handler (synchronously), so the matched line
@@ -53,9 +54,25 @@ if Mux.registerAction then
             local mc   = subj and subj._captureConsole
             if not mc then return end
             local cap  = (ctx.rule and ctx.rule._capture) or {}
-            if selectCurrentLine then selectCurrentLine() end
-            if copy then copy() end
-            if appendBuffer then appendBuffer(mc.name) end      -- formatted paste
+
+            -- Optional transform: an ordinary action (its own id, picked in the
+            -- settings dialog) runs against the same ctx — ctx.value is already
+            -- the matched line (set by the line_match pulse) and ctx.console is
+            -- this capture's console, so a "Run Lua" step can write colored/linked
+            -- output straight to it. Returning true means "I handled the line
+            -- myself" and skips the default verbatim copy below.
+            local handled = false
+            if cap.transformAction and cap.transformAction ~= "" and Mux.runAction then
+                ctx.console = mc
+                local ok, result = Mux.runAction(cap.transformAction, ctx)
+                handled = ok and result and true or false
+            end
+
+            if not handled then
+                if selectCurrentLine then selectCurrentLine() end
+                if copy then copy() end
+                if appendBuffer then appendBuffer(mc.name) end      -- formatted paste
+            end
             if cap.gag then
                 if deleteLine then deleteLine() end             -- remove from main console
                 _armBlankGag()                                  -- and any trailing blank lines
@@ -70,6 +87,19 @@ local MODE_OPTS = {
     { value = "exact",     label = "Whole line equals" },
     { value = "regex",     label = "Regex (Perl)" },
 }
+
+-- Any registered action (Settings → Muxlet → Actions, including one built from
+-- a "Run Lua" step) can be picked as a capture's transform — see the redirect
+-- action above for the contract (ctx.value / ctx.console in, boolean out).
+local function transformActionOptions()
+    local out = { { value = "", label = "— None (copy line as-is) —" } }
+    if Mux.listActions then
+        for _, a in ipairs(Mux.listActions()) do
+            if not a.hidden then out[#out+1] = { value = a.id, label = (a.group or "") .. " · " .. (a.name or a.id) } end
+        end
+    end
+    return out
+end
 
 local function normalizeConfig(target)
     local cfg = target._captureConfig
@@ -176,6 +206,13 @@ local function openCaptureSettings(target)
                 desc = "also remove the matched line (and any blank lines it leaves behind) from the main console",
                 readFn = function() return cap.gag or false end,
                 writeFn = function(v) cap.gag = v; light() end }
+            rows[#rows+1] = { label = "Transform", type = "array", display = "dropdown",
+                desc = "run an action on the matched line instead of copying it verbatim (Settings → Muxlet → "
+                    .. "Actions to build one — a \"Run Lua\" step gets ctx.value=the line, ctx.console=this "
+                    .. "capture's console, and should return true once it has written its own output)",
+                options = transformActionOptions(),
+                readFn = function() return cap.transformAction or "" end,
+                writeFn = function(v) cap.transformAction = (v ~= "" and v) or nil; light() end }
             rows[#rows+1] = { type = "button", label = "✖ Remove capture", _noReset = true,
                 onClick = function() table.remove(cfg.captures, idx); rebuild(); renderForm() end }
         end
@@ -254,7 +291,8 @@ Mux.registerContent("mux_capture", {
         local out = {}
         for _, c in ipairs(cfg.captures) do
             out[#out+1] = { name = c.name, pattern = c.pattern or "", mode = c.mode or "substring",
-                            gag = c.gag or false, enabled = c.enabled ~= false }
+                            gag = c.gag or false, enabled = c.enabled ~= false,
+                            transformAction = c.transformAction }
         end
         return { captures = out }
     end,

@@ -19,7 +19,9 @@
 --   Mux.unregisterAction(id)
 --   Mux.getAction(id)                       → def | nil
 --   Mux.listActions()                       → array of { id, name, group, icon, readOnly } (sorted)
---   Mux.runAction(id [, ctx])               → bool ok   (ctx passed to run)
+--   Mux.runAction(id [, ctx])               → ok, result   (ctx passed to run; result is whatever
+--                                              run returned — for a step-based action, its last
+--                                              step's output; see buildActionRun in conditional.lua)
 --
 -- An action def:
 --   id        string   unique key, e.g. "fed2.galaxy.open"  (dotted namespacing encouraged)
@@ -78,6 +80,8 @@ end
 
 -- Invoke an action by id.  Unknown ids are a no-op (returns false) so persisted
 -- bindings to not-yet-loaded providers never error.
+-- Second return value is whatever def.run returned (nil for most built-ins,
+-- which are pure side-effect). Callers that don't care can ignore it.
 function Mux.runAction(id, ctx)
     local def = Mux.actions[id]
     if not def then
@@ -86,9 +90,12 @@ function Mux.runAction(id, ctx)
         end
         return false
     end
-    local ok, err = pcall(def.run, ctx or {})
-    if not ok and Mux._err then Mux._err("action '%s' failed: %s", id, tostring(err)) end
-    return ok
+    local ok, resultOrErr = pcall(def.run, ctx or {})
+    if not ok then
+        if Mux._err then Mux._err("action '%s' failed: %s", id, tostring(resultOrErr)) end
+        return false
+    end
+    return true, resultOrErr
 end
 
 -- Built-in actions live in library/actions/ (see that folder for reconnect,

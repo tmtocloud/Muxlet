@@ -571,17 +571,29 @@ function Mux._actionSteps(spec)
     return {}
 end
 
+-- Steps run in order sharing one ctx table. A step whose op.run returns a
+-- non-nil value feeds it forward as ctx.value (input for the next step) and
+-- as the running "last output"; a step that returns nothing leaves ctx.value
+-- untouched, so plain side-effect ops (send, show/hide, …) stay transparent
+-- passthroughs. The final last-output becomes this action's overall result
+-- (see Mux.runAction) — e.g. a trailing "Run Lua" step returning true/false
+-- to tell its caller whether it handled something.
 local function buildActionRun(spec)
     return function(ctx)
+        ctx = ctx or {}
+        local last
         for _, step in ipairs(Mux._actionSteps(spec)) do
             local op = Mux.actionOps[step.op]
             if op and op.run then
-                local ok, err = pcall(op.run, step, ctx or {})
-                if not ok and Mux._warn then
-                    Mux._warn("action '%s' step '%s' failed: %s", tostring(spec.id), tostring(step.op), tostring(err))
+                local ok, result = pcall(op.run, step, ctx)
+                if ok then
+                    if result ~= nil then ctx.value = result; last = result end
+                elseif Mux._warn then
+                    Mux._warn("action '%s' step '%s' failed: %s", tostring(spec.id), tostring(step.op), tostring(result))
                 end
             end
         end
+        return last
     end
 end
 
