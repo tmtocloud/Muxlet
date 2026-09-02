@@ -50,28 +50,43 @@ if Mux.registerAction then
         desc = "Copy the matched console line into this pane/tab's capture view; optionally remove it "
             .. "(and any blank lines it leaves behind) from the main console. Added automatically by the Capture content.",
         run  = function(ctx)
-            local subj = ctx and (ctx.tab or ctx.pane)
-            local mc   = subj and subj._captureConsole
-            if not mc then return end
+            local subj      = ctx and (ctx.tab or ctx.pane)
+            local consoles  = subj and subj._captureConsoles
+            if not consoles or not consoles.all then return end
             local cap  = (ctx.rule and ctx.rule._capture) or {}
+
+            -- Every matched line is written to both the "All" console and this
+            -- capture's own console, so the filter switcher (see _showCaptureFilter
+            -- below) can flip between them without having to reconstruct old
+            -- formatting later — both copies are written live, with real formatting,
+            -- at the moment the line actually matches.
+            local targets = { consoles.all }
+            local capMc   = consoles[cap]
+            if capMc and capMc ~= consoles.all then targets[#targets+1] = capMc end
 
             -- Optional transform: an ordinary action (its own id, picked in the
             -- settings dialog) runs against the same ctx — ctx.value is already
             -- the matched line (set by the line_match pulse) and ctx.console is
             -- this capture's console, so a "Run Lua" step can write colored/linked
             -- output straight to it. Returning true means "I handled the line
-            -- myself" and skips the default verbatim copy below.
+            -- myself" and skips the default verbatim copy below. Run once per
+            -- target console since each call writes to whichever ctx.console
+            -- was set for it.
             local handled = false
             if cap.transformAction and cap.transformAction ~= "" and Mux.runAction then
-                ctx.console = mc
-                local ok, result = Mux.runAction(cap.transformAction, ctx)
-                handled = ok and result and true or false
+                for _, mc in ipairs(targets) do
+                    ctx.console = mc
+                    local ok, result = Mux.runAction(cap.transformAction, ctx)
+                    handled = handled or (ok and result and true or false)
+                end
             end
 
             if not handled then
                 if selectCurrentLine then selectCurrentLine() end
                 if copy then copy() end
-                if appendBuffer then appendBuffer(mc.name) end      -- formatted paste
+                for _, mc in ipairs(targets) do
+                    if appendBuffer then appendBuffer(mc.name) end      -- formatted paste
+                end
             end
             if cap.gag then
                 if deleteLine then deleteLine() end             -- remove from main console
@@ -130,6 +145,90 @@ local function clearCaptureRules(target)
     for _, id in ipairs(ids) do Mux._removeRule(target, id) end
 end
 
+-- ── Per-capture consoles + filter switcher ────────────────────────────────────
+-- target._captureConsoles = { all = MiniConsole, [capTable] = MiniConsole, ... }
+-- keyed by the capture entry's own table identity (stable across renames/reorders,
+-- only invalidated when a capture is actually removed), so consoles never need
+-- rebuilding just because a capture was renamed. target._captureFilter is ""
+-- (show the "all" console) or a capture's current name.
+
+local function _ensureCaptureConsole(target, cap)
+    local map = target._captureConsoles
+    if map[cap] then return map[cap] end
+    target._captureConsoleSeq = (target._captureConsoleSeq or 0) + 1
+    local safe = tostring(target.id):gsub("[^%w]", "_")
+    local mc = Geyser.MiniConsole:new({
+        name     = "mux_cap_" .. safe .. "_" .. target._captureConsoleSeq,
+        x = "0%", y = "0%", width = "100%", height = "100%",
+        autoWrap = true, color = "black", fontSize = 10,
+    }, target.content)
+    pcall(function()
+        mc:setColor(0, 0, 0)
+        if mc.setColor then mc:setColor(8, 8, 14) end
+    end)
+    if mc.hide then mc:hide() end
+    map[cap] = mc
+    return mc
+end
+
+-- Show only the console for the given filter ("" = all), hiding the rest.
+-- Content persists in hidden MiniConsoles, so switching back later still shows
+-- everything that arrived while it was hidden.
+function Mux._showCaptureFilter(target, name)
+    if not (target and target._captureConsoles) then return end
+    target._captureFilter = name or ""
+    local map = target._captureConsoles
+    for _, mc in pairs(map) do
+        if mc and mc.hide then mc:hide() end
+    end
+    local activeMc
+    if target._captureFilter ~= "" then
+        local cfg = normalizeConfig(target)
+        for _, cap in ipairs(cfg.captures) do
+            if cap.name == target._captureFilter then activeMc = map[cap]; break end
+        end
+    end
+    activeMc = activeMc or map.all
+    if activeMc and activeMc.show then activeMc:show() end
+end
+
+-- Create/destroy per-capture consoles to match the current capture list, then
+-- re-apply whatever filter is currently selected (its console may be new, or may
+-- have just been removed out from under it).
+local function _syncCaptureConsoles(target)
+    if not target._captureConsoles then return end
+    local cfg  = normalizeConfig(target)
+    local map  = target._captureConsoles
+    local live = { all = true }
+    for _, cap in ipairs(cfg.captures) do
+        _ensureCaptureConsole(target, cap)
+        live[cap] = true
+    end
+    for key, mc in pairs(map) do
+        if key ~= "all" and not live[key] then
+            if mc and mc.hide then pcall(function() mc:hide() end) end
+            map[key] = nil
+        end
+    end
+    Mux._showCaptureFilter(target, target._captureFilter or "")
+end
+
+-- Cycle target._captureFilter through "" (All) then each configured capture's
+-- current name, in list order.
+function Mux._cycleCaptureFilter(target)
+    if not target then return end
+    local cfg   = normalizeConfig(target)
+    local names = { "" }
+    for _, cap in ipairs(cfg.captures) do names[#names+1] = cap.name or "" end
+    local cur, idx = target._captureFilter or "", 1
+    for i, n in ipairs(names) do
+        if n == cur then idx = i; break end
+    end
+    idx = (idx % #names) + 1
+    Mux._showCaptureFilter(target, names[idx])
+    if Mux._scheduleAutoSave then Mux._scheduleAutoSave() end
+end
+
 -- (Re)build one rule per configured capture. Empty patterns are skipped; disabled
 -- captures are added inactive (so they persist but arm no trigger).
 function Mux._rebuildCaptureRules(target)
@@ -147,6 +246,7 @@ function Mux._rebuildCaptureRules(target)
             })
         end
     end
+    if target._captureConsoles then _syncCaptureConsoles(target) end
     if Mux._scheduleAutoSave then Mux._scheduleAutoSave() end
 end
 
@@ -263,6 +363,31 @@ Mux.registerContent("mux_capture", {
             menuText = "🔧  Capture settings…", menuGroup = "info", menuOrder = 95,
             run = function(ctx) Mux._openCaptureSettings(captureHost(ctx)) end,
         },
+        {
+            id = "capture.filter", side = "left", group = "content", order = 1, priority = 104,
+            icon = "🔎", tooltip = "Cycle capture filter (All / one capture at a time)",
+            hideable = true, hideLabel = "Filter Icon",
+            visible = function(ctx)
+                local host = captureHost(ctx)
+                local cfg  = host and normalizeConfig(host)
+                return (cfg and #cfg.captures > 0) and true or false
+            end,
+            onClick = function(ctx, event)
+                if event and event.button ~= "LeftButton" then return end
+                local host = captureHost(ctx)
+                if host then Mux._cycleCaptureFilter(host) end
+            end,
+            menuText = function(ctx)
+                local host = captureHost(ctx)
+                local f    = host and host._captureFilter
+                return "🔎  Filter: " .. ((f and f ~= "") and f or "All")
+            end,
+            menuGroup = "info", menuOrder = 94,
+            run = function(ctx)
+                local host = captureHost(ctx)
+                if host then Mux._cycleCaptureFilter(host) end
+            end,
+        },
     },
 
     apply = function(target)
@@ -278,12 +403,15 @@ Mux.registerContent("mux_capture", {
             target._captureConsole:setColor(0, 0, 0)
             if target._captureConsole.setColor then target._captureConsole:setColor(8, 8, 14) end
         end)
-        Mux._rebuildCaptureRules(target)
+        target._captureConsoles = { all = target._captureConsole }
+        target._captureFilter   = target._captureFilter or ""
+        Mux._rebuildCaptureRules(target)   -- also syncs per-capture consoles + filter visibility
     end,
 
     remove = function(target)
         clearCaptureRules(target)
-        target._captureConsole = nil
+        target._captureConsoles = nil
+        target._captureConsole  = nil
     end,
 
     serialize = function(target)
@@ -294,7 +422,7 @@ Mux.registerContent("mux_capture", {
                             gag = c.gag or false, enabled = c.enabled ~= false,
                             transformAction = c.transformAction }
         end
-        return { captures = out }
+        return { captures = out, filter = target._captureFilter or "" }
     end,
 
     restore = function(target, data)
@@ -304,6 +432,7 @@ Mux.registerContent("mux_capture", {
             caps = { { pattern = data.pattern, mode = data.mode or "substring", gag = data.gag or false } }
         end
         target._captureConfig = { captures = caps or {} }
+        target._captureFilter = (type(data.filter) == "string") and data.filter or ""
         Mux._rebuildCaptureRules(target)
     end,
 })

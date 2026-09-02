@@ -1186,13 +1186,53 @@ local function resolveMuxletTagSha(tag, cb)
     downloadFile(tmp, "https://api.github.com/repos/" .. MUXLET_REPO .. "/releases/tags/" .. tag)
 end
 
+-- True when a required-version string names a mutable pre-release tag: bare
+-- (no leading "v"), no sha of its own already appended. build.yml re-uploads
+-- the SAME tag/version number under this shape for every commit pushed to
+-- main, so two installs can legitimately share a bare version string while
+-- running different code — a plain baseVersionOf() match (what
+-- Mux._versionSatisfied checks) can't tell those builds apart. A "v"-prefixed
+-- production tag or an already-sha'd requirement never gets silently
+-- rewritten like that, so those skip the extra check below.
+local function isMutablePreTag(requiredVersion)
+    return not shaOf(requiredVersion) and not tostring(requiredVersion):match("^v")
+end
+
 -- This is also what powers the transparent Muxlet bump in the hosted update
 -- dialog's "Update Now" (see Mux.showUpdateDialog) — the one-time boot gate and
 -- the live "you also need a newer Muxlet" case are the same operation.
 function Mux.ensureVersion(requiredVersion, url, callback, exact)
-    if Mux._versionSatisfied(requiredVersion, exact) then
+    local function runCallback()
         local ok, err = pcall(callback)
         if not ok then Mux._err("Mux.ensureVersion callback error: %s", tostring(err)) end
+    end
+
+    local function proceed(targetLabel)
+        local verb = Mux._versionIsNewer(requiredVersion, Mux._version) and "Upgrading" or "Downgrading"
+        Mux._echo(string.format(
+            "\n<yellow>[Muxlet]<reset> %s Muxlet %s -> %s...\n", verb, tostring(Mux._version), targetLabel))
+        if table.contains(getPackages(), "Muxlet") then
+            uninstallPackage("Muxlet")
+        end
+        installPackage(url)
+    end
+
+    if Mux._versionSatisfied(requiredVersion, exact) then
+        -- Bare numbers already match. For a mutable pre-release exact-pin that
+        -- alone doesn't prove the installed build is current, so confirm the sha
+        -- behind the tag still matches what's actually installed before trusting
+        -- it — the same "did the commit actually move" check Mux.checkForUpdates
+        -- already does for the host self-update dialog (see chooseUpdate above),
+        -- just applied to the dependency boot gate too.
+        local iRef = exact and url and isMutablePreTag(requiredVersion) and shaOf(Mux._version)
+        if not iRef then runCallback(); return end
+        resolveMuxletTagSha(requiredVersion, function(sha)
+            if sha and not refsMatch(sha, iRef) then
+                proceed(requiredVersion .. "-" .. sha:sub(1, 7))
+            else
+                runCallback()   -- match, or couldn't resolve the tag — fail open rather than loop
+            end
+        end)
         return
     end
 
@@ -1201,17 +1241,6 @@ function Mux.ensureVersion(requiredVersion, url, callback, exact)
             "Mux.ensureVersion: installed Muxlet %s does not satisfy required %s, and no url was given to reinstall.",
             tostring(Mux._version), requiredVersion)
         return
-    end
-
-    local verb = Mux._versionIsNewer(requiredVersion, Mux._version) and "Upgrading" or "Downgrading"
-
-    local function proceed(targetLabel)
-        Mux._echo(string.format(
-            "\n<yellow>[Muxlet]<reset> %s Muxlet %s -> %s...\n", verb, tostring(Mux._version), targetLabel))
-        if table.contains(getPackages(), "Muxlet") then
-            uninstallPackage("Muxlet")
-        end
-        installPackage(url)
     end
 
     -- Already carries a sha, or is a "v"-prefixed production pin — nothing to
