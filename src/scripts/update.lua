@@ -212,7 +212,12 @@ Mux.registerContent("mux_restart_required_confirm", {
         btnLater:setStyleSheet(Mux.dialogCss.button)
         btnLater:rawEcho("<center>Close Later</center>")
         Mux.wireDialogButton(btnLater, Mux.dialogCss.button, Mux.dialogCss.buttonHover)
-        btnLater:setClickCallback(function() dlg:close() end)
+        btnLater:setClickCallback(function()
+            dlg:close()
+            if Mux._hostUpdate and Mux._hostUpdate.onRestartDeclined then
+                pcall(Mux._hostUpdate.onRestartDeclined)
+            end
+        end)
         target._autoFitHeight = 130
     end,
     remove = function(_) end,
@@ -1461,6 +1466,16 @@ function Mux.configureHost(opts)
             settingsNamespace     = ns,
             requiredMuxletVersion = opts.requiredMuxletVersion,
             requiredMuxletUrl     = opts.requiredMuxletUrl,
+            -- Called by the restart-recommended dialog's own "Close Later"
+            -- button (see mux_restart_required_confirm below), never on
+            -- "Close Profile" -- lets the host defer its own post-reinstall,
+            -- restart-worthy prompts (e.g. a layout-changed notice) behind
+            -- the user's actual restart decision instead of stacking them on
+            -- top of this dialog. Fires regardless of what triggered the
+            -- restart prompt (a host's own dev-mode watcher reinstalling it,
+            -- or Muxlet's own update flow updating it) since both funnel
+            -- through the same dialog.
+            onRestartDeclined     = opts.onRestartDeclined,
         }
         registerHostSettingsRows(ns, tab)
     end
