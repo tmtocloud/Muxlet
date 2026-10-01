@@ -243,6 +243,20 @@ end
 
 -- ── Property definitions ──────────────────────────────────────────────────────
 
+-- Shown on every pane/tab: a pane's value also reaches the content in its tabs.
+local function _textScaleRow(subject)
+    return {
+        label   = "Text Size %",
+        desc    = "Font size for content that supports text scaling (and, on a pane, the content in its tabs).",
+        type    = "number",
+        min     = Mux.TEXT_SCALE_MIN, max = Mux.TEXT_SCALE_MAX, step = Mux.TEXT_SCALE_STEP,
+        _localKey   = "content.textScale",
+        _localReset = function() Mux.setTextScale(subject, nil) end,
+        readFn  = function() return Mux.textScalePercent(subject) end,
+        writeFn = function(v) Mux.setTextScale(subject, v) end,
+    }
+end
+
 local function paneRows(pane)
     local rows = {}
 
@@ -713,7 +727,7 @@ local function paneRows(pane)
     local resetHolder = {}
     themeRows[#themeRows+1] = {
         type = "button", label = "Reset to theme", _noReset = true, _refreshHolder = resetHolder,
-        desc = "Clear all of this pane's color overrides and follow the theme.",
+        desc = "Clear all of this pane's color and text size overrides and follow the theme.",
         onClick = function()
             Mux.resetLocalTokens(pane)
             if resetHolder.refresh then resetHolder.refresh() end
@@ -721,6 +735,7 @@ local function paneRows(pane)
     }
     themeRows[#themeRows+1] = { type = "divider", label = "Style" }
     for _, r in ipairs(style) do r._noReset = true; themeRows[#themeRows+1] = r end
+    themeRows[#themeRows+1] = _textScaleRow(pane)
     if #colors > 0 then
         themeRows[#themeRows+1] = { type = "divider", label = "Colors", _collapsed = true }
         for _, r in ipairs(colors) do themeRows[#themeRows+1] = r end
@@ -920,10 +935,9 @@ local function tabRows(host, tab)
             if resetHolder.refresh then resetHolder.refresh() end
         end,
     }
-    if #style > 0 then
-        themeRows[#themeRows+1] = { type = "divider", label = "Style" }
-        for _, r in ipairs(style) do themeRows[#themeRows+1] = r end
-    end
+    themeRows[#themeRows+1] = { type = "divider", label = "Style" }
+    for _, r in ipairs(style) do themeRows[#themeRows+1] = r end
+    themeRows[#themeRows+1] = _textScaleRow(tab)
     if #colors > 0 then
         themeRows[#themeRows+1] = { type = "divider", label = "Colors", _collapsed = true }
         for _, r in ipairs(colors) do themeRows[#themeRows+1] = r end

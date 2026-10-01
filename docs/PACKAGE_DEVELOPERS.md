@@ -292,8 +292,45 @@ Mux.registerContent("myclock", {
   -- See "Publishing to the titlebar and menu" below.
   titlebarElements = { … },
   onReveal = function(target) end,             -- called by `mux reveal <id>`
+
+  -- See "Text size" below.
+  onTextScale = function(target, scale) end,   -- the user changed this surface's text size
 })
 ```
+
+### Text size
+
+Muxlet keeps a user-facing text size per surface as the `content.textScale` token
+(a percent, default 100). Like any other token it cascades: a tab's own value, then
+its host pane's value, then the global value (Settings → Design → Panes), then the
+theme. Users set it from Properties → Design → **Text Size %**, or from the
+**🔠 Text Size** right-click menu entry. Muxlet adds that menu entry by itself to
+content that declares `onTextScale`.
+
+Content opts in by doing two things:
+
+```lua
+local BASE_POINTS = 9
+
+apply = function(target)
+  -- Size fonts through the helper instead of hard-coding them.
+  target._console = Geyser.MiniConsole:new({ name = target._gid .. "_mc",
+    x = 0, y = 0, width = "100%", height = "100%",
+    fontSize = Mux.scaledFontSize(target, BASE_POINTS) }, target.content)
+end,
+
+onTextScale = function(target, scale)          -- scale: 1.0 = 100%
+  target._console:setFontSize(Mux.scaledFontSize(target, BASE_POINTS))
+  -- Re-render if the layout depends on the font (e.g. replay a log to re-wrap it).
+end,
+```
+
+`onTextScale` fires only when the resolved scale for that surface actually changes.
+That includes a host pane's change reaching the content in its tabs, and a global
+or theme change. The value is already saved with the workspace, so content never
+needs to serialize it. Helpers: `Mux.textScale(target)` returns the factor,
+`Mux.textScalePercent(target)` the percent, and `Mux.setTextScale(target, percent)`
+sets it (`nil` clears the override; a nil target sets the global value).
 
 `group` controls how the item is presented in the Content Library dialog: items
 sharing a group are bucketed under a collapsible divider labelled with that group

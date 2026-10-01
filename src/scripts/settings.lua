@@ -651,7 +651,7 @@ local function tabHierarchy()
             themeNode.ns = nil   -- picker now lives inside the General custom tab
             -- Panes: one tab with Style + Colors separator sections (no sub-tabs).
             local panesNode = { label = "Panes", order = 2,
-                custom = "tok|Pane,Titlebar,Buttons,Slot,Drag,Handle|all", children = {}, _map = {} }
+                custom = "tok|Pane,Titlebar,Buttons,Content,Slot,Drag,Handle|all", children = {}, _map = {} }
             -- Tabs: same token editor as Panes, editing the tab.* tokens (global layer).
             local tabsNode = { label = "Tabs", order = 3,
                 custom = "tok|Tab|all", children = {}, _map = {} }
@@ -1355,7 +1355,7 @@ local function buildTokenEditor(target, bg)
                                 readFn  = function() return Mux.tok(key, nil) end,
                                 writeFn = function(v) Mux.setGlobalToken(key, v) end,
                             }
-                            if k == "size" then row.type, row.min, row.max = "number", s.min, s.max
+                            if k == "size" then row.type, row.min, row.max, row.step = "number", s.min, s.max, s.step
                             else row.type = "color" end
                             out[#out+1] = row
                         end
@@ -1387,7 +1387,7 @@ local function buildTokenEditor(target, bg)
                                 readFn  = function() return Mux.tok(key, nil) end,
                                 writeFn = function(v) Mux.setGlobalToken(key, v) end,
                             }
-                            if kind == "size" then row.type, row.min, row.max = "number", s.min, s.max
+                            if kind == "size" then row.type, row.min, row.max, row.step = "number", s.min, s.max, s.step
                             else row.type = "color" end
                             rows[#rows+1] = row
                         end

@@ -13,6 +13,7 @@
 --                                            -- Widget cleanup is automatic — remove()
 --                                            -- is only needed for non-widget teardown
 --                                            -- (event handlers, timers, state resets).
+--       onTextScale = function(target, scale) ... end,   -- optional; see "Text scale" below
 --   })
 --
 -- Content Library grouping:
@@ -113,6 +114,104 @@ local function showSingletonBlocked(contentName, def, existing)
     d:raise()
 end
 
+-- ── Text scale ────────────────────────────────────────────────────────────────
+-- A user-facing multiplier for content font sizes, stored as the content.textScale
+-- token (a percent) so it rides the normal cascade: per-tab, then the host pane
+-- chain, then global/theme/fallback. Content opts in by declaring
+--   onTextScale(target, scale)   rebuild/resize fonts for the new scale (1.0 = 100%)
+-- and by sizing fonts with Mux.scaledFontSize(target, basePoints) in apply().
+-- Opted-in content gets a "Text Size" right-click menu entry automatically.
+local TEXT_SCALE_KEY = "content.textScale"
+Mux.TEXT_SCALE_MIN, Mux.TEXT_SCALE_MAX, Mux.TEXT_SCALE_STEP = 50, 300, 10
+
+-- A tab inherits its host pane's override, unlike Mux.tok which only reads one scope.
+function Mux.textScalePercent(target)
+    local surface = target
+    while surface do
+        local value = surface._tokens and surface._tokens[TEXT_SCALE_KEY]
+        if value ~= nil then return tonumber(value) or 100 end
+        surface = surface.pane
+    end
+    return tonumber(Mux.tok(TEXT_SCALE_KEY, nil)) or 100
+end
+
+function Mux.textScale(target)
+    return Mux.textScalePercent(target) / 100
+end
+
+function Mux.scaledFontSize(target, basePoints)
+    return math.max(6, math.floor(basePoints * Mux.textScale(target) + 0.5))
+end
+
+-- nil clears the override (target) or the global value (no target).
+function Mux.setTextScale(target, percent)
+    if percent ~= nil then
+        percent = math.max(Mux.TEXT_SCALE_MIN, math.min(Mux.TEXT_SCALE_MAX, math.floor(tonumber(percent) or 100)))
+    end
+    if target then
+        Mux.setLocalToken(target, TEXT_SCALE_KEY, percent)
+        Mux._scheduleAutoSave()
+    else
+        Mux.setGlobalToken(TEXT_SCALE_KEY, percent)
+    end
+end
+
+function Mux.stepTextScale(target, direction)
+    Mux.setTextScale(target, Mux.textScalePercent(target) + direction * Mux.TEXT_SCALE_STEP)
+end
+
+-- Fires onTextScale only when the resolved scale actually changed, so the
+-- unrelated restyles that also route through here (colour edits) cost nothing.
+local function notifyTextScale(target)
+    local def = target._activeContent and Mux._content[target._activeContent]
+    if def and type(def.onTextScale) == "function" then
+        local scale = Mux.textScale(target)
+        if target._appliedTextScale ~= scale then
+            target._appliedTextScale = scale
+            pcall(def.onTextScale, target, scale)
+        end
+    end
+    for _, tab in ipairs(target._tabs or {})       do notifyTextScale(tab) end
+    for _, tab in ipairs(target._hiddenTabs or {}) do notifyTextScale(tab) end
+end
+
+-- Called by Mux.refreshStyling: with a scope, that surface and its tabs; else everything.
+function Mux._notifyTextScale(scope)
+    if scope then notifyTextScale(scope); return end
+    for _, pane in pairs(Mux._panes or {}) do notifyTextScale(pane) end
+end
+
+local TEXT_SCALE_ELEMENT_ID = "mux.textScale"
+local function textScaleTarget(ctx) return ctx.tab or ctx.pane end
+local TEXT_SCALE_ELEMENT = {
+    id = TEXT_SCALE_ELEMENT_ID, iconable = false,
+    menuText = function(ctx)
+        return string.format("🔠  Text Size: %d%%", Mux.textScalePercent(textScaleTarget(ctx)))
+    end,
+    menuGroup = "info", menuOrder = 96,
+    submenu = function(ctx)
+        local target = textScaleTarget(ctx)
+        return {
+            { text = "A+  Larger",  keepOpen = true, fn = function() Mux.stepTextScale(target, 1) end },
+            { text = "A−  Smaller", keepOpen = true, fn = function() Mux.stepTextScale(target, -1) end },
+            { sep = true },
+            { text = "↺  Reset", fn = function() Mux.setTextScale(target, nil) end },
+        }
+    end,
+}
+
+-- Copies rather than appends so a caller's shared titlebarElements table is never mutated.
+local function withTextScaleElement(def)
+    if type(def.onTextScale) ~= "function" then return end
+    local elements = {}
+    for _, spec in ipairs(def.titlebarElements or {}) do
+        if spec.id == TEXT_SCALE_ELEMENT_ID then return end
+        elements[#elements + 1] = spec
+    end
+    elements[#elements + 1] = TEXT_SCALE_ELEMENT
+    def.titlebarElements = elements
+end
+
 --- Register a named content type.
 -- @param name  string identifier (used in API calls and menus)
 -- @param def   table with at minimum an `apply(target)` function
@@ -120,6 +219,7 @@ function Mux.registerContent(name, def)
     assert(type(name)      == "string",   "content name must be a string")
     assert(type(def)       == "table",    "content definition must be a table")
     assert(type(def.apply) == "function", "content.apply must be a function")
+    withTextScaleElement(def)
     Mux._content[name] = def
     Mux._log("Registered content: %s", name)
     scheduleSave()
@@ -266,6 +366,9 @@ function Mux._applyContent(target, contentName, force)
     target.content = realContent   -- always restore, even on apply error
 
     target._activeContent = contentName
+    -- apply() sized its fonts at the current scale; record it so the next
+    -- notification only fires onTextScale on a real change.
+    target._appliedTextScale = (def.onTextScale and Mux.textScale(target)) or nil
     if def.singleton then def._activeTargetRef = target end
     -- Apply this content's parameter locks (sets values + snapshots prior ones), then
     -- recompute the read-only set so Properties reflects them immediately.

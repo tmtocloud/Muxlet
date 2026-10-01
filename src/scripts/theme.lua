@@ -59,6 +59,8 @@ Mux.tokens.fallback = {
     ["pane.border.color"]        = "rgba(255,255,255,0.38)",
     ["pane.border.radius"]       = 3,
     ["content.bg"]               = "rgba(8,8,13,255)",
+    -- Percent applied to the font sizes of content that implements onTextScale.
+    ["content.textScale"]        = 100,
 
     -- Titlebar
     ["titlebar.bg"]              = "rgba(25,25,38,235)",
@@ -323,6 +325,11 @@ Mux.tokens.spec = {
     { group = "Buttons",  scope = "pane",   key = "btn.text.glyphColor",      type = "color", label = "Button Icon" },
     { group = "Buttons",  scope = "pane",   key = "btn.hover.bg",             type = "color", label = "Button Hover" },
 
+    -- Per-pane/per-tab rows for this are built explicitly in properties.lua, since
+    -- a tab inherits it from its host pane (see Mux.textScalePercent).
+    { group = "Content",  scope = "pane",   key = "content.textScale",        type = "size",  label = "Text Size %",
+      min = 50, max = 300, step = 10 },
+
     -- Context menu (right-click menu). Item text echoes with echoText.color, so
     -- that — not contextMenu.text.color — is the colour you actually see.
     { group = "Menu",   scope = "global", key = "contextMenu.bg",             type = "color", label = "Background" },
@@ -368,7 +375,7 @@ Mux.tokens.spec = {
     { group = "Tab", scope = "tab",    key = "tab.hover.text.color",     type = "color", label = "Hover Text" },
 }
 -- Group order for the editor.
-Mux.tokens.specGroups = { "Pane", "Titlebar", "Buttons", "Menu", "Slot", "Drag", "Handle", "Scrollbar", "Tab" }
+Mux.tokens.specGroups = { "Pane", "Titlebar", "Buttons", "Content", "Menu", "Slot", "Drag", "Handle", "Scrollbar", "Tab" }
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- RESOLVER + ASSEMBLER
@@ -689,6 +696,7 @@ end
 function Mux.refreshStyling(scope)
     if scope then
         if scope.applyTheme then scope:applyTheme() end
+        if Mux._notifyTextScale then pcall(Mux._notifyTextScale, scope) end
         return
     end
     Mux._effectiveTheme = Mux._buildEffectiveTheme(nil)
@@ -699,6 +707,7 @@ function Mux.refreshStyling(scope)
     if Mux._restyleAllTabs then pcall(Mux._restyleAllTabs) end
     for _, p in pairs(Mux._panes)  do if p.applyTheme then p:applyTheme() end end
     for _, s in pairs(Mux._splits) do if s.applyTheme then s:applyTheme() end end
+    if Mux._notifyTextScale then pcall(Mux._notifyTextScale) end
 end
 
 function Mux.applyTheme(name)

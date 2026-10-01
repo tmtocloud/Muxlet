@@ -146,6 +146,8 @@ local function clearCaptureRules(target)
 end
 
 -- ── Per-capture consoles + filter switcher ────────────────────────────────────
+local CONSOLE_FONT_SIZE = 10
+
 -- target._captureConsoles = { all = MiniConsole, [capTable] = MiniConsole, ... }
 -- keyed by the capture entry's own table identity (stable across renames/reorders,
 -- only invalidated when a capture is actually removed), so consoles never need
@@ -160,7 +162,7 @@ local function _ensureCaptureConsole(target, cap)
     local mc = Geyser.MiniConsole:new({
         name     = "mux_cap_" .. safe .. "_" .. target._captureConsoleSeq,
         x = "0%", y = "0%", width = "100%", height = "100%",
-        autoWrap = true, color = "black", fontSize = 10,
+        autoWrap = true, color = "black", fontSize = Mux.scaledFontSize(target, CONSOLE_FONT_SIZE),
     }, target.content)
     pcall(function()
         mc:setColor(0, 0, 0)
@@ -397,7 +399,7 @@ Mux.registerContent("mux_capture", {
         target._captureConsole = Geyser.MiniConsole:new({
             name     = "mux_cap_" .. safe,
             x = "0%", y = "0%", width = "100%", height = "100%",
-            autoWrap = true, color = "black", fontSize = 10,
+            autoWrap = true, color = "black", fontSize = Mux.scaledFontSize(target, CONSOLE_FONT_SIZE),
         }, target.content)
         pcall(function()
             target._captureConsole:setColor(0, 0, 0)
@@ -412,6 +414,13 @@ Mux.registerContent("mux_capture", {
         clearCaptureRules(target)
         target._captureConsoles = nil
         target._captureConsole  = nil
+    end,
+
+    onTextScale = function(target)
+        local size = Mux.scaledFontSize(target, CONSOLE_FONT_SIZE)
+        for _, mc in pairs(target._captureConsoles or {}) do
+            pcall(function() mc:setFontSize(size) end)
+        end
     end,
 
     serialize = function(target)

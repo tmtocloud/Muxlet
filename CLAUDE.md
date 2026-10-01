@@ -76,6 +76,10 @@ internal    bool     Muxlet system-only content; hidden from the "Add Content" m
                      Muxlet UI (properties, settings pane, connection screen, etc.)
 apply(target)        REQUIRED — build widgets in target.content; hide target.contentBg
 remove(target)       optional — called before a different content is applied (tear down timers, etc.)
+onTextScale(target, scale)  optional — opt in to the per-surface text size (content.textScale token,
+                     tab → host pane → global cascade). Size fonts with Mux.scaledFontSize(target, base)
+                     in apply; this fires only on a real change. Declaring it auto-adds the
+                     "Text Size" menu element (content.lua withTextScaleElement).
 ```
 
 Key behaviour:
