@@ -480,19 +480,27 @@ function MuxSurface:_setAddTabBtnVisible(visible)
     self:_relayoutTabLabels()
 end
 
--- Resize the HBox for a sub-tab host to be exactly numTabs×subTabWidth pixels
--- wide and then re-organize so each tab gets a fixed pixel width.  Sub-tab
+-- Resize the HBox for a sub-tab host to the sum of its tabs' pixel widths, each
+-- at least subTabWidth and wide enough for its text, then re-organize.  Sub-tab
 -- dividers land at absolute pixel positions unrelated to the parent bar's
 -- percentage-based dividers, so they never form a visual grid.
 function MuxSurface:_resizeSubTabBar()
     if not self._isSubTabHost or not self._tabBarBox then return end
-    local theme = Mux.activeTheme()
-    local tabW  = theme.subTabWidth or 80
-    local n     = #(self._tabs or {})
-    if n > 0 then
-        self._tabBarBox:resize(Mux._toPx(n * tabW), nil)
-        self._tabBarBox:organize()
+    local tabs = self._tabs or {}
+    if #tabs == 0 then return end
+    local theme  = Mux.activeTheme()
+    local tabW   = theme.subTabWidth  or 80
+    local charPx = theme.tabCharWidth or 8
+    local padW   = theme.tabLabelPad  or 20
+    local total  = 0
+    for _, tab in ipairs(tabs) do
+        local w = math.max(tabW, #(tab.name or "") * charPx + padW)
+        -- Stretch factor keeps each tab's share when the HBox re-organizes on reposition.
+        tab.label.h_stretch_factor = w / tabW
+        total = total + w
     end
+    self._tabBarBox:resize(Mux._toPx(total), nil)
+    self._tabBarBox:organize()
 end
 
 -- Layout tab labels in the bar.  Sub-tab hosts delegate to _resizeSubTabBar
@@ -533,6 +541,7 @@ function MuxSurface:_relayoutTabLabels()
     end
     local x = 0
     for idx, tab in ipairs(tabs) do
+        tab.label.h_stretch_factor = 1
         tab.label:resize(widths[idx])
         tab.label:move(x)
         x = x + widths[idx]
