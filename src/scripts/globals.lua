@@ -410,7 +410,9 @@ local function raiseMenuChrome()
     end
 end
 
-local function showSubmenu(submenuItems, parentMenuX, parentRowY)
+-- onKeepOpenAction runs after a keepOpen row's action so the parent menu can
+-- re-render live state (its own row text, and this submenu's items).
+local function showSubmenu(submenuItems, parentMenuX, parentRowY, onKeepOpenAction)
     local menu       = Mux._contextMenu
     local submenu    = menu.submenu
     local theme      = Mux.activeTheme()
@@ -484,7 +486,10 @@ local function showSubmenu(submenuItems, parentMenuX, parentRowY)
                 if event.button ~= "LeftButton" then return end
                 if not keepOpen then Mux._closeContextMenu() end
                 if action then action() end
-                if keepOpen then raiseMenuChrome() end
+                if keepOpen then
+                    if onKeepOpenAction then onKeepOpenAction() end
+                    raiseMenuChrome()
+                end
             end)
         end
         label:show()
@@ -555,6 +560,13 @@ function Mux._showItemMenu(globalX, globalY, items)
     local textColor    = theme.contextMenuTextColor       or DEFAULT_MENU_CSS.text
     local dangerColor  = theme.contextMenuDangerTextColor or DEFAULT_MENU_CSS.dangerText
 
+    -- Every row's text re-renderer, so a keepOpen action can refresh all live
+    -- labels (e.g. a "Text Size: N%" row) and not just the row that was clicked.
+    local rowEchoes = {}
+    local function refreshRows()
+        for _, echoRow in ipairs(rowEchoes) do pcall(echoRow) end
+    end
+
     local rowY = menuY + padY
     for index, item in ipairs(items) do
         local label  = menu.rowLabels[index]
@@ -590,12 +602,21 @@ function Mux._showItemMenu(globalX, globalY, items)
             local function echoText()
                 label:echo(string.format("<span style='color:%s;'>%s</span>", itemColor, curText()))
             end
+            rowEchoes[#rowEchoes + 1] = echoText
+            local openSub
+            openSub = function()
+                local sub = curSub()
+                if not sub then hideSubmenu(); return end
+                showSubmenu(sub, capturedX, capturedRowY, function()
+                    refreshRows()
+                    openSub()
+                end)
+            end
             label:setStyleSheet(normalCss)
             echoText()
             label:setOnEnter(function()
                 label:setStyleSheet(hoverCss)
-                local sub = curSub()
-                if sub then showSubmenu(sub, capturedX, capturedRowY) else hideSubmenu() end
+                openSub()
             end)
             label:setOnLeave(function() label:setStyleSheet(normalCss) end)
             local action   = item.fn
@@ -607,12 +628,11 @@ function Mux._showItemMenu(globalX, globalY, items)
                     if action then action() end
                     return
                 end
-                -- Stay open: run the action, then refresh this row's text + submenu to
+                -- Stay open: run the action, then refresh row text + submenu to
                 -- match the new state and re-assert menu z-order.
                 if action then action() end
-                echoText()
-                local sub = curSub()
-                if sub then showSubmenu(sub, capturedX, capturedRowY) else hideSubmenu() end
+                refreshRows()
+                openSub()
                 raiseMenuChrome()
             end)
         end

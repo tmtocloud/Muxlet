@@ -183,21 +183,37 @@ end
 
 local TEXT_SCALE_ELEMENT_ID = "mux.textScale"
 local function textScaleTarget(ctx) return ctx.tab or ctx.pane end
+local function textScaleLabel(target)
+    return string.format("🔠  Text Size: %d%%", Mux.textScalePercent(target))
+end
+local function textScaleActions(target)
+    return {
+        { text = "A+  Larger",  keepOpen = true, fn = function() Mux.stepTextScale(target, 1) end },
+        { text = "A−  Smaller", keepOpen = true, fn = function() Mux.stepTextScale(target, -1) end },
+        { sep = true },
+        { text = "↺  Reset",    keepOpen = true, fn = function() Mux.setTextScale(target, nil) end },
+    }
+end
+
+-- Titlebar icon by default; folds into the right-click menu (as a row with a
+-- submenu) when the bar is too narrow or compact, like any other element.
 local TEXT_SCALE_ELEMENT = {
-    id = TEXT_SCALE_ELEMENT_ID, iconable = false,
-    menuText = function(ctx)
-        return string.format("🔠  Text Size: %d%%", Mux.textScalePercent(textScaleTarget(ctx)))
-    end,
-    menuGroup = "info", menuOrder = 96,
-    submenu = function(ctx)
+    id = TEXT_SCALE_ELEMENT_ID, side = "left", group = "content", order = 50, priority = 90,
+    icon = "🔠", tooltip = "Text size",
+    hideable = true, hideLabel = "Text Size Icon",
+    onClick = function(ctx, event)
+        if event and event.button ~= "LeftButton" then return end
         local target = textScaleTarget(ctx)
-        return {
-            { text = "A+  Larger",  keepOpen = true, fn = function() Mux.stepTextScale(target, 1) end },
-            { text = "A−  Smaller", keepOpen = true, fn = function() Mux.stepTextScale(target, -1) end },
-            { sep = true },
-            { text = "↺  Reset", fn = function() Mux.setTextScale(target, nil) end },
-        }
+        local items  = { { dynText = function() return textScaleLabel(target) end, keepOpen = true }, { sep = true } }
+        for _, item in ipairs(textScaleActions(target)) do items[#items + 1] = item end
+        local theme = Mux.activeTheme()
+        Mux._contextMenu.itemHeight = theme.contextMenuItemHeight or 28
+        Mux._contextMenu.menuWidth  = theme.contextMenuWidth      or 188
+        Mux._showItemMenu((event and event.globalX) or 0, (event and event.globalY) or 0, items)
     end,
+    menuText = function(ctx) return textScaleLabel(textScaleTarget(ctx)) end,
+    menuGroup = "info", menuOrder = 96,
+    submenu = function(ctx) return textScaleActions(textScaleTarget(ctx)) end,
 }
 
 -- Copies rather than appends so a caller's shared titlebarElements table is never mutated.

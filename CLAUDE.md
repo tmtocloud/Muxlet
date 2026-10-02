@@ -79,7 +79,7 @@ remove(target)       optional — called before a different content is applied (
 onTextScale(target, scale)  optional — opt in to the per-surface text size (content.textScale token,
                      tab → host pane → global cascade). Size fonts with Mux.scaledFontSize(target, base)
                      in apply; this fires only on a real change. Declaring it auto-adds the
-                     "Text Size" menu element (content.lua withTextScaleElement).
+                     🔠 "Text Size" titlebar element (content.lua withTextScaleElement).
 ```
 
 Key behaviour:

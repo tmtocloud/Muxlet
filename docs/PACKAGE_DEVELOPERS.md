@@ -304,8 +304,10 @@ Muxlet keeps a user-facing text size per surface as the `content.textScale` toke
 (a percent, default 100). Like any other token it cascades: a tab's own value, then
 its host pane's value, then the global value (Settings → Design → Panes), then the
 theme. Users set it from Properties → Design → **Text Size %**, or from the
-**🔠 Text Size** right-click menu entry. Muxlet adds that menu entry by itself to
-content that declares `onTextScale`.
+**🔠** titlebar icon. Muxlet adds that icon by itself to content that declares
+`onTextScale`. Like any titlebar element, it folds into the right-click menu when
+the titlebar is too narrow or compact, can be hidden in Properties, and appears as
+a right-click menu row for content hosted in a tab.
 
 Content opts in by doing two things:
 
