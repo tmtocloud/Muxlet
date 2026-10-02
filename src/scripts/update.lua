@@ -277,10 +277,12 @@ end
 -- frees it mid-run and crashes Mudlet.
 --   opts.wipe          delete persisted state between uninstall and install (fresh profile)
 --   opts.promptRestart show the restart-recommended dialog after a successful reinstall
+--   opts.quiet         skip the success message (failures are always reported)
 function Mux._reinstallPackage(path, opts)
     opts = opts or {}
     local doWipe = opts.wipe and true or false
     local promptRestart = opts.promptRestart and true or false
+    local quiet = opts.quiet and true or false
     local wipeFn = Mux._wipePersistentDir   -- capture before teardown
     tempTimer(0, function()
         if table.contains(getPackages(), "Muxlet") then
@@ -293,7 +295,9 @@ function Mux._reinstallPackage(path, opts)
         -- torn down and rebuilt, and we want this message to survive either way.
         local ok, err = installPackage(path)
         if ok then
-            cecho("\n<green>[Muxlet]<reset> Update installed. Run <cyan>mux version<reset> to confirm the new build.\n")
+            if not quiet then
+                cecho("\n<green>[Muxlet]<reset> Update installed. Run <cyan>mux version<reset> to confirm the new build.\n")
+            end
             if promptRestart then Mux._promptRestartRequired() end
         else
             cecho(string.format(
@@ -765,7 +769,7 @@ local function installFromRelease(cand)
         end
     end)
 
-    Mux._updateInstallErr = registerAnonymousEventHandler("sysDownloadError", function(_, filename)
+    Mux._updateInstallErr = registerAnonymousEventHandler("sysDownloadError", function(_, _, filename)
         if filename ~= pkg then return end
         killAnonymousEventHandler(Mux._updateInstallErr); Mux._updateInstallErr = nil
         if Mux._updateInstallDone then
@@ -1030,7 +1034,7 @@ local function fetchMuxletBumpChangelog(requiredVersion, cb)
         cb(target, buildChangelog(cands, target, installedBaseVersion()))
     end)
 
-    Mux._bumpDlErrHandler = registerAnonymousEventHandler("sysDownloadError", function(_, filename)
+    Mux._bumpDlErrHandler = registerAnonymousEventHandler("sysDownloadError", function(_, _, filename)
         if filename ~= tmp then return end
         cleanup()
         cb(nil, nil)
@@ -1120,7 +1124,7 @@ function Mux.checkForUpdates(silent)
         end
     end)
 
-    Mux._updateDlErrHandler = registerAnonymousEventHandler("sysDownloadError", function(_, filename)
+    Mux._updateDlErrHandler = registerAnonymousEventHandler("sysDownloadError", function(_, _, filename)
         if filename ~= tmp then return end
         cleanup()
         if not silent then
@@ -1182,7 +1186,7 @@ local function resolveMuxletTagSha(tag, cb)
         cb(sha)
     end)
 
-    Mux._tagShaDlErrHandler = registerAnonymousEventHandler("sysDownloadError", function(_, filename)
+    Mux._tagShaDlErrHandler = registerAnonymousEventHandler("sysDownloadError", function(_, _, filename)
         if filename ~= tmp then return end
         cleanup()
         cb(nil)
@@ -1212,14 +1216,44 @@ function Mux.ensureVersion(requiredVersion, url, callback, exact)
         if not ok then Mux._err("Mux.ensureVersion callback error: %s", tostring(err)) end
     end
 
+    -- Downloads before uninstalling, then swaps in one tick via _reinstallPackage.
+    -- installPackage(url) after an uninstall is not safe: the uninstall queues an
+    -- async profile save, an install that arrives mid-save is deferred, and
+    -- Mudlet's url wrapper deletes the downloaded file before the deferred
+    -- install runs, leaving the profile with no Muxlet at all.
     local function proceed(targetLabel)
         local verb = Mux._versionIsNewer(requiredVersion, Mux._version) and "Upgrading" or "Downgrading"
         Mux._echo(string.format(
             "\n<yellow>[Muxlet]<reset> %s Muxlet %s -> %s...\n", verb, tostring(Mux._version), targetLabel))
-        if table.contains(getPackages(), "Muxlet") then
-            uninstallPackage("Muxlet")
+        if not url:match("^https?://") then
+            Mux._reinstallPackage(url, { quiet = true })
+            return
         end
-        installPackage(url)
+
+        local pkg = getMudletHomeDir() .. "/Muxlet_required.mpackage"
+        local function cleanup()
+            if Mux._requiredDlHandler then killAnonymousEventHandler(Mux._requiredDlHandler); Mux._requiredDlHandler = nil end
+            if Mux._requiredDlErrHandler then
+                killAnonymousEventHandler(Mux._requiredDlErrHandler); Mux._requiredDlErrHandler = nil
+            end
+        end
+        cleanup()
+
+        Mux._requiredDlHandler = registerAnonymousEventHandler("sysDownloadDone", function(_, filename)
+            if filename ~= pkg then return end
+            cleanup()
+            Mux._reinstallPackage(pkg, { quiet = true })
+        end)
+
+        Mux._requiredDlErrHandler = registerAnonymousEventHandler("sysDownloadError", function(_, _, filename)
+            if filename ~= pkg then return end
+            cleanup()
+            Mux._echo(string.format(
+                "\n<red>[Muxlet]<reset> Download of Muxlet %s failed. Install it manually from <cyan>%s<reset>\n",
+                targetLabel, url))
+        end)
+
+        downloadFile(pkg, url)
     end
 
     if Mux._versionSatisfied(requiredVersion, exact) then
