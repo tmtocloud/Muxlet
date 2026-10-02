@@ -139,13 +139,21 @@ end
 -- buildForm spec (e.g. { type="button", label=..., style=..., onClick=fn }). Rows
 -- render after the namespace's registered settings, in call order. Used by other
 -- modules to add actions to a tab (e.g. the updater's "Check now" button) without
--- pretending the action is a stored preference.
+-- pretending the action is a stored preference. A row with the same label as an
+-- existing one in that namespace replaces it, so repeat registration is safe.
 function Mux.settings.registerRow(ns, spec)
     assert(type(ns)   == "string", "settings.registerRow: ns must be a string")
     assert(type(spec) == "table",  "settings.registerRow: spec must be a table")
     spec._noReset = true   -- action rows are not resettable settings
     Mux.settings._extraRows[ns] = Mux.settings._extraRows[ns] or {}
-    Mux.settings._extraRows[ns][#Mux.settings._extraRows[ns] + 1] = spec
+    local rows = Mux.settings._extraRows[ns]
+    for i, existing in ipairs(rows) do
+        if spec.label ~= nil and existing.label == spec.label then
+            rows[i] = spec
+            return
+        end
+    end
+    rows[#rows + 1] = spec
 end
 
 function Mux.settings.get(ns, key)
