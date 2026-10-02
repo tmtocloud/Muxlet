@@ -531,6 +531,32 @@ function Mux._clearWorkspace()
     Mux._log("_clearWorkspace: cleared")
 end
 
+-- Mudlet 5.0.1+ preinstalls its starter UI ("Mudlet base UI") on every new
+-- profile for games not flagged as shipping their own interface. It does not know
+-- Muxlet exists: both write the window borders absolutely and both build a
+-- Geyser.Mapper over the single per-profile map widget, so whichever loses that
+-- race draws blank. Idempotent: once hidden, BaseUI.dormant() short-circuits it.
+function Mux._hideMudletBaseUi()
+    if not Mux.settings.get("mux", "hideBaseUi") then return end
+    if not (type(BaseUI) == "table" and type(BaseUI.hide) == "function") then return end
+    -- true once the starter UI already stood aside for a game-supplied interface,
+    -- leaving nothing on screen to hide
+    if type(BaseUI.dormant) == "function" then
+        local known, isDormant = pcall(BaseUI.dormant)
+        if known and isDormant then return end
+    end
+
+    local ok, err = pcall(BaseUI.hide)
+    if not ok then
+        Mux._log("BaseUI.hide failed: %s", tostring(err))
+        return
+    end
+    Mux._echo("\n<yellow>[Muxlet]<reset> Hid Mudlet's starter interface, which draws over Muxlet's "
+        .. "layout and competes for the map widget.\n"
+        .. "  To keep it instead, turn off <cyan>Hide Mudlet's starter interface<reset> under "
+        .. "<cyan>mux settings<reset> > Muxlet > General, then type <cyan>baseui show<reset>.\n")
+end
+
 -- fullStop  — destroys all visible widgets, kills the resize handler, reloads
 --             settings from disk so theme and debug flag are fresh.
 -- fullStart — re-registers the resize handler, applies saved theme, restores
@@ -596,6 +622,7 @@ function Mux.fullStart()
 
     Mux.applyWorkspace(wsName)
     Mux._running = true
+    Mux._hideMudletBaseUi()
     tempTimer(2, function()
         if not Mux.settings.get("mux", "quietStart") then
             Mux._echo("\n<cyan>[Muxlet]<reset> Started — type <cyan>mux help<reset> for commands.\n")

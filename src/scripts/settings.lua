@@ -1907,6 +1907,15 @@ Mux.settings.register("mux", "quietStart", {
     default     = false,
 })
 
+Mux.settings.register("mux", "hideBaseUi", {
+    tab         = "Muxlet/General",
+    label       = "Hide Mudlet's starter interface",
+    description = "Mudlet 5.0.1+ preinstalls its own map/chat/gauges dock on new profiles. "
+               .. "It draws over the Muxlet layout and competes for the single map widget, "
+               .. "so it is hidden when Muxlet starts. Turn this off and type 'baseui show' to keep it.",
+    default     = true,
+})
+
 -- Explicit display order for the Muxlet/General tab.  Registration order would
 -- otherwise decide this; listing it here keeps the tab curated.  (Update settings
 -- live in the muxupdate namespace / Muxlet/Update tab, not here.)
@@ -1916,6 +1925,7 @@ Mux.settings._order["mux"] = {
     "quietStart",
     "compact_titlebar",
     "showConsoleGear",
+    "hideBaseUi",
     "confirmPaneClose",
     "confirmTabClose",
     "live_resize_max_panes",
