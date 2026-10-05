@@ -1222,7 +1222,13 @@ function Mux.ensureVersion(requiredVersion, url, callback, exact)
     -- Mudlet's url wrapper deletes the downloaded file before the deferred
     -- install runs, leaving the profile with no Muxlet at all.
     local function proceed(targetLabel)
-        local verb = Mux._versionIsNewer(requiredVersion, Mux._version) and "Upgrading" or "Downgrading"
+        -- Same number means the pre-release tag moved to a new commit.
+        local verb = "Updating"
+        if Mux._versionIsNewer(requiredVersion, Mux._version) then
+            verb = "Upgrading"
+        elseif Mux._versionIsNewer(Mux._version, requiredVersion) then
+            verb = "Downgrading"
+        end
         Mux._echo(string.format(
             "\n<yellow>[Muxlet]<reset> %s Muxlet %s -> %s...\n", verb, tostring(Mux._version), targetLabel))
         if not url:match("^https?://") then
