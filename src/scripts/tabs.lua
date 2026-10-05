@@ -809,6 +809,10 @@ function MuxTab:_conditionHide()
     self._conditionHidden = true
     self.content:hide()
     if host._activeTabId == self.id then
+        -- The user's choice outlives the hide: _conditionShow re-activates it and
+        -- _serializeTabs keeps saving it, so a rule that is briefly false (rank not
+        -- yet sent at login) doesn't move the session to another tab for good.
+        host._preferredTabName = host._preferredTabName or self.name
         local nextTab = nil
         for _, t in ipairs(host._tabs) do
             if t.id ~= self.id and not t._conditionHidden then nextTab = t; break end
@@ -882,7 +886,10 @@ function MuxTab:_conditionShow()
     host:_relayoutTabLabels()
     if host._isSubTabHost then host:_resizeSubTabBar() end
     -- Also activate if activeTabId is stale (points at a removed tab), not just nil.
-    if not host._activeTabId or not host:_findTab(host._activeTabId) then
+    if host._preferredTabName == self.name then
+        host._preferredTabName = nil
+        host:_activateTabObj(self)
+    elseif not host._activeTabId or not host:_findTab(host._activeTabId) then
         host:_activateTabObj(self)
     end
     Mux._scheduleAutoSave()
@@ -909,9 +916,13 @@ function MuxSurface:_confirmCloseTab(tab)
     Mux._applyContent(confirmD, "mux_close_tab_confirm")
 end
 
+-- An explicit pick, so it replaces any choice held for a condition-hidden tab.
 function MuxSurface:activateTab(tabId)
     local tab = self:_findTab(tabId)
-    if tab then self:_activateTabObj(tab) end
+    if tab then
+        self._preferredTabName = nil
+        self:_activateTabObj(tab)
+    end
 end
 
 -- Per-tab label stylesheet from the token cascade, honoring active/parent state so
@@ -1054,6 +1065,7 @@ function MuxSurface:_wireTabLabel(tab)
         drag.startX  = event.globalX
         drag.startY  = event.globalY
 
+        pane._preferredTabName = nil
         pane:_activateTabObj(tab)
         if Mux.raisePane then Mux.raisePane(pane) end
     end)
@@ -1431,8 +1443,8 @@ function MuxSurface:_serializeTabs()
     for _, tab in ipairs(self._hiddenTabs or {}) do
         tabs[#tabs+1] = serializeOneTab(tab, true)
     end
-    local activeTabName
-    if self._activeTabId then
+    local activeTabName = self._preferredTabName
+    if not activeTabName and self._activeTabId then
         local at = self:_findTab(self._activeTabId)
         activeTabName = at and at.name
     end

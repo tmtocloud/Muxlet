@@ -797,10 +797,21 @@ local function restoreTabsBody(p, node)
         end
     end
     if activeTabName then
+        local found = false
         for _, tab in ipairs(p._tabs or {}) do
             if tab.name == activeTabName then
                 p:activateTab(tab.id)
+                found = true
                 break
+            end
+        end
+        -- Saved tab is condition-hidden right now: hold it until its rule shows it.
+        if not found then
+            for _, tab in ipairs(p._hiddenTabs or {}) do
+                if tab.name == activeTabName then
+                    p._preferredTabName = activeTabName
+                    break
+                end
             end
         end
     end
