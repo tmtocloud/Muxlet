@@ -195,6 +195,11 @@ Content can publish its own settings into the host titlebar and right-click menu
 for example the button grid's wrench (edit mode) or the capture window's settings
 gear. Those controls follow the content, whether it lives on a pane or on a tab.
 
+The capture window matches each pattern against the text as the game sent it, even
+when the game wrapped it across several lines, and takes every line the match covers.
+Each capture can highlight its tab when it matches while the tab isn't showing, and
+the window can keep a history that is shown again next session.
+
 ## Rules (reactive panes and tabs)
 
 Open a pane or tab's **Properties** to give it rules. A rule is *When \<condition\>,

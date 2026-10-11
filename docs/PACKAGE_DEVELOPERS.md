@@ -342,6 +342,48 @@ the groups instead — no divider, always visible. Muxlet's own built-in content
 any group name for your own package, or leave content ungrouped if you only
 register a handful of items.
 
+### Tab attention
+
+Content can mark its tab when it has something new the user hasn't seen:
+
+```lua
+Mux.setAttention(target)          -- flag target's tab, and every tab above it that isn't showing
+Mux.setAttention(target, false)   -- clear target's own tab
+Mux.hasAttention(target)          -- true while target's tab is flagged
+```
+
+A flagged tab uses the `tabAttention` style (theme tokens `tab.attention.bg`,
+`tab.attention.border.color` and `tab.attention.text.color`) while it isn't the
+active tab, and the flag clears when the tab is activated. Parent tabs are flagged
+too when they aren't showing, so a sub-tab inside a collapsed parent still gets
+noticed. Content on a pane with no tab above it has nothing to highlight, so the
+call does nothing there. Flags are not saved with the workspace.
+
+### Capture content
+
+The built-in Capture content (`mux_capture`) takes its whole configuration from
+`contentState` in a workspace, so a package can ship captures in its layout:
+
+```lua
+contentState = {
+  captures = {
+    { name = "Promotion", mode = "regex", pattern = "\\S+ has reached Trader rank!",
+      gag = true,                 -- hide matched lines from the main console
+      attention = true,           -- highlight the tab on a match (Mux.setAttention)
+      transformAction = "my.action" },
+  },
+  history = { enabled = true, key = "events" },   -- keep a history under this file name
+},
+```
+
+A pattern matches the text as the game meant it, so a match may span up to four
+lines the game wrapped. The pieces are joined with a single space; that joined text
+is what a transform action receives as `ctx.value`. History is kept for 7 days, up
+to 2000 lines, and replayed when the content loads. A package that serves several
+characters from one profile calls `Mux.setCaptureHistoryScope(name)` when the
+character changes, so each keeps its own history; the default scope `""` shares
+one history.
+
 ## Publishing to the titlebar and menu
 
 A content def's `titlebarElements` list adds icons to the host titlebar and/or rows
@@ -700,6 +742,7 @@ hand users the whole menu.
   as a host; see [Reusing Muxlet's update system](#reusing-muxlets-update-system-for-your-own-package)).
 
 Content persists via its own `serialize`/`restore`, embedded in the workspace snapshot.
+- **Capture history** → `capture_history/<scope>/<key>.lua` (see [Capture content](#capture-content)).
 
 All of the above is profile-local — it doesn't ship with a package on its own. See
 [Exporting your work](#exporting-your-work-for-a-package) for turning it into static

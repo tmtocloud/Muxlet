@@ -155,6 +155,9 @@ Mux.tokens.fallback = {
     ["tab.active.text.color"]     = "rgba(255,255,255,255)",
     ["tab.hover.highlight"]       = "rgba(255,255,255,255)",
     ["tab.hover.text.color"]      = "rgba(255,255,255,255)",
+    ["tab.attention.bg"]          = "rgba(60,28,26,235)",
+    ["tab.attention.border.color"] = "rgba(230,80,60,0.95)",
+    ["tab.attention.text.color"]  = "rgba(255,210,200,0.95)",
     ["tab.moving.bg"]             = "rgba(80,15,15,235)",
     ["tab.moving.borderRight.color"] = "rgba(180,45,45,0.35)",
     ["tab.moving.text.color"]     = "rgba(255,170,170,1.0)",
@@ -284,6 +287,8 @@ Mux.tokens.elements = {
         args = { "tab.active.bg", "tab.active.border.width", "tab.active.border.color", "tab.border.radius", "tab.vGap", "tab.hGap", "tab.padX", "tab.active.border.width", "tab.hover.highlight" } },
     tabInactive = { tpl = "QLabel { background-color: %s; border: %spx solid %s; border-radius: %spx; margin: %spx %spx; padding: 0 %spx; } QLabel::hover { border: %spx solid %s; }",
         args = { "tab.inactive.bg", "tab.border.width", "tab.inactive.border.color", "tab.border.radius", "tab.vGap", "tab.hGap", "tab.padX", "tab.border.width", "tab.hover.highlight" } },
+    tabAttention = { tpl = "QLabel { background-color: %s; border: %spx solid %s; border-radius: %spx; margin: %spx %spx; padding: 0 %spx; } QLabel::hover { border: %spx solid %s; }",
+        args = { "tab.attention.bg", "tab.border.width", "tab.attention.border.color", "tab.border.radius", "tab.vGap", "tab.hGap", "tab.padX", "tab.border.width", "tab.hover.highlight" } },
     tabMoving = { tpl = "QLabel { background-color: %s; border-right: 1px solid %s; color: %s; font-size: %spx; font-weight: bold; border-bottom: 2px solid %s; padding: 0 %spx; }",
         args = { "tab.moving.bg", "tab.moving.borderRight.color", "tab.moving.text.color", "tab.fontSize", "tab.moving.borderBottom.color", "tab.moving.padX" } },
     tabAddBtn = { tpl = "QLabel { background-color: %s; border-left: 1px solid %s; color: %s; font-size: %spx; font-weight: bold; } QLabel::hover { background-color: %s; color: %s; }",
@@ -373,6 +378,9 @@ Mux.tokens.spec = {
     { group = "Tab", scope = "tab",    key = "tab.active.border.color",  type = "color", label = "Active Border" },
     { group = "Tab", scope = "tab",    key = "tab.hover.highlight",      type = "color", label = "Hover Highlight" },
     { group = "Tab", scope = "tab",    key = "tab.hover.text.color",     type = "color", label = "Hover Text" },
+    { group = "Tab", scope = "tab",    key = "tab.attention.bg",         type = "color", label = "Attention Background" },
+    { group = "Tab", scope = "tab",    key = "tab.attention.border.color", type = "color", label = "Attention Border" },
+    { group = "Tab", scope = "tab",    key = "tab.attention.text.color", type = "color", label = "Attention Text" },
 }
 -- Group order for the editor.
 Mux.tokens.specGroups = { "Pane", "Titlebar", "Buttons", "Content", "Menu", "Slot", "Drag", "Handle", "Scrollbar", "Tab" }

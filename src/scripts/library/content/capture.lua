@@ -1,31 +1,39 @@
 -- capture.lua - "Capture / Redirect" content.
 --
--- Watches the game output and shunts matching lines into this pane/tab's capture
--- view, optionally hiding them from the main console. Built on the rule engine:
--- each configured capture is a line_match condition → mux.capture.redirect action.
+-- Watches the game output and shunts matching text into this pane/tab's capture
+-- view, optionally hiding it from the main console. A pattern matches the text as
+-- the game meant it, even when it arrives wrapped across several lines: one shared
+-- line watcher tries each new line on its own, then joined to the few unmatched
+-- lines just before it, and takes every line the match reaches into.
 --
--- The content owns its settings, like the Button Grid: a ⚙ gear on the console
--- opens a settings dialog where you manage any number of captures (pattern, match
--- mode, whether to hide the line from the main window, and an optional transform
--- action to run instead of copying the line verbatim). Config lives on
--- target._captureConfig = { captures = { {pattern, mode, gag, transformAction}, … } }
--- and round-trips through Muxlet's content serialize/restore.
+-- The content owns its settings, like the Button Grid: a wrench on the console
+-- opens a dialog managing any number of captures. Config lives on
+-- target._captureConfig = {
+--     captures = { {name, pattern, mode, enabled, gag, attention, transformAction}, ... },
+--     history  = { enabled, key },
+-- }
+-- and round-trips through Muxlet's content serialize/restore. With history on,
+-- captured lines are saved under the current history scope
+-- (Mux.setCaptureHistoryScope) and replayed when the content loads.
 
--- ── Redirect action ───────────────────────────────────────────────────────────
--- Runs inside the line_match trigger handler (synchronously), so the matched line
--- is the current selection: copy it with formatting into the capture console, then
--- gag it from the main window if this capture asked for it. The per-capture gag
--- flag rides on the firing rule (ctx.rule._capture).
+local BLANK_GAG_LINES   = 3
+local MAX_SPAN          = 4      -- most physical lines one match may reach across
+local JOIN_WINDOW       = 1.0    -- seconds; the pieces of one wrapped line arrive together
+local HISTORY_DAYS      = 7
+local HISTORY_MAX       = 2000
+local SAVE_DEBOUNCE     = 10
+local CONSOLE_FONT_SIZE = 10
 
--- Blank-line gag: after gagging a matched line, a command's output often leaves a
--- blank line (or a couple) right after it, so the command still visibly "does
--- something". Always swallow those when hiding from main: arm a line-offset trigger
--- (not a pattern trigger - Mudlet's trigger engine never fires pattern/regex triggers
--- on a genuinely empty line, so "^\s*$" silently never matches) that inspects each of
--- the next few lines directly and stops at the first real content.
--- (Only trailing blanks can be removed - a blank that arrived *before* the match is
--- already rendered and can't be reactively deleted.)
-local BLANK_GAG_LINES = 3
+local hosts       = {}   -- [target] = true for every live capture surface
+local recentLines = {}   -- unmatched main-console lines: { text, lineNo, at }
+
+Mux._captureHistoryScope = Mux._captureHistoryScope or ""
+
+-- ── Blank-line gag ────────────────────────────────────────────────────────────
+-- A gagged match often leaves a trailing blank line or two in the main console.
+-- Pattern triggers never fire on an empty line, so a line-offset trigger inspects
+-- the next few lines directly and stops at the first real content. Blanks that
+-- arrived before the match are already rendered and stay.
 local _bgTrig
 local function _disarmBlankGag()
     if _bgTrig and killTrigger then pcall(killTrigger, _bgTrig) end
@@ -39,75 +47,24 @@ local function _armBlankGag()
         if text:match("^%s*$") then
             if deleteLine then deleteLine() end
         else
-            _disarmBlankGag()   -- real content - stop consuming the remaining lines
+            _disarmBlankGag()
         end
     end)
 end
 
-if Mux.registerAction then
-    Mux.registerAction("mux.capture.redirect", {
-        name = "Redirect line here", group = "muxlet", icon = "📥", hidden = true,
-        desc = "Copy the matched console line into this pane/tab's capture view; optionally remove it "
-            .. "(and any blank lines it leaves behind) from the main console. Added automatically by the Capture content.",
-        run  = function(ctx)
-            local subj      = ctx and (ctx.tab or ctx.pane)
-            local consoles  = subj and subj._captureConsoles
-            if not consoles or not consoles.all then return end
-            local cap  = (ctx.rule and ctx.rule._capture) or {}
-
-            -- Every matched line is written to both the "All" console and this
-            -- capture's own console, so the filter switcher (see _showCaptureFilter
-            -- below) can flip between them without having to reconstruct old
-            -- formatting later — both copies are written live, with real formatting,
-            -- at the moment the line actually matches.
-            local targets = { consoles.all }
-            local capMc   = consoles[cap]
-            if capMc and capMc ~= consoles.all then targets[#targets+1] = capMc end
-
-            -- Optional transform: an ordinary action (its own id, picked in the
-            -- settings dialog) runs against the same ctx — ctx.value is already
-            -- the matched line (set by the line_match pulse) and ctx.console is
-            -- this capture's console, so a "Run Lua" step can write colored/linked
-            -- output straight to it. Returning true means "I handled the line
-            -- myself" and skips the default verbatim copy below. Run once per
-            -- target console since each call writes to whichever ctx.console
-            -- was set for it.
-            local handled = false
-            if cap.transformAction and cap.transformAction ~= "" and Mux.runAction then
-                for _, mc in ipairs(targets) do
-                    ctx.console = mc
-                    local ok, result = Mux.runAction(cap.transformAction, ctx)
-                    handled = handled or (ok and result and true or false)
-                end
-            end
-
-            if not handled then
-                if selectCurrentLine then selectCurrentLine() end
-                if copy then copy() end
-                for _, mc in ipairs(targets) do
-                    if appendBuffer then appendBuffer(mc.name) end      -- formatted paste
-                end
-            end
-            if cap.gag then
-                if deleteLine then deleteLine() end             -- remove from main console
-                _armBlankGag()                                  -- and any trailing blank lines
-            end
-        end,
-    })
-end
-
--- ── Capture config + rule wiring ──────────────────────────────────────────────
+-- ── Config ────────────────────────────────────────────────────────────────────
 local MODE_OPTS = {
     { value = "substring", label = "Contains text" },
     { value = "exact",     label = "Whole line equals" },
     { value = "regex",     label = "Regex (Perl)" },
 }
 
--- Any registered action (Settings → Muxlet → Actions, including one built from
--- a "Run Lua" step) can be picked as a capture's transform — see the redirect
--- action above for the contract (ctx.value / ctx.console in, boolean out).
+-- Any registered action can be picked as a capture's transform: it gets
+-- ctx.value (the matched text, wrapped pieces joined with a space), ctx.matches,
+-- ctx.console (the capture console to write to) and ctx.tab/ctx.pane, and returns
+-- true once it has written its own output.
 local function transformActionOptions()
-    local out = { { value = "", label = "— None (copy line as-is) —" } }
+    local out = { { value = "", label = "None (copy line as-is)" } }
     if Mux.listActions then
         for _, a in ipairs(Mux.listActions()) do
             if not a.hidden then out[#out+1] = { value = a.id, label = (a.group or "") .. " · " .. (a.name or a.id) } end
@@ -119,7 +76,7 @@ end
 local function normalizeConfig(target)
     local cfg = target._captureConfig
     if type(cfg) ~= "table" then cfg = {} end
-    -- Back-compat: an old single-pattern config becomes the first capture.
+    -- An old single-pattern config becomes the first capture.
     if not cfg.captures then
         if cfg.pattern and cfg.pattern ~= "" then
             cfg = { captures = { { pattern = cfg.pattern, mode = cfg.mode or "substring", gag = cfg.gag or false } } }
@@ -131,23 +88,319 @@ local function normalizeConfig(target)
         if cap.name == nil    then cap.name = "Capture " .. i end
         if cap.enabled == nil then cap.enabled = true end
     end
+    if type(cfg.history) ~= "table" then cfg.history = { enabled = false } end
     target._captureConfig = cfg
     return cfg
 end
 
--- Remove every capture rule currently on the target.
-local function clearCaptureRules(target)
-    if not target.rules then return end
-    local ids = {}
-    for _, r in ipairs(target.rules) do
-        if type(r.id) == "string" and r.id:find("^mux:capture") then ids[#ids+1] = r.id end
+local function isArmed(cap)
+    return cap.enabled ~= false and type(cap.pattern) == "string" and cap.pattern ~= ""
+end
+
+-- ── Matching ──────────────────────────────────────────────────────────────────
+local regexCache = {}
+local function compiledRegex(pattern)
+    local cached = regexCache[pattern]
+    if cached == nil then
+        local ok, re = pcall(function() return rex.new(pattern) end)
+        cached = (ok and re) or false
+        if not cached and Mux._warn then Mux._warn("capture: invalid regex '%s'", pattern) end
+        regexCache[pattern] = cached
     end
-    for _, id in ipairs(ids) do Mux._removeRule(target, id) end
+    return cached or nil
+end
+
+-- Returns start, end and a Mudlet-style matches table (whole match, then groups).
+local function findMatch(cap, text)
+    local pattern = cap.pattern
+    if cap.mode == "regex" then
+        local re = compiledRegex(pattern)
+        if not re then return nil end
+        local found = { re:find(text) }
+        if not found[1] then return nil end
+        local matches = { text:sub(found[1], found[2]) }
+        for i = 3, #found do matches[#matches + 1] = found[i] end
+        return found[1], found[2], matches
+    elseif cap.mode == "exact" then
+        if text == pattern then return 1, #text, { text } end
+        return nil
+    end
+    local s, e = text:find(pattern, 1, true)
+    if s then return s, e, { pattern } end
+    return nil
+end
+
+-- Unmatched lines directly above lineNo that arrived in the same burst.
+local function contiguousChain(lineNo, now)
+    local chain, expect, later = {}, lineNo - 1, now
+    for i = #recentLines, 1, -1 do
+        local r = recentLines[i]
+        if r.lineNo ~= expect or later - r.at > JOIN_WINDOW then break end
+        table.insert(chain, 1, r)
+        expect, later = expect - 1, r.at
+    end
+    return chain
+end
+
+-- Tries cap on the current line alone, then joined with each earlier chain line.
+-- A joined match must reach into both its first and last line; otherwise a
+-- shorter span already accounts for it.
+local function matchCapture(cap, chain, current)
+    local pieces = { current }
+    for span = 1, #chain + 1 do
+        if span > 1 then table.insert(pieces, 1, chain[#chain - span + 2].text) end
+        local text = table.concat(pieces, " ")
+        local s, e, matches = findMatch(cap, text)
+        if s and (span == 1 or (s <= #pieces[1] and e > #text - #current)) then
+            return span, text, matches
+        end
+    end
+end
+
+-- copy2decho reads the line under the user cursor, so earlier lines are reached
+-- by moving the cursor there and back. A line that no longer holds the text it
+-- was recorded with yields nil.
+local function dechoOfLines(entries, lineNo)
+    local out = {}
+    for i, entry in ipairs(entries) do
+        moveCursor("main", 0, entry.lineNo)
+        if getCurrentLine() == entry.text then out[i] = copy2decho() end
+    end
+    moveCursor("main", 0, lineNo)
+    return out
+end
+
+-- ── Rendering ─────────────────────────────────────────────────────────────────
+local function transformContext(target, text, matches, console)
+    local ctx = { value = text, matches = matches or { text }, console = console }
+    if target.pane then ctx.tab, ctx.pane = target, target.pane else ctx.pane = target end
+    return ctx
+end
+
+-- Writes one captured line to the "All" console and its capture's own console.
+-- cap is nil for a history record whose capture no longer exists.
+local function render(target, cap, text, matches, decho)
+    local consoles = target._captureConsoles
+    if not (consoles and consoles.all) then return end
+    local outputs = { consoles.all }
+    local capConsole = cap and consoles[cap]
+    if capConsole and capConsole ~= consoles.all then outputs[#outputs + 1] = capConsole end
+    for _, mc in ipairs(outputs) do
+        local handled = false
+        if cap and cap.transformAction and cap.transformAction ~= "" and Mux.runAction then
+            local ok, result = Mux.runAction(cap.transformAction, transformContext(target, text, matches, mc))
+            handled = ok and result and true or false
+        end
+        if not handled then
+            if decho then mc:decho(decho .. "\n") else mc:echo(text .. "\n") end
+        end
+    end
+end
+
+-- ── History ───────────────────────────────────────────────────────────────────
+local function safeName(s)
+    return (tostring(s or ""):gsub("[^%w_%-]", "_"))
+end
+
+local function historyDirs(scope)
+    local root = Mux._persistentDir .. "/capture_history"
+    local dir  = root .. "/" .. (scope ~= "" and safeName(scope) or "_shared")
+    return root, dir
+end
+
+local function historyEnabled(target)
+    local hist = target._captureConfig and target._captureConfig.history
+    return (hist and hist.enabled and hist.key) and true or false
+end
+
+local function pruneHistory(records)
+    local cutoff = os.time() - HISTORY_DAYS * 86400
+    local kept = {}
+    for _, r in ipairs(records) do
+        if type(r) == "table" and (r.t or 0) >= cutoff and type(r.text) == "string" then kept[#kept + 1] = r end
+    end
+    if #kept > HISTORY_MAX then
+        local trimmed = {}
+        for i = #kept - HISTORY_MAX + 1, #kept do trimmed[#trimmed + 1] = kept[i] end
+        kept = trimmed
+    end
+    return kept
+end
+
+-- Records are tied to the scope they were loaded under, so a scope change saves
+-- them back where they came from before switching.
+local function loadHistory(target)
+    target._historyRecords, target._historyScope = {}, Mux._captureHistoryScope
+    if not historyEnabled(target) then return end
+    local _, dir = historyDirs(target._historyScope)
+    local path = dir .. "/" .. safeName(target._captureConfig.history.key) .. ".lua"
+    local loaded = {}
+    if io.exists(path) then pcall(table.load, path, loaded) end
+    target._historyRecords = pruneHistory(loaded)
+end
+
+local function saveHistory(target)
+    if target._historySaveTimer then killTimer(target._historySaveTimer); target._historySaveTimer = nil end
+    if not (historyEnabled(target) and target._historyRecords) then return end
+    target._historyRecords = pruneHistory(target._historyRecords)
+    local root, dir = historyDirs(target._historyScope or Mux._captureHistoryScope)
+    pcall(lfs.mkdir, root)
+    pcall(lfs.mkdir, dir)
+    local path = dir .. "/" .. safeName(target._captureConfig.history.key) .. ".lua"
+    local ok, err = pcall(table.save, path, target._historyRecords)
+    if not ok and Mux._warn then Mux._warn("capture history save failed: %s", tostring(err)) end
+end
+
+-- The disk write is debounced so a busy capture doesn't rewrite the file per line.
+local function scheduleSave(target)
+    if target._historySaveTimer then return end
+    target._historySaveTimer = tempTimer(SAVE_DEBOUNCE, function()
+        target._historySaveTimer = nil
+        saveHistory(target)
+    end)
+end
+
+local function appendHistory(target, cap, text, matches, decho)
+    if not historyEnabled(target) then return end
+    if not target._historyRecords then loadHistory(target) end
+    local records = target._historyRecords
+    records[#records + 1] = { t = os.time(), cap = cap.name, text = text, matches = matches, decho = decho }
+    scheduleSave(target)
+end
+
+local function replayHistory(target)
+    target._replayTimer = nil
+    if not (target._captureConsoles and historyEnabled(target)) then return end
+    for _, mc in pairs(target._captureConsoles) do pcall(function() mc:clear() end) end
+    if not target._historyRecords then loadHistory(target) end
+    local byName = {}
+    for _, cap in ipairs(normalizeConfig(target).captures) do
+        if cap.name and not byName[cap.name] then byName[cap.name] = cap end
+    end
+    for _, r in ipairs(target._historyRecords) do
+        render(target, byName[r.cap], r.text, r.matches, r.decho)
+    end
+end
+
+-- apply and restore both land here on load; defer so replay runs once, after both.
+local function scheduleReplay(target)
+    if target._replayTimer then return end
+    target._replayTimer = tempTimer(0, function() replayHistory(target) end)
+end
+
+-- Packages that serve several characters from one profile set this (e.g. to the
+-- character name) so each keeps its own capture history. "" shares one history.
+function Mux.setCaptureHistoryScope(scope)
+    scope = scope or ""
+    if scope == Mux._captureHistoryScope then return end
+    for target in pairs(hosts) do saveHistory(target) end
+    Mux._captureHistoryScope = scope
+    for target in pairs(hosts) do
+        target._historyRecords = nil
+        if historyEnabled(target) then scheduleReplay(target) end
+    end
+end
+
+function Mux._flushCaptureHistory()
+    for target in pairs(hosts) do saveHistory(target) end
+end
+
+-- ── Line watcher ──────────────────────────────────────────────────────────────
+local function onLine()
+    local current = line or ""
+    local lineNo  = getLineNumber()
+    local now     = getEpoch()
+    local chain   = contiguousChain(lineNo, now)
+
+    -- First armed capture per surface wins; every surface gets its own copy.
+    local hits, widest, widestGag = {}, 0, 0
+    for target in pairs(hosts) do
+        for _, cap in ipairs(normalizeConfig(target).captures) do
+            if isArmed(cap) then
+                local span, text, matches = matchCapture(cap, chain, current)
+                if span then
+                    hits[#hits + 1] = { target = target, cap = cap, span = span, text = text, matches = matches }
+                    widest = math.max(widest, span)
+                    if cap.gag then widestGag = math.max(widestGag, span) end
+                    break
+                end
+            end
+        end
+    end
+
+    if #hits == 0 then
+        recentLines[#recentLines + 1] = { text = current, lineNo = lineNo, at = now }
+        while #recentLines > MAX_SPAN - 1 do table.remove(recentLines, 1) end
+        return
+    end
+    recentLines = {}
+
+    local entries = {}
+    for i = #chain - widest + 2, #chain do entries[#entries + 1] = chain[i] end
+    entries[#entries + 1] = { text = current, lineNo = lineNo }
+    local dechos = dechoOfLines(entries, lineNo)
+
+    for _, hit in ipairs(hits) do
+        local first, decho = #entries - hit.span + 1, nil
+        local pieces = {}
+        for i = first, #entries do pieces[#pieces + 1] = dechos[i] end
+        if #pieces == hit.span then decho = table.concat(pieces, " ") end
+        render(hit.target, hit.cap, hit.text, hit.matches, decho)
+        appendHistory(hit.target, hit.cap, hit.text, hit.matches, decho)
+        if hit.cap.attention and Mux.setAttention then Mux.setAttention(hit.target, true) end
+    end
+
+    if widestGag > 0 then
+        -- Earlier lines go first, bottom-up, so each deletion leaves the rest in place.
+        local deleted = 0
+        for i = #entries - 1, #entries - widestGag + 1, -1 do
+            local entry = entries[i]
+            moveCursor("main", 0, entry.lineNo)
+            if getCurrentLine() == entry.text then
+                deleteLine()
+                deleted = deleted + 1
+            end
+        end
+        moveCursor("main", 0, lineNo - deleted)
+        deleteLine()
+        _armBlankGag()
+    end
+end
+
+if Mux._captureWatcher then pcall(killTrigger, Mux._captureWatcher); Mux._captureWatcher = nil end
+
+local function updateWatcher()
+    local armed = false
+    for target in pairs(hosts) do
+        for _, cap in ipairs(normalizeConfig(target).captures) do
+            if isArmed(cap) then armed = true; break end
+        end
+        if armed then break end
+    end
+    if armed and not Mux._captureWatcher and tempRegexTrigger then
+        Mux._captureWatcher = tempRegexTrigger("^", onLine)
+    elseif not armed and Mux._captureWatcher then
+        pcall(killTrigger, Mux._captureWatcher)
+        Mux._captureWatcher = nil
+        recentLines = {}
+    end
+end
+
+function Mux._captureShutdown()
+    Mux._flushCaptureHistory()
+    if Mux._captureWatcher then pcall(killTrigger, Mux._captureWatcher); Mux._captureWatcher = nil end
+end
+
+if not Mux._captureExitHandler then
+    Mux._captureExitHandler = registerAnonymousEventHandler("sysExitEvent", function() Mux._flushCaptureHistory() end)
+end
+if not Mux._captureDiscHandler then
+    Mux._captureDiscHandler = registerAnonymousEventHandler("sysDisconnectionEvent", function()
+        Mux._flushCaptureHistory()
+    end)
 end
 
 -- ── Per-capture consoles + filter switcher ────────────────────────────────────
-local CONSOLE_FONT_SIZE = 10
-
 -- target._captureConsoles = { all = MiniConsole, [capTable] = MiniConsole, ... }
 -- keyed by the capture entry's own table identity (stable across renames/reorders,
 -- only invalidated when a capture is actually removed), so consoles never need
@@ -231,31 +484,16 @@ function Mux._cycleCaptureFilter(target)
     if Mux._scheduleAutoSave then Mux._scheduleAutoSave() end
 end
 
--- (Re)build one rule per configured capture. Empty patterns are skipped; disabled
--- captures are added inactive (so they persist but arm no trigger).
-function Mux._rebuildCaptureRules(target)
+-- Re-sync after the capture list or a pattern changed.
+function Mux._rebuildCaptures(target)
     if not target then return end
-    local cfg = normalizeConfig(target)
-    clearCaptureRules(target)
-    for i, cap in ipairs(cfg.captures) do
-        if cap.pattern and cap.pattern ~= "" then
-            Mux._addRule(target, {
-                id       = "mux:capture:" .. i,
-                cond     = { type = "line_match", pattern = cap.pattern, mode = cap.mode or "substring" },
-                act      = "mux.capture.redirect",
-                enabled  = (cap.enabled ~= false),
-                _capture = cap,          -- carries name + gag flags to the redirect action
-            })
-        end
-    end
+    normalizeConfig(target)
     if target._captureConsoles then _syncCaptureConsoles(target) end
+    updateWatcher()
     if Mux._scheduleAutoSave then Mux._scheduleAutoSave() end
 end
 
--- Back-compat shim for older callers.
-function Mux._rebuildCaptureRule(target) Mux._rebuildCaptureRules(target) end
-
--- ── Settings dialog (opened from the ⚙ gear) ──────────────────────────────────
+-- ── Settings dialog (opened from the wrench) ──────────────────────────────────
 local function openCaptureSettings(target)
     local cfg = normalizeConfig(target)
     local key = "mux_capture_settings_" .. tostring(target.id)
@@ -267,10 +505,9 @@ local function openCaptureSettings(target)
     if d.contentBg then d.contentBg:echo(""); d.contentBg:hide() end
     d._capGen = 0
 
-    local function rebuild() Mux._rebuildCaptureRules(target) end   -- re-arms the line triggers
-    -- For changes the match trigger doesn't depend on (gag flags, name): the redirect
-    -- reads gag flags live from the shared capture table, so only a save is needed.
-    -- Avoiding a trigger re-arm here keeps a stray newline out of the capture view.
+    local function rebuild() Mux._rebuildCaptures(target) end
+    -- For changes matching doesn't depend on (gag, highlight, name, transform): the
+    -- watcher reads them live from the shared capture table, so only a save is needed.
     local function light()
         if Mux._scheduleAutoSave then Mux._scheduleAutoSave() end
     end
@@ -278,8 +515,29 @@ local function openCaptureSettings(target)
     renderForm = function()
         if d._capForm then pcall(function() d._capForm:hide() end) end
         local rows = {}
+        rows[#rows+1] = { type = "divider", label = "History" }
+        rows[#rows+1] = { label = "Keep history", type = "toggle",
+            desc = "save captured lines and show them again next session (kept " .. HISTORY_DAYS
+                .. " days, up to " .. HISTORY_MAX .. " lines)",
+            readFn = function() return cfg.history.enabled or false end,
+            writeFn = function(v)
+                if v and not cfg.history.key then
+                    cfg.history.key = safeName(target.name or "capture") .. "_" .. os.time()
+                end
+                if not v then saveHistory(target) end
+                cfg.history.enabled = v and true or false
+                target._historyRecords = nil
+                light()
+            end }
+        rows[#rows+1] = { type = "button", label = "Clear history", _noReset = true,
+            onClick = function()
+                target._historyRecords = {}
+                target._historyScope = Mux._captureHistoryScope
+                saveHistory(target)
+                for _, mc in pairs(target._captureConsoles or {}) do pcall(function() mc:clear() end) end
+            end }
         if #cfg.captures == 0 then
-            rows[#rows+1] = { type = "divider", label = "No captures yet — add one below." }
+            rows[#rows+1] = { type = "divider", label = "No captures yet. Add one below." }
         end
         for i, cap in ipairs(cfg.captures) do
             local idx = i
@@ -297,7 +555,8 @@ local function openCaptureSettings(target)
                 readFn = function() return cap.enabled ~= false end,
                 writeFn = function(v) cap.enabled = v and true or false; rebuild() end }
             rows[#rows+1] = { label = "Pattern", type = "text", allowEmpty = true,
-                desc = "text or regex to look for in the game output (clear it to disarm this capture)",
+                desc = "text or regex to look for in the game output, matched even when the game wraps "
+                    .. "it across lines (clear it to disarm this capture)",
                 readFn = function() return cap.pattern or "" end,
                 writeFn = function(v) cap.pattern = v; rebuild() end }
             rows[#rows+1] = { label = "Match", type = "array", display = "dropdown",
@@ -305,12 +564,16 @@ local function openCaptureSettings(target)
                 readFn = function() return cap.mode or "substring" end,
                 writeFn = function(v) cap.mode = v; rebuild() end }
             rows[#rows+1] = { label = "Hide from main", type = "toggle",
-                desc = "also remove the matched line (and any blank lines it leaves behind) from the main console",
+                desc = "also remove the matched lines (and any blank lines they leave behind) from the main console",
                 readFn = function() return cap.gag or false end,
                 writeFn = function(v) cap.gag = v; light() end }
+            rows[#rows+1] = { label = "Highlight tab", type = "toggle",
+                desc = "mark this tab when a line matches while the tab isn't showing",
+                readFn = function() return cap.attention or false end,
+                writeFn = function(v) cap.attention = v and true or nil; light() end }
             rows[#rows+1] = { label = "Transform", type = "array", display = "dropdown",
-                desc = "run an action on the matched line instead of copying it verbatim (Settings → Muxlet → "
-                    .. "Actions to build one — a \"Run Lua\" step gets ctx.value=the line, ctx.console=this "
+                desc = "run an action on the matched text instead of copying it verbatim (Settings → Muxlet → "
+                    .. "Actions to build one: a \"Run Lua\" step gets ctx.value=the text, ctx.console=this "
                     .. "capture's console, and should return true once it has written its own output)",
                 options = transformActionOptions(),
                 readFn = function() return cap.transformAction or "" end,
@@ -347,7 +610,8 @@ end
 Mux.registerContent("mux_capture", {
     name        = "Capture / Redirect",
     description = "Watch the game output for text (substring, exact line, or regex) and shunt matching lines "
-        .. "into this pane/tab — optionally hiding them from the main console. Click the ⚙ to configure captures.",
+        .. "into this pane/tab, optionally hiding them from the main console, keeping a history and "
+        .. "highlighting the tab. Click the 🔧 to configure captures.",
     group       = "Muxlet",
     singleton   = false,
 
@@ -407,13 +671,19 @@ Mux.registerContent("mux_capture", {
         end)
         target._captureConsoles = { all = target._captureConsole }
         target._captureFilter   = target._captureFilter or ""
-        Mux._rebuildCaptureRules(target)   -- also syncs per-capture consoles + filter visibility
+        hosts[target] = true
+        Mux._rebuildCaptures(target)
+        scheduleReplay(target)
     end,
 
     remove = function(target)
-        clearCaptureRules(target)
+        saveHistory(target)
+        if target._replayTimer then killTimer(target._replayTimer); target._replayTimer = nil end
+        hosts[target] = nil
+        updateWatcher()
         target._captureConsoles = nil
         target._captureConsole  = nil
+        target._historyRecords  = nil
     end,
 
     onTextScale = function(target)
@@ -429,9 +699,11 @@ Mux.registerContent("mux_capture", {
         for _, c in ipairs(cfg.captures) do
             out[#out+1] = { name = c.name, pattern = c.pattern or "", mode = c.mode or "substring",
                             gag = c.gag or false, enabled = c.enabled ~= false,
-                            transformAction = c.transformAction }
+                            attention = c.attention or nil, transformAction = c.transformAction }
         end
-        return { captures = out, filter = target._captureFilter or "" }
+        local hist = cfg.history
+        return { captures = out, filter = target._captureFilter or "",
+                 history = hist.key and { enabled = hist.enabled and true or false, key = hist.key } or nil }
     end,
 
     restore = function(target, data)
@@ -440,9 +712,13 @@ Mux.registerContent("mux_capture", {
         if not caps and data.pattern then   -- legacy single-pattern payload
             caps = { { pattern = data.pattern, mode = data.mode or "substring", gag = data.gag or false } }
         end
-        target._captureConfig = { captures = caps or {} }
+        local hist = type(data.history) == "table" and data.history or nil
+        target._captureConfig = { captures = caps or {},
+            history = hist and { enabled = hist.enabled and true or false, key = hist.key } or nil }
         target._captureFilter = (type(data.filter) == "string") and data.filter or ""
-        Mux._rebuildCaptureRules(target)
+        target._historyRecords = nil
+        Mux._rebuildCaptures(target)
+        scheduleReplay(target)
     end,
 })
 

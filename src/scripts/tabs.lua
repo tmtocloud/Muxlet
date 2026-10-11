@@ -137,6 +137,7 @@ function MuxSurface._echoTabLabel(_self, label, name, isActive, isChosen, theme,
     if     isChosen then tc = R("tab.moving.text.color",   theme.tabMovingTextColor   or "#ffaaaa")
     elseif hovered  then tc = R("tab.hover.text.color",    theme.tabHoverTextColor     or "#ffffff")
     elseif isActive then tc = R("tab.active.text.color",   theme.tabActiveTextColor    or "#ffffff")
+    elseif scope and scope._attention then tc = R("tab.attention.text.color", "#ffd2c8")
     else                 tc = R("tab.inactive.text.color", theme.tabInactiveTextColor  or "#ffffff")
     end
     local spanFmt = "<span style='color:" .. tc .. ";font-size:" .. tostring(fs) .. "px;font-weight:bold;'>%s</span>"
@@ -169,7 +170,7 @@ function MuxSurface:_restyleTabBar()
     for _, tab in ipairs(self._tabs or {}) do
         if tab.label then
             local isActive = (self._activeTabId == tab.id)
-            tab.label:setStyleSheet(Mux.css(isActive and "tabActive" or "tabInactive", tab))
+            tab.label:setStyleSheet(self:_tabCssFor(tab, isActive))
             self:_echoTabLabel(tab.label, tab.name, isActive, false, theme, tab.nameAlign, false, tab)
         end
     end
@@ -192,7 +193,7 @@ function MuxTab:applyTheme()
     if not (host and self.label) then return end
     local theme    = Mux.activeTheme() or {}
     local isActive = (host._activeTabId == self.id)
-    self.label:setStyleSheet(Mux.css(isActive and "tabActive" or "tabInactive", self))
+    self.label:setStyleSheet(host:_tabCssFor(self, isActive))
     host:_echoTabLabel(self.label, self.name, isActive, false, theme, self.nameAlign, false, self)
 end
 
@@ -932,9 +933,51 @@ function MuxSurface._tabCssFor(_self, tab, isActive)
     if isActive then
         el = (tab._isSubTabHost or tab._tabsEnabled) and "tabActiveParent" or "tabActive"
     else
-        el = "tabInactive"
+        el = tab._attention and "tabAttention" or "tabInactive"
     end
     return Mux.css(el, tab) or ""
+end
+
+-- ── Tab attention ─────────────────────────────────────────────────────────────
+-- A tab whose content has something new the user hasn't seen. Shown only while
+-- the tab is off screen; cleared when it is activated. Not persisted.
+
+local function setAttentionFlag(tab, on)
+    on = on and true or false
+    if (tab._attention or false) == on then return end
+    tab._attention = on
+    local host = tab.pane
+    if not (host and tab.label) then return end
+    local isActive = (host._activeTabId == tab.id)
+    tab.label:setStyleSheet(host:_tabCssFor(tab, isActive))
+    host:_echoTabLabel(tab.label, tab.name, isActive, false, Mux.activeTheme(), tab.nameAlign, false, tab)
+end
+
+-- Activating a tab also reveals its active sub-tab chain, so clear all of it.
+local function clearShownAttention(tab)
+    while tab do
+        setAttentionFlag(tab, false)
+        tab = tab._activeTabId and tab:_findTab(tab._activeTabId) or nil
+    end
+end
+
+-- target is a content target (a tab or a pane). on (default true) flags every tab
+-- from target up to its root pane that isn't currently its host's active tab, so a
+-- collapsed parent shows it too. on=false clears only target's own tab. Content on
+-- a pane with no tab above it has nothing to highlight, so this is a no-op there.
+function Mux.setAttention(target, on)
+    if on == nil then on = true end
+    if not (target and target.pane) then return end
+    if not on then setAttentionFlag(target, false); return end
+    local node = target
+    while node and node.pane do
+        if node.pane._activeTabId ~= node.id then setAttentionFlag(node, true) end
+        node = node.pane
+    end
+end
+
+function Mux.hasAttention(target)
+    return (target and target._attention) and true or false
 end
 
 function MuxSurface:_activateTabObj(tab)
@@ -968,6 +1011,7 @@ function MuxSurface:_activateTabObj(tab)
             tostring(self._activeTabId), tostring(tab.id))
     end
     self._activeTabId = tab.id
+    clearShownAttention(tab)
     -- When the activated tab itself hosts sub-tabs, use a borderless-bottom style so
     -- the tab visually merges with the child tab bar below it (visual continuity).
     tab.label:setStyleSheet(self:_tabCssFor(tab, true))
@@ -1297,7 +1341,7 @@ function MuxSurface:_receiveTab(tab, fromPane, insertPos)
     }, self._tabBarBox)
     -- Resolve from the moved tab's own scope so its local overrides (shape, font,
     -- colours) carry across the move instead of reverting to the global look.
-    newLabel:setStyleSheet(Mux.css("tabInactive", tab) or "")
+    newLabel:setStyleSheet(self:_tabCssFor(tab, false))
     self:_echoTabLabel(newLabel, tab.name, false, false, theme, tab.nameAlign, false, tab)
     self._tabBarBox:organize()
     tab.label = newLabel
@@ -1409,14 +1453,7 @@ local function serializeOneTab(tab, hidden)
     -- connectionAware flag above, so exclude it to avoid a duplicate on load).
     if Mux._serializeRules then
         local rs = Mux._serializeRules(tab)
-        if rs then
-            local keep = {}
-            for _, r in ipairs(rs) do
-                local skip = type(r.id) == "string" and r.id:find("^mux:capture")
-                if not skip then keep[#keep+1] = r end
-            end
-            if #keep > 0 then tabEntry.rules = keep end
-        end
+        if rs and #rs > 0 then tabEntry.rules = rs end
     end
     if tab._tokens and next(tab._tokens) then
         local tk = {}; for k, v in pairs(tab._tokens) do tk[k] = v end

@@ -111,11 +111,7 @@ local function _buildRuleEditorRows(subject)
     for _, o in ipairs(actOpts) do elseOpts[#elseOpts+1] = o end
 
     local editable = {}
-    for _, r in ipairs(subject.rules or {}) do
-        -- Capture rules are managed by the Capture content's own settings dialog.
-        local isCapture = type(r.id) == "string" and r.id:find("^mux:capture")
-        if not isCapture then editable[#editable+1] = r end
-    end
+    for _, r in ipairs(subject.rules or {}) do editable[#editable+1] = r end
 
     if #editable == 0 then
         rows[#rows+1] = { type = "divider", label = "No rules" }

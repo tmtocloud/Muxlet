@@ -174,6 +174,7 @@ A tab is a `MuxTab` — a `MuxSurface` sibling of `MuxPane` (see Class model) �
 | `tab.contentBg` | `Geyser.Label` — placeholder; hide after attaching content |
 | `tab._activeContent` | Set by `_applyContent`; suppresses placeholder |
 | `tab._tabsEnabled` | True if this tab itself hosts a nested sub-tab bar |
+| `tab._attention` | Set by `Mux.setAttention`; cleared on activation. Every tab-label stylesheet goes through `MuxSurface:_tabCssFor` so the `tabAttention` style survives restyles, moves and theme changes |
 
 When adding new properties or behaviours to panes, evaluate them for tabs.  The `_applyContent` system already treats panes and tabs identically.  Properties dialog (`Mux.showTabProperties`) should mirror pane properties to the degree that they make sense for a tab.
 

@@ -645,6 +645,8 @@ if not Mux._unloadHandler then
             setBorderSizes(0, 0, 0, 0)
             -- Stop the dev-mode watcher so its recursive timer can't outlive us.
             pcall(function() if Mux._stopDevmode then Mux._stopDevmode() end end)
+            -- Save capture histories before the surfaces holding them go away.
+            pcall(function() if Mux._captureShutdown then Mux._captureShutdown() end end)
             -- Destroy the live UI + kill the resize handler, auto-save timer and
             -- output-capture trigger. quiet=true suppresses the "Stopped" banner,
             -- which would be noise in the middle of a reload.
@@ -659,7 +661,8 @@ if not Mux._unloadHandler then
             for _, h in ipairs({ "_updateDlHandler", "_updateDlErrHandler",
                                  "_updateInstallDone", "_updateInstallErr",
                                  "_connHandlerConn", "_connHandlerGmcp",
-                                 "_connHandlerDisc" }) do
+                                 "_connHandlerDisc", "_captureExitHandler",
+                                 "_captureDiscHandler" }) do
                 pcall(function()
                     if Mux[h] then killAnonymousEventHandler(Mux[h]); Mux[h] = nil end
                 end)

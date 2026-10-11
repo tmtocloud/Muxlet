@@ -367,15 +367,7 @@ local function serializeNode(obj)
     -- Persist non-preset rules; the connection preset round-trips via the flag above.
     if Mux._serializeRules then
         local rs = Mux._serializeRules(obj)
-        if rs then
-            local keep = {}
-            for _, r in ipairs(rs) do
-                -- Capture rules are rebuilt from the content's own config on restore.
-                local skip = type(r.id) == "string" and r.id:find("^mux:capture")
-                if not skip then keep[#keep + 1] = r end
-            end
-            if #keep > 0 then node.rules = keep end
-        end
+        if rs and #rs > 0 then node.rules = rs end
     end
     if obj._activeContent   then node.activeContent   = obj._activeContent end
     -- Persist pre-lock natural values for any content-locked params, so removing the
