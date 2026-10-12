@@ -1048,6 +1048,7 @@ end
 -- When a host is registered, its repo is checked instead of Muxlet's own — see
 -- Mux.configureHost's doc comment.
 function Mux.checkForUpdates(silent)
+    if Mux._updatesDisabled then return end
     if tostring(Mux._version or "") == "unknown" then
         if not silent then
             Mux._echo("\n<yellow>[Muxlet]<reset> Can't read the installed version — skipping update check.\n")
@@ -1396,6 +1397,13 @@ end
 --                                  to self-upgrade. Usually left alone (false) when
 --                                  updateRepo below is set, since that already
 --                                  takes over the live-check cycle.
+--   opts.updatesEnabled   (bool)   false = no update surface at all: every release
+--                                  check is a no-op (startup, `mux version`, any
+--                                  "Check now" button) and the Muxlet/Update tab
+--                                  is hidden. For hosts whose installs are managed
+--                                  outside Mudlet (e.g. a web client that pins the
+--                                  package at page load). The Muxlet dependency
+--                                  pin (requiredMuxletVersion) still applies.
 --   opts.includePrereleases (bool) true = also offer pre-release builds.
 --   opts.defaultWorkspace (string) Workspace name applied by `mux reset` / first
 --                                  Mux.fullStart(). Must already be registered.
@@ -1486,6 +1494,9 @@ function Mux.configureHost(opts)
     end
     if opts.connectedAfterSeconds ~= nil then
         Mux._connReadyDelay = tonumber(opts.connectedAfterSeconds) or Mux._connReadyDelay
+    end
+    if opts.updatesEnabled ~= nil then
+        Mux._updatesDisabled = not opts.updatesEnabled
     end
 
     if opts.updateRepo then

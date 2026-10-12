@@ -582,8 +582,9 @@ local function tabHierarchy()
         -- Muxlet's own "Muxlet/Update" tab steps aside once a host has
         -- registered its own update settings elsewhere (Mux.configureHost's
         -- updateSettingsNamespace/updateSettingsTab, see update.lua) — the tab
-        -- moves to the host's own parent tab rather than appearing twice.
-        if ns ~= "muxupdate" or not Mux._hostUpdate then
+        -- moves to the host's own parent tab rather than appearing twice. It is
+        -- gone entirely when a host turned updates off (updatesEnabled = false).
+        if ns ~= "muxupdate" or not (Mux._hostUpdate or Mux._updatesDisabled) then
             local path = Mux.settings._tabPaths[ns] or ns
             local node = root
             for part in path:gmatch("[^/]+") do
