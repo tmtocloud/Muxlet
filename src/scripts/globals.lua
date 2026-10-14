@@ -2,7 +2,10 @@
 
 Mux = Mux or {}
 local _pkgInfo = getPackageInfo("Muxlet")
-Mux._version = (_pkgInfo and _pkgInfo.version) or "unknown"
+local _loadedVersion = (_pkgInfo and _pkgInfo.version) or "unknown"
+-- The Mux table survives a mid-session reinstall; remember which build this one replaced
+if Mux._version and Mux._version ~= _loadedVersion then Mux._replacedVersion = Mux._version end
+Mux._version = _loadedVersion
 
 -- Internal registries (never access directly; use Mux API)
 Mux._panes    = Mux._panes    or {}   -- id → MuxPane instance

@@ -1282,6 +1282,19 @@ function Mux.ensureVersion(requiredVersion, url, callback, exact)
         return
     end
 
+    -- A host updated in place leaves its previous copy's handlers live (Mudlet
+    -- never removes a package's anonymous handlers), still pinned to the build
+    -- this one replaced. Swapping back would ping-pong between the two pins.
+    if Mux._replacedVersion and baseVersionOf(requiredVersion) == baseVersionOf(Mux._replacedVersion) then
+        if not Mux._pinConflictWarned then
+            Mux._pinConflictWarned = true
+            Mux._echo(string.format(
+                "\n<yellow>[Muxlet]<reset> A package's previous copy is still loaded and asking for Muxlet %s. "
+                .. "Restart the profile to finish the update.\n", requiredVersion))
+        end
+        return
+    end
+
     if not url then
         Mux._err(
             "Mux.ensureVersion: installed Muxlet %s does not satisfy required %s, and no url was given to reinstall.",
